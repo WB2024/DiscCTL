@@ -2,6 +2,7 @@ pub mod audio;
 pub mod convert;
 pub mod data;
 pub mod device;
+pub mod transcode;
 
 use crate::{
     error::Error,
