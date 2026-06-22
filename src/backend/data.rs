@@ -1,4 +1,4 @@
-use std::io::{BufRead, BufReader};
+use std::io::Read;
 use std::process::{Command, Stdio};
 use crate::{error::Error, model::disc::DataSession};
 
@@ -36,29 +36,44 @@ pub fn append_data_session(
 
     if progress_json {
         emit_step("Building ISO image...");
-        // stdout: " 5.00% done, estimate finish..."  stderr: errors + diagnostics
-        mkiso.stdout(Stdio::piped());
+        // xorriso mkisofs writes progress to stderr, not stdout.
+        // Stdout is empty; pipe it so it doesn't inherit ours.
+        mkiso.stdout(Stdio::null());
         mkiso.stderr(Stdio::piped());
         let mut child = mkiso.spawn()?;
 
-        // Drain stdout for progress (blocking read — stderr buffered by OS until wait)
-        if let Some(stdout) = child.stdout.take() {
-            for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-                if let Some(pct) = parse_xorriso_pct(&line) {
-                    emit_progress(pct * 0.45);
+        // Drain stderr with raw-byte reads so invalid UTF-8 never stops us early.
+        let mut stderr_bytes: Vec<u8> = Vec::new();
+        if let Some(mut stderr) = child.stderr.take() {
+            let mut buf = [0u8; 4096];
+            loop {
+                match stderr.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        let chunk = &buf[..n];
+                        stderr_bytes.extend_from_slice(chunk);
+                        // Emit progress from any "X% done" lines seen so far
+                        let text = String::from_utf8_lossy(chunk);
+                        for line in text.lines() {
+                            if let Some(pct) = parse_xorriso_pct(line) {
+                                emit_progress(pct * 0.45);
+                            }
+                        }
+                    }
+                    Err(_) => break,
                 }
             }
         }
-        let output = child.wait_with_output()?;
-        if !output.status.success() {
+        let status = child.wait()?;
+        if !status.success() {
             let _ = std::fs::remove_file(&iso_path);
-            let stderr_msg = String::from_utf8_lossy(&output.stderr);
+            let stderr_msg = String::from_utf8_lossy(&stderr_bytes);
             let detail = stderr_msg.lines()
                 .filter(|l| l.contains("FAILURE") || l.contains("FATAL") || l.contains("Error"))
                 .collect::<Vec<_>>()
                 .join("; ");
             let msg = if detail.is_empty() {
-                format!("xorriso mkisofs failed (exit {:?})", output.status.code())
+                format!("xorriso mkisofs failed (exit {:?})", status.code())
             } else {
                 format!("xorriso mkisofs failed: {}", detail)
             };
@@ -98,29 +113,42 @@ pub fn append_data_session(
 
     if progress_json {
         emit_step("Writing to disc...");
-        // stderr carries both progress updates and errors; no separate stdout needed
         write_cmd.stdout(Stdio::null());
         write_cmd.stderr(Stdio::piped());
         let mut child = write_cmd.spawn()?;
 
-        let mut stderr_lines: Vec<String> = Vec::new();
-        if let Some(stderr) = child.stderr.take() {
-            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-                if line.to_lowercase().contains("closing") || line.contains("Fixating") {
-                    emit_step("Closing disc...");
-                    emit_progress(99.0);
-                } else if let Some(pct) = parse_xorriso_pct(&line) {
-                    emit_progress(45.0 + pct * 0.54);
+        // Raw-byte drain: BufReader::lines() stops on non-UTF-8, which closes the pipe
+        // early and deadlocks child.wait(). Read raw bytes to always drain fully.
+        let mut stderr_bytes: Vec<u8> = Vec::new();
+        if let Some(mut stderr) = child.stderr.take() {
+            let mut buf = [0u8; 4096];
+            loop {
+                match stderr.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        let chunk = &buf[..n];
+                        stderr_bytes.extend_from_slice(chunk);
+                        let text = String::from_utf8_lossy(chunk);
+                        for line in text.lines() {
+                            let lower = line.to_lowercase();
+                            if lower.contains("closing") || lower.contains("fixating") {
+                                emit_step("Closing disc...");
+                                emit_progress(99.0);
+                            } else if let Some(pct) = parse_xorriso_pct(line) {
+                                emit_progress(45.0 + pct * 0.54);
+                            }
+                        }
+                    }
+                    Err(_) => break,
                 }
-                stderr_lines.push(line);
             }
         }
         let status = child.wait()?;
         let _ = std::fs::remove_file(&iso_path);
         if !status.success() {
-            let detail = stderr_lines.iter()
+            let stderr_msg = String::from_utf8_lossy(&stderr_bytes);
+            let detail = stderr_msg.lines()
                 .filter(|l| l.contains("FAILURE") || l.contains("FATAL") || l.contains("Error"))
-                .cloned()
                 .collect::<Vec<_>>()
                 .join("; ");
             let msg = if detail.is_empty() {

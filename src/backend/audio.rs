@@ -1,4 +1,4 @@
-use std::io::{BufRead, BufReader};
+use std::io::Read;
 use std::process::{Command, Stdio};
 use crate::{error::Error, model::disc::{AudioSession, CdText, TrackTitle}};
 use super::convert;
@@ -71,24 +71,41 @@ pub fn write_audio_session(
 
     if progress_json {
         emit_step("Writing audio session...");
-        // cdrdao writes progress to stderr; stdout goes to null
         cmd.stdout(Stdio::null());
         cmd.stderr(Stdio::piped());
         let mut child = cmd.spawn()?;
 
+        // Raw-byte drain prevents BufReader::lines() from stopping on non-UTF-8
+        // output (e.g. binary SCSI sense data in cdrdao error messages) which would
+        // close the pipe early and deadlock child.wait().
         let mut tracks_done = 0.0f32;
-        if let Some(stderr) = child.stderr.take() {
-            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-                if line.to_lowercase().contains("writing track") {
-                    emit_step(&line);
-                } else if line.to_uppercase().contains("DONE.") || line.contains(": DONE") {
-                    tracks_done += 1.0;
-                } else if let Some(pct) = parse_pct(&line) {
-                    let overall = ((tracks_done + pct / 100.0) / total_tracks) * 100.0;
-                    emit_progress(overall.min(99.0));
-                } else if line.to_lowercase().contains("fixating") {
-                    emit_step("Fixating disc...");
-                    emit_progress(99.5);
+        let mut stderr_bytes: Vec<u8> = Vec::new();
+        if let Some(mut stderr) = child.stderr.take() {
+            let mut buf = [0u8; 4096];
+            loop {
+                match stderr.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        let chunk = &buf[..n];
+                        stderr_bytes.extend_from_slice(chunk);
+                        let text = String::from_utf8_lossy(chunk);
+                        for line in text.lines() {
+                            let lower = line.to_lowercase();
+                            let upper = line.to_uppercase();
+                            if lower.contains("writing track") {
+                                emit_step(line);
+                            } else if upper.contains("DONE.") || line.contains(": DONE") {
+                                tracks_done += 1.0;
+                            } else if let Some(pct) = parse_pct(line) {
+                                let overall = ((tracks_done + pct / 100.0) / total_tracks) * 100.0;
+                                emit_progress(overall.min(99.0));
+                            } else if lower.contains("fixating") {
+                                emit_step("Fixating disc...");
+                                emit_progress(99.5);
+                            }
+                        }
+                    }
+                    Err(_) => break,
                 }
             }
         }
@@ -96,19 +113,33 @@ pub fn write_audio_session(
         let status = child.wait()?;
         let _ = std::fs::remove_file(&toc_path);
         if !status.success() {
-            return Err(Error::backend(format!(
-                "cdrdao failed with exit code: {:?}",
-                status.code()
-            )));
+            let stderr_msg = String::from_utf8_lossy(&stderr_bytes);
+            let detail = stderr_msg.lines()
+                .filter(|l| l.contains("ERROR") || l.contains("error") || l.contains("failed"))
+                .collect::<Vec<_>>()
+                .join("; ");
+            let msg = if detail.is_empty() {
+                format!("cdrdao failed (exit {:?})", status.code())
+            } else {
+                format!("cdrdao failed: {}", detail)
+            };
+            return Err(Error::backend(msg));
         }
     } else {
-        let status = cmd.status()?;
+        let output = cmd.output()?;
         let _ = std::fs::remove_file(&toc_path);
-        if !status.success() {
-            return Err(Error::backend(format!(
-                "cdrdao failed with exit code: {:?}",
-                status.code()
-            )));
+        if !output.status.success() {
+            let stderr_msg = String::from_utf8_lossy(&output.stderr);
+            let detail = stderr_msg.lines()
+                .filter(|l| l.contains("ERROR") || l.contains("error") || l.contains("failed"))
+                .collect::<Vec<_>>()
+                .join("; ");
+            let msg = if detail.is_empty() {
+                format!("cdrdao failed (exit {:?})", output.status.code())
+            } else {
+                format!("cdrdao failed: {}", detail)
+            };
+            return Err(Error::backend(msg));
         }
     }
 
