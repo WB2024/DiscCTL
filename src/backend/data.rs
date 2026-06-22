@@ -21,10 +21,9 @@ pub fn append_data_session(
     // ── Phase 1: build ISO image ──────────────────────────────────────────────
     let mut mkiso = Command::new("xorriso");
     mkiso.arg("-as").arg("mkisofs")
-         .arg("-V").arg(&vol_label)
-         .arg("--dereference");
+         .arg("-V").arg(&vol_label);
 
-    if session.joliet   { mkiso.arg("-J"); }
+    if session.joliet     { mkiso.arg("-J"); }
     if session.rock_ridge { mkiso.arg("-r"); }
 
     if let Some(ms) = msinfo {
@@ -37,33 +36,49 @@ pub fn append_data_session(
 
     if progress_json {
         emit_step("Building ISO image...");
-        // xorriso mkisofs writes progress to stdout: " 5.00% done, estimate finish..."
+        // stdout: " 5.00% done, estimate finish..."  stderr: errors + diagnostics
         mkiso.stdout(Stdio::piped());
-        mkiso.stderr(Stdio::null());
+        mkiso.stderr(Stdio::piped());
         let mut child = mkiso.spawn()?;
 
+        // Drain stdout for progress (blocking read — stderr buffered by OS until wait)
         if let Some(stdout) = child.stdout.take() {
             for line in BufReader::new(stdout).lines().map_while(Result::ok) {
                 if let Some(pct) = parse_xorriso_pct(&line) {
-                    // Scale mkisofs phase to 0–45%
                     emit_progress(pct * 0.45);
                 }
             }
         }
-        let status = child.wait()?;
-        if !status.success() {
+        let output = child.wait_with_output()?;
+        if !output.status.success() {
             let _ = std::fs::remove_file(&iso_path);
-            return Err(Error::backend(format!(
-                "xorriso mkisofs failed with exit code: {:?}", status.code()
-            )));
+            let stderr_msg = String::from_utf8_lossy(&output.stderr);
+            let detail = stderr_msg.lines()
+                .filter(|l| l.contains("FAILURE") || l.contains("FATAL") || l.contains("Error"))
+                .collect::<Vec<_>>()
+                .join("; ");
+            let msg = if detail.is_empty() {
+                format!("xorriso mkisofs failed (exit {:?})", output.status.code())
+            } else {
+                format!("xorriso mkisofs failed: {}", detail)
+            };
+            return Err(Error::backend(msg));
         }
     } else {
-        let status = mkiso.status()?;
-        if !status.success() {
+        let output = mkiso.output()?;
+        if !output.status.success() {
             let _ = std::fs::remove_file(&iso_path);
-            return Err(Error::backend(format!(
-                "xorriso mkisofs failed with exit code: {:?}", status.code()
-            )));
+            let stderr_msg = String::from_utf8_lossy(&output.stderr);
+            let detail = stderr_msg.lines()
+                .filter(|l| l.contains("FAILURE") || l.contains("FATAL") || l.contains("Error"))
+                .collect::<Vec<_>>()
+                .join("; ");
+            let msg = if detail.is_empty() {
+                format!("xorriso mkisofs failed (exit {:?})", output.status.code())
+            } else {
+                format!("xorriso mkisofs failed: {}", detail)
+            };
+            return Err(Error::backend(msg));
         }
     }
 
@@ -83,36 +98,53 @@ pub fn append_data_session(
 
     if progress_json {
         emit_step("Writing to disc...");
-        // xorriso cdrecord writes progress to stderr: "xorriso : UPDATE :  5.00% done"
+        // stderr carries both progress updates and errors; no separate stdout needed
         write_cmd.stdout(Stdio::null());
         write_cmd.stderr(Stdio::piped());
         let mut child = write_cmd.spawn()?;
 
+        let mut stderr_lines: Vec<String> = Vec::new();
         if let Some(stderr) = child.stderr.take() {
             for line in BufReader::new(stderr).lines().map_while(Result::ok) {
                 if line.to_lowercase().contains("closing") || line.contains("Fixating") {
                     emit_step("Closing disc...");
                     emit_progress(99.0);
                 } else if let Some(pct) = parse_xorriso_pct(&line) {
-                    // Scale write phase to 45–99%
                     emit_progress(45.0 + pct * 0.54);
                 }
+                stderr_lines.push(line);
             }
         }
         let status = child.wait()?;
         let _ = std::fs::remove_file(&iso_path);
         if !status.success() {
-            return Err(Error::backend(format!(
-                "xorriso cdrecord failed with exit code: {:?}", status.code()
-            )));
+            let detail = stderr_lines.iter()
+                .filter(|l| l.contains("FAILURE") || l.contains("FATAL") || l.contains("Error"))
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("; ");
+            let msg = if detail.is_empty() {
+                format!("xorriso cdrecord failed (exit {:?})", status.code())
+            } else {
+                format!("xorriso cdrecord failed: {}", detail)
+            };
+            return Err(Error::backend(msg));
         }
     } else {
-        let status = write_cmd.status()?;
+        let output = write_cmd.output()?;
         let _ = std::fs::remove_file(&iso_path);
-        if !status.success() {
-            return Err(Error::backend(format!(
-                "xorriso cdrecord failed with exit code: {:?}", status.code()
-            )));
+        if !output.status.success() {
+            let stderr_msg = String::from_utf8_lossy(&output.stderr);
+            let detail = stderr_msg.lines()
+                .filter(|l| l.contains("FAILURE") || l.contains("FATAL") || l.contains("Error"))
+                .collect::<Vec<_>>()
+                .join("; ");
+            let msg = if detail.is_empty() {
+                format!("xorriso cdrecord failed (exit {:?})", output.status.code())
+            } else {
+                format!("xorriso cdrecord failed: {}", detail)
+            };
+            return Err(Error::backend(msg));
         }
     }
 
