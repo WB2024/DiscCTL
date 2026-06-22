@@ -32,13 +32,18 @@ pub fn execute(graph: &DiscGraph, plan: &BurnPlan, dev: &str, debug: bool) -> Re
         Ok(_) | Err(_) => {} // blank, appendable, unknown: let the backend decide
     }
 
-    // Warn about CD-RW: multisession appends are not supported on CD-RW
+    // CD-RW cannot handle multisession appends (session_index > 0 = Blue Book data session
+    // appended after an audio session). Single-session DataCD burns (session_index == 0)
+    // write to a blank disc and are fine on CD-RW.
     match device::detect_media_type(dev) {
         Ok(device::DiscMediaType::CdRw) => {
-            if plan.steps.iter().any(|s| matches!(s, BurnStep::AppendDataSession { .. })) {
+            let needs_multisession = plan.steps.iter().any(|s| {
+                matches!(s, BurnStep::AppendDataSession { session_index, .. } if *session_index > 0)
+            });
+            if needs_multisession {
                 return Err(Error::device(
-                    "CD-RW does not support multisession appends required for BlueBook/DataCD. \
-                     Use a CD-R, or blank the disc and burn in a single pass.",
+                    "CD-RW does not support multisession appends required for Blue Book (CD Extra). \
+                     Use a CD-R for Blue Book, or blank the disc and burn a single-session DataCD.",
                 ));
             }
         }
@@ -85,13 +90,22 @@ pub fn execute(graph: &DiscGraph, plan: &BurnPlan, dev: &str, debug: bool) -> Re
                         } else {
                             None
                         };
-                        data::append_data_session(d, dev, msinfo.as_deref(), debug)?;
+                        data::append_data_session(d, dev, msinfo.as_deref(), &graph.label, debug)?;
                     }
                     _ => return Err(Error::backend("Expected data session")),
                 }
             }
             BurnStep::FinalizeDisc => {
-                device::finalize_disc(dev, debug)?;
+                // xorriso closes single-session discs automatically when writing without -multi.
+                // Check first so we don't error on an already-closed disc.
+                match device::query_disc_state(dev) {
+                    Ok(device::DiscState::Finalized) => {
+                        if debug {
+                            println!("Disc already finalized by write backend — skipping FinalizeDisc.");
+                        }
+                    }
+                    _ => device::finalize_disc(dev, debug)?,
+                }
             }
         }
     }

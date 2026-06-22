@@ -33,49 +33,66 @@ pub fn check_device(device: &str) -> Result<(), Error> {
 
 /// Query the state of the disc in the drive.
 pub fn query_disc_state(device: &str) -> Result<DiscState, Error> {
-    // -msinfo exits 0 and prints "start,next" if disc is appendable
-    let msinfo = Command::new("cdrecord")
+    // ATIP is only present on blank/writable CD-R and CD-RW discs.
+    // A finalized disc's lead-in is closed, so ATIP is not readable.
+    let atip = Command::new("cdrecord")
         .arg(format!("dev={}", device))
-        .arg("-msinfo")
+        .arg("-atip")
         .output()?;
 
-    if msinfo.status.success() {
-        let info = String::from_utf8_lossy(&msinfo.stdout).trim().to_string();
-        if !info.is_empty() {
-            return Ok(DiscState::Appendable { msinfo: info });
+    let atip_text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&atip.stdout),
+        String::from_utf8_lossy(&atip.stderr)
+    )
+    .to_lowercase();
+
+    if atip_text.contains("atip start of lead in") {
+        // Writable disc detected. Check if any sessions have been written.
+        let msinfo = Command::new("cdrecord")
+            .arg(format!("dev={}", device))
+            .arg("-msinfo")
+            .output()?;
+
+        if msinfo.status.success() {
+            let info = String::from_utf8_lossy(&msinfo.stdout).trim().to_string();
+            if !info.is_empty() {
+                return Ok(DiscState::Appendable { msinfo: info });
+            }
         }
+
+        // ATIP present but no sessions written yet — blank disc.
+        return Ok(DiscState::Blank);
     }
 
-    // -toc gives us session/track information
+    // No ATIP — disc is finalized, a pressed CD, or no disc present.
+    // Check TOC for actual track data to distinguish finalized from empty drive.
     let toc = Command::new("cdrecord")
         .arg(format!("dev={}", device))
-        .arg("-v")
         .arg("-toc")
         .output()?;
 
-    let combined = format!(
+    let toc_text = format!(
         "{}{}",
         String::from_utf8_lossy(&toc.stdout),
         String::from_utf8_lossy(&toc.stderr)
     )
     .to_lowercase();
 
-    if combined.contains("no disc")
-        || combined.contains("no medium")
-        || combined.contains("blank")
-    {
-        return Ok(DiscState::Blank);
-    }
-
-    if combined.contains("open session") || combined.contains("incomplete") {
+    if toc_text.contains("open session") || toc_text.contains("incomplete") {
         return Ok(DiscState::OpenSession);
     }
 
-    if toc.status.success() && (combined.contains("track") || combined.contains("toc")) {
+    // Look for actual track entries (e.g. "track   1") not just the word "toc"
+    if toc_text.contains("track   1") || toc_text.contains("track  1") || toc_text.contains("lba") {
         return Ok(DiscState::Finalized);
     }
 
-    Ok(DiscState::Unknown(combined.trim().chars().take(200).collect()))
+    if toc_text.contains("no disc") || toc_text.contains("no medium") {
+        return Ok(DiscState::Unknown("No disc detected".to_string()));
+    }
+
+    Ok(DiscState::Unknown(toc_text.trim().chars().take(200).collect()))
 }
 
 /// Attempt to recover a disc with an open (interrupted) session by closing it.

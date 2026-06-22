@@ -5,12 +5,21 @@ pub fn append_data_session(
     session: &DataSession,
     device: &str,
     msinfo: Option<&str>,
+    label: &str,
     debug: bool,
 ) -> Result<(), Error> {
     let iso_path = format!("/tmp/discctl_{}.iso", std::process::id());
 
     let mut mkiso = Command::new("xorriso");
     mkiso.arg("-as").arg("mkisofs");
+
+    // ISO 9660 volume label: uppercase, max 32 chars
+    let vol_label: String = label
+        .chars()
+        .take(32)
+        .map(|c| c.to_ascii_uppercase())
+        .collect();
+    mkiso.arg("-V").arg(&vol_label);
 
     if session.joliet {
         mkiso.arg("-J");
