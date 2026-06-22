@@ -6,9 +6,12 @@ pub struct BurnArgs {
     /// Disc format: redbook, datacd, bluebook
     #[arg(long, default_value = "redbook")]
     pub format: String,
-    /// Audio track files or glob patterns (WAV/FLAC)
+    /// Audio track files or glob patterns (WAV/FLAC/MP3/M4A)
     #[arg(long, num_args = 1..)]
     pub audio: Option<Vec<String>>,
+    /// M3U/M3U8 playlist file to use as the track list
+    #[arg(long)]
+    pub playlist: Option<String>,
     /// Source directory for data session
     #[arg(long)]
     pub data: Option<String>,
@@ -39,6 +42,7 @@ pub fn run(args: BurnArgs) -> Result<(), Error> {
         parser::from_cli(
             &args.format,
             args.audio.as_deref(),
+            args.playlist.as_deref(),
             args.data.as_deref(),
             &args.label,
             args.cd_text,

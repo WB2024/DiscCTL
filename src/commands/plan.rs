@@ -12,6 +12,9 @@ pub struct PlanArgs {
     /// Audio track files or glob patterns
     #[arg(long, num_args = 1..)]
     pub audio: Option<Vec<String>>,
+    /// M3U/M3U8 playlist file to use as the track list
+    #[arg(long)]
+    pub playlist: Option<String>,
     /// Source directory for data session
     #[arg(long)]
     pub data: Option<String>,
@@ -28,7 +31,7 @@ pub fn run(args: PlanArgs) -> Result<(), Error> {
         parser::from_file(path)?
     } else {
         let format = args.format.as_deref().unwrap_or("redbook");
-        parser::from_cli(format, args.audio.as_deref(), args.data.as_deref(), &args.label, args.cd_text)?
+        parser::from_cli(format, args.audio.as_deref(), args.playlist.as_deref(), args.data.as_deref(), &args.label, args.cd_text)?
     };
 
     let plan = planner::plan(&graph)?;

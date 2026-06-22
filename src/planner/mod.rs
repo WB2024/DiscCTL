@@ -91,12 +91,15 @@ fn validate_files(graph: &DiscGraph) -> Result<(), Error> {
                     if !path.exists() {
                         return Err(Error::validation(format!("Track file not found: {}", track)));
                     }
-                    match path.extension().and_then(|e| e.to_str()) {
+                    match path.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase()).as_deref() {
                         Some("wav") => validate_wav_format(track)?,
-                        Some("flac") => {} // FLAC format check requires decoding; deferred to backend
+                        // All formats below are converted to CDDA WAV by the backend via ffmpeg
+                        Some("flac") | Some("mp3") | Some("m4a") | Some("aac")
+                        | Some("ogg") | Some("opus") | Some("wma") => {}
                         Some(ext) => {
                             return Err(Error::validation(format!(
-                                "Unsupported audio format '{}' for: {}. Use wav or flac",
+                                "Unsupported audio format '{}' for: {}. \
+                                 Supported: wav, flac, mp3, m4a, aac, ogg, opus",
                                 ext, track
                             )));
                         }

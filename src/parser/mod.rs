@@ -1,4 +1,5 @@
 pub mod cdtext;
+pub mod playlist;
 
 use std::fs;
 use crate::{error::Error, model::disc::*};
@@ -11,6 +12,7 @@ pub fn from_file(path: &str) -> Result<DiscGraph, Error> {
 pub fn from_cli(
     format: &str,
     audio: Option<&[String]>,
+    playlist: Option<&str>,
     data: Option<&str>,
     label: &str,
     use_cd_text: bool,
@@ -18,9 +20,17 @@ pub fn from_cli(
     let format = parse_format(format)?;
     let mut sessions = Vec::new();
 
-    if let Some(patterns) = audio {
-        let tracks = expand_audio_patterns(patterns)?;
+    // Playlist takes precedence over --audio glob patterns when both are given
+    let audio_tracks: Option<Vec<String>> = if let Some(pl_path) = playlist {
+        let entries = playlist::parse(pl_path)?;
+        Some(entries.into_iter().map(|e| e.path).collect())
+    } else if let Some(patterns) = audio {
+        Some(expand_audio_patterns(patterns)?)
+    } else {
+        None
+    };
 
+    if let Some(tracks) = audio_tracks {
         let (cd_text, track_titles) = if use_cd_text {
             cdtext::from_tags(&tracks)
         } else {
