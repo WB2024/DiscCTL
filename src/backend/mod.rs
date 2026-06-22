@@ -19,14 +19,14 @@ pub fn execute(graph: &DiscGraph, plan: &BurnPlan, dev: &str, debug: bool) -> Re
     match device::query_disc_state(dev) {
         Ok(device::DiscState::Finalized) => {
             return Err(Error::device(format!(
-                "Disc on {} is already finalized. Insert a blank disc or use `discctl recover --blank fast` for CD-RW.",
+                "Disc on {} is already finalized. Insert a blank disc or use `rustydisc recover --blank fast` for CD-RW.",
                 dev
             )));
         }
         Ok(device::DiscState::OpenSession) => {
             return Err(Error::device(format!(
                 "Disc on {} has an interrupted burn (open session). \
-                 Run `discctl recover --device {}` to attempt repair before burning.",
+                 Run `rustydisc recover --device {}` to attempt repair before burning.",
                 dev, dev
             )));
         }

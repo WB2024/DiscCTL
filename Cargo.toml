@@ -1,10 +1,10 @@
 [package]
-name = "discctl"
+name = "rustydisc"
 version = "0.1.0"
 edition = "2024"
 
 [[bin]]
-name = "discctl"
+name = "rustydisc"
 path = "src/main.rs"
 
 [dependencies]

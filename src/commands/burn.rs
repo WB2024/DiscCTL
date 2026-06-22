@@ -152,7 +152,7 @@ fn burn_data_discs(slices: &[DataSlice], args: &BurnArgs) -> Result<(), Error> {
         let label = disc_label(&args.label, disc_num, total);
 
         // Stage this disc's files into a sub-directory using symlinks
-        let disc_stage = format!("/tmp/discctl_disc{:02}_{}", disc_num, std::process::id());
+        let disc_stage = format!("/tmp/rustydisc_disc{:02}_{}", disc_num, std::process::id());
         stage_files_with_symlinks(&slice.items, &disc_stage)?;
         let disc_staged = StagedDir::new(disc_stage.clone(), false, true);
 
@@ -324,8 +324,8 @@ fn items_to_stage_dir(
     }
 
     let path = match suffix {
-        Some(s) => format!("/tmp/discctl_stage_{}_{}", s, std::process::id()),
-        None => format!("/tmp/discctl_stage_{}", std::process::id()),
+        Some(s) => format!("/tmp/rustydisc_stage_{}_{}", s, std::process::id()),
+        None => format!("/tmp/rustydisc_stage_{}", std::process::id()),
     };
     stage_files_with_symlinks(items, &path)?;
     let (_, auto) = stage_path(args);
@@ -360,7 +360,7 @@ fn stage_files_with_symlinks(items: &[DataItem], dir: &str) -> Result<(), Error>
 fn stage_path(args: &BurnArgs) -> (String, bool) {
     match &args.stage_dir {
         Some(p) => (p.clone(), false),
-        None => (format!("/tmp/discctl_stage_{}", std::process::id()), true),
+        None => (format!("/tmp/rustydisc_stage_{}", std::process::id()), true),
     }
 }
 

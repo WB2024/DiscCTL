@@ -48,21 +48,21 @@ mod hardware {
 
     #[test]
     fn disc_state_is_detectable() {
-        use discctl::backend::device as dev;
+        use rustydisc::backend::device as dev;
         let state = dev::query_disc_state(&device()).expect("query_disc_state failed");
         println!("Disc state: {:?}", state);
     }
 
     #[test]
     fn media_type_is_detectable() {
-        use discctl::backend::device as dev;
+        use rustydisc::backend::device as dev;
         let media = dev::detect_media_type(&device()).expect("detect_media_type failed");
         println!("Media type: {:?}", media);
     }
 
     #[test]
     fn buffer_underrun_protection_detected() {
-        use discctl::backend::device as dev;
+        use rustydisc::backend::device as dev;
         let has_bup = dev::has_buffer_underrun_protection(&device())
             .expect("has_buffer_underrun_protection failed");
         println!("Buffer underrun protection: {}", has_bup);
@@ -74,10 +74,10 @@ mod hardware {
 
     #[test]
     fn fixture_wavs_exist_and_are_valid() {
-        use discctl::planner;
+        use rustydisc::planner;
         let adir = audio_dir();
         let pattern = format!("{}/*.wav", adir);
-        let graph = discctl::parser::from_cli("redbook", Some(&[pattern]), None, None, "Fixture Test", false)
+        let graph = rustydisc::parser::from_cli("redbook", Some(&[pattern]), None, None, "Fixture Test", false)
             .expect("from_cli failed");
         // validate() checks WAV headers — will catch any spec violations
         planner::validate(&graph).expect("WAV validation failed on fixture files");
@@ -88,9 +88,9 @@ mod hardware {
     fn redbook_dry_run_plan() {
         let pattern = format!("{}/*.wav", audio_dir());
         let graph =
-            discctl::parser::from_cli("redbook", Some(&[pattern]), None, None, "HW Test RedBook", false)
+            rustydisc::parser::from_cli("redbook", Some(&[pattern]), None, None, "HW Test RedBook", false)
                 .unwrap();
-        let plan = discctl::planner::plan(&graph).unwrap();
+        let plan = rustydisc::planner::plan(&graph).unwrap();
         println!("{}", serde_json::to_string_pretty(&plan).unwrap());
         assert_eq!(plan.steps.len(), 1);
     }
@@ -98,9 +98,9 @@ mod hardware {
     #[test]
     fn datacd_dry_run_plan() {
         let graph =
-            discctl::parser::from_cli("datacd", None, None, Some(&data_dir()), "HW Test DataCD", false)
+            rustydisc::parser::from_cli("datacd", None, None, Some(&data_dir()), "HW Test DataCD", false)
                 .unwrap();
-        let plan = discctl::planner::plan(&graph).unwrap();
+        let plan = rustydisc::planner::plan(&graph).unwrap();
         println!("{}", serde_json::to_string_pretty(&plan).unwrap());
         assert_eq!(plan.steps.len(), 2);
     }
@@ -108,7 +108,7 @@ mod hardware {
     #[test]
     fn bluebook_dry_run_plan() {
         let pattern = format!("{}/*.wav", audio_dir());
-        let graph = discctl::parser::from_cli(
+        let graph = rustydisc::parser::from_cli(
             "bluebook",
             Some(&[pattern]),
             None,
@@ -117,7 +117,7 @@ mod hardware {
             false,
         )
         .unwrap();
-        let plan = discctl::planner::plan(&graph).unwrap();
+        let plan = rustydisc::planner::plan(&graph).unwrap();
         println!("{}", serde_json::to_string_pretty(&plan).unwrap());
         assert_eq!(plan.steps.len(), 3);
     }
@@ -132,10 +132,10 @@ mod hardware {
         }
         let pattern = format!("{}/*.wav", audio_dir());
         let graph =
-            discctl::parser::from_cli("redbook", Some(&[pattern]), None, None, "HW Burn RedBook", false)
+            rustydisc::parser::from_cli("redbook", Some(&[pattern]), None, None, "HW Burn RedBook", false)
                 .unwrap();
-        let plan = discctl::planner::plan(&graph).unwrap();
-        discctl::backend::execute(&graph, &plan, &device(), true).unwrap();
+        let plan = rustydisc::planner::plan(&graph).unwrap();
+        rustydisc::backend::execute(&graph, &plan, &device(), true).unwrap();
         println!("Red Book burn complete.");
     }
 
@@ -146,10 +146,10 @@ mod hardware {
             return;
         }
         let graph =
-            discctl::parser::from_cli("datacd", None, None, Some(&data_dir()), "HW Burn DataCD", false)
+            rustydisc::parser::from_cli("datacd", None, None, Some(&data_dir()), "HW Burn DataCD", false)
                 .unwrap();
-        let plan = discctl::planner::plan(&graph).unwrap();
-        discctl::backend::execute(&graph, &plan, &device(), true).unwrap();
+        let plan = rustydisc::planner::plan(&graph).unwrap();
+        rustydisc::backend::execute(&graph, &plan, &device(), true).unwrap();
         println!("Data CD burn complete.");
     }
 
@@ -160,7 +160,7 @@ mod hardware {
             return;
         }
         let pattern = format!("{}/*.wav", audio_dir());
-        let graph = discctl::parser::from_cli(
+        let graph = rustydisc::parser::from_cli(
             "bluebook",
             Some(&[pattern]),
             None,
@@ -169,8 +169,8 @@ mod hardware {
             false,
         )
         .unwrap();
-        let plan = discctl::planner::plan(&graph).unwrap();
-        discctl::backend::execute(&graph, &plan, &device(), true).unwrap();
+        let plan = rustydisc::planner::plan(&graph).unwrap();
+        rustydisc::backend::execute(&graph, &plan, &device(), true).unwrap();
         println!("Blue Book burn complete.");
     }
 
@@ -180,7 +180,7 @@ mod hardware {
             println!("Skipped. Set DISCCTL_ENABLE_BURN_TESTS=1 to run.");
             return;
         }
-        use discctl::backend::device as dev;
+        use rustydisc::backend::device as dev;
         // Only run on CD-RW
         if dev::detect_media_type(&device()).unwrap() != dev::DiscMediaType::CdRw {
             println!("Skipped: not a CD-RW disc.");
@@ -191,10 +191,10 @@ mod hardware {
         println!("Burning Red Book after blank...");
         let pattern = format!("{}/*.wav", audio_dir());
         let graph =
-            discctl::parser::from_cli("redbook", Some(&[pattern]), None, None, "HW Blank+Burn", false)
+            rustydisc::parser::from_cli("redbook", Some(&[pattern]), None, None, "HW Blank+Burn", false)
                 .unwrap();
-        let plan = discctl::planner::plan(&graph).unwrap();
-        discctl::backend::execute(&graph, &plan, &device(), true).unwrap();
+        let plan = rustydisc::planner::plan(&graph).unwrap();
+        rustydisc::backend::execute(&graph, &plan, &device(), true).unwrap();
         println!("CD-RW blank+burn complete.");
     }
 }

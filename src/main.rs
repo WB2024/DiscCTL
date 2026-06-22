@@ -8,7 +8,7 @@ mod planner;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "discctl", about = "Unified CD authoring CLI tool", version)]
+#[command(name = "rustydisc", about = "Disc authoring CLI for Linux — Red Book, Data CD, Blue Book", version)]
 struct Cli {
     #[command(subcommand)]
     command: Cmd,
