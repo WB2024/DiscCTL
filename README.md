@@ -1,13 +1,20 @@
-# Rusty Disc
+<p align="center">
+  <img src="Images/Assets/Untitled1.jpeg" alt="" width="100%">
+</p>
 
-<!-- LOGO: drop assets/logo.png here once generated -->
-<!-- ![Rusty Disc](assets/logo.png) -->
+<p align="center">
+  <img src="Images/Assets/Logo.jpeg" alt="Rusty Disc" width="320">
+</p>
 
-> A blazing-fast disc authoring CLI for Linux — burn Red Book audio CDs, Data CDs, and Blue Book/CD Extra enhanced discs straight from the terminal.
+<p align="center">
+  <em>A blazing-fast disc authoring CLI for Linux — burn Red Book audio CDs, Data CDs,<br>and Blue Book/CD Extra enhanced discs straight from the terminal.</em>
+</p>
 
-[![Build](https://img.shields.io/badge/build-passing-brightgreen)](#development)
-[![Rust](https://img.shields.io/badge/rust-1.85%2B-orange)](https://www.rust-lang.org)
-[![License](https://img.shields.io/badge/license-MIT-blue)](#license)
+<p align="center">
+  <img alt="Build" src="https://img.shields.io/badge/build-passing-brightgreen">
+  <img alt="Rust" src="https://img.shields.io/badge/rust-1.85%2B-orange">
+  <img alt="License" src="https://img.shields.io/badge/license-MIT-blue">
+</p>
 
 ---
 
@@ -170,6 +177,10 @@ rustydisc plan --format redbook --audio ~/music/album/*.wav --label "My Album"
 ---
 
 ## Disc Formats
+
+<p align="center">
+  <img src="Images/Assets/Untitled.jpeg" alt="Rusty Disc icon" width="160">
+</p>
 
 ### Red Book (`--format redbook`)
 
