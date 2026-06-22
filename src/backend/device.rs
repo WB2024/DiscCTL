@@ -195,10 +195,15 @@ pub fn has_buffer_underrun_protection(device: &str) -> Result<bool, Error> {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    Ok(text.contains("BURN-Proof")
-        || text.contains("SMART-BURN")
-        || text.contains("buffer underrun")
-        || text.contains("Burnfree"))
+    // Case-insensitive search covers: BurnProof (cdrdao), BURNFREE (cdrecord/wodim),
+    // BURN-Proof, SMART-BURN, JustLink, buffer underrun protection variants
+    let lower = text.to_lowercase();
+    Ok(lower.contains("burnproof")
+        || lower.contains("burnfree")
+        || lower.contains("burn-proof")
+        || lower.contains("smart-burn")
+        || lower.contains("justlink")
+        || lower.contains("buffer underrun"))
 }
 
 pub fn get_msinfo(device: &str) -> Result<String, Error> {

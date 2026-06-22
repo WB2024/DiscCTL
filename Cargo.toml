@@ -16,6 +16,7 @@ anyhow = "1"
 glob = "0.3"
 
 [dev-dependencies]
+serde_json = "1"
 
 [features]
 hardware_tests = []
