@@ -135,7 +135,7 @@ mod hardware {
             rustydisc::parser::from_cli("redbook", Some(&[pattern]), None, None, "HW Burn RedBook", false)
                 .unwrap();
         let plan = rustydisc::planner::plan(&graph).unwrap();
-        rustydisc::backend::execute(&graph, &plan, &device(), true).unwrap();
+        rustydisc::backend::execute(&graph, &plan, &device(), true, false).unwrap();
         println!("Red Book burn complete.");
     }
 
@@ -149,7 +149,7 @@ mod hardware {
             rustydisc::parser::from_cli("datacd", None, None, Some(&data_dir()), "HW Burn DataCD", false)
                 .unwrap();
         let plan = rustydisc::planner::plan(&graph).unwrap();
-        rustydisc::backend::execute(&graph, &plan, &device(), true).unwrap();
+        rustydisc::backend::execute(&graph, &plan, &device(), true, false).unwrap();
         println!("Data CD burn complete.");
     }
 
@@ -170,7 +170,7 @@ mod hardware {
         )
         .unwrap();
         let plan = rustydisc::planner::plan(&graph).unwrap();
-        rustydisc::backend::execute(&graph, &plan, &device(), true).unwrap();
+        rustydisc::backend::execute(&graph, &plan, &device(), true, false).unwrap();
         println!("Blue Book burn complete.");
     }
 
@@ -194,7 +194,7 @@ mod hardware {
             rustydisc::parser::from_cli("redbook", Some(&[pattern]), None, None, "HW Blank+Burn", false)
                 .unwrap();
         let plan = rustydisc::planner::plan(&graph).unwrap();
-        rustydisc::backend::execute(&graph, &plan, &device(), true).unwrap();
+        rustydisc::backend::execute(&graph, &plan, &device(), true, false).unwrap();
         println!("CD-RW blank+burn complete.");
     }
 }

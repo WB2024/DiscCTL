@@ -12,7 +12,7 @@ use crate::{
     },
 };
 
-pub fn execute(graph: &DiscGraph, plan: &BurnPlan, dev: &str, debug: bool) -> Result<(), Error> {
+pub fn execute(graph: &DiscGraph, plan: &BurnPlan, dev: &str, debug: bool, progress_json: bool) -> Result<(), Error> {
     device::check_device(dev)?;
 
     // Pre-flight disc state check
@@ -72,7 +72,7 @@ pub fn execute(graph: &DiscGraph, plan: &BurnPlan, dev: &str, debug: bool) -> Re
                     Session::Audio(a) => {
                         // Convert any non-CDDA tracks before burning
                         let prepared = audio::prepare_tracks(a, debug)?;
-                        audio::write_audio_session(&prepared, dev, !finalize, debug)?;
+                        audio::write_audio_session(&prepared, dev, !finalize, debug, progress_json)?;
                     }
                     _ => return Err(Error::backend("Expected audio session")),
                 }
@@ -91,7 +91,7 @@ pub fn execute(graph: &DiscGraph, plan: &BurnPlan, dev: &str, debug: bool) -> Re
                         } else {
                             None
                         };
-                        data::append_data_session(d, dev, msinfo.as_deref(), &graph.label, debug)?;
+                        data::append_data_session(d, dev, msinfo.as_deref(), &graph.label, debug, progress_json)?;
                     }
                     _ => return Err(Error::backend("Expected data session")),
                 }

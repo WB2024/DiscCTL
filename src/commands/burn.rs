@@ -53,6 +53,9 @@ pub struct BurnArgs {
     /// Keep staged files after burn (default: delete)
     #[arg(long)]
     pub keep_staged: bool,
+    /// Emit newline-delimited JSON progress events to stdout (for machine consumers)
+    #[arg(long)]
+    pub progress_json: bool,
 }
 
 pub fn run(args: BurnArgs) -> Result<(), Error> {
@@ -298,10 +301,14 @@ fn burn_graph(
     }
 
     if !args.dry_run {
-        backend::execute(graph, &plan, &args.device, args.debug)?;
-        println!("Disc burn complete.");
+        backend::execute(graph, &plan, &args.device, args.debug, args.progress_json)?;
+        if args.progress_json {
+            println!("{{\"type\":\"done\"}}");
+        } else {
+            eprintln!("Disc burn complete.");
+        }
     } else {
-        println!("Dry run complete. No disc was written.");
+        eprintln!("Dry run complete. No disc was written.");
     }
 
     Ok(())

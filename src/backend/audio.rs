@@ -1,9 +1,8 @@
-use std::process::Command;
+use std::io::{BufRead, BufReader};
+use std::process::{Command, Stdio};
 use crate::{error::Error, model::disc::{AudioSession, CdText, TrackTitle}};
 use super::convert;
 
-/// Converts any FLAC tracks to CDDA WAV and returns a session with resolved paths.
-/// Converted temp files are removed when `PreparedSession` is dropped.
 pub fn prepare_tracks(session: &AudioSession, debug: bool) -> Result<PreparedSession, Error> {
     let mut prepared_tracks = Vec::new();
     let mut temp_files = Vec::new();
@@ -44,13 +43,14 @@ pub fn write_audio_session(
     device: &str,
     keep_open: bool,
     debug: bool,
+    progress_json: bool,
 ) -> Result<(), Error> {
     let toc = generate_toc(session);
-    let toc_path = format!("/tmp/discctl_{}.toc", std::process::id());
+    let toc_path = format!("/tmp/rustydisc_{}.toc", std::process::id());
     std::fs::write(&toc_path, &toc)?;
 
     if debug {
-        println!("=== TOC ({}) ===\n{}", toc_path, toc);
+        eprintln!("=== TOC ({}) ===\n{}", toc_path, toc);
     }
 
     let mut cmd = Command::new("cdrdao");
@@ -61,25 +61,81 @@ pub fn write_audio_session(
     if keep_open {
         cmd.arg("--multi");
     }
-
     cmd.arg(&toc_path);
 
     if debug {
-        println!("Running: {:?}", cmd);
+        eprintln!("Running: {:?}", cmd);
     }
 
-    let status = cmd.status()?;
-    let _ = std::fs::remove_file(&toc_path);
+    let total_tracks = session.tracks.len().max(1) as f32;
 
-    if !status.success() {
-        return Err(Error::backend(format!(
-            "cdrdao failed with exit code: {:?}",
-            status.code()
-        )));
+    if progress_json {
+        emit_step("Writing audio session...");
+        // cdrdao writes progress to stderr; stdout goes to null
+        cmd.stdout(Stdio::null());
+        cmd.stderr(Stdio::piped());
+        let mut child = cmd.spawn()?;
+
+        let mut tracks_done = 0.0f32;
+        if let Some(stderr) = child.stderr.take() {
+            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                if line.to_lowercase().contains("writing track") {
+                    emit_step(&line);
+                } else if line.to_uppercase().contains("DONE.") || line.contains(": DONE") {
+                    tracks_done += 1.0;
+                } else if let Some(pct) = parse_pct(&line) {
+                    let overall = ((tracks_done + pct / 100.0) / total_tracks) * 100.0;
+                    emit_progress(overall.min(99.0));
+                } else if line.to_lowercase().contains("fixating") {
+                    emit_step("Fixating disc...");
+                    emit_progress(99.5);
+                }
+            }
+        }
+
+        let status = child.wait()?;
+        let _ = std::fs::remove_file(&toc_path);
+        if !status.success() {
+            return Err(Error::backend(format!(
+                "cdrdao failed with exit code: {:?}",
+                status.code()
+            )));
+        }
+    } else {
+        let status = cmd.status()?;
+        let _ = std::fs::remove_file(&toc_path);
+        if !status.success() {
+            return Err(Error::backend(format!(
+                "cdrdao failed with exit code: {:?}",
+                status.code()
+            )));
+        }
     }
 
     Ok(())
 }
+
+// ── progress helpers ──────────────────────────────────────────────────────────
+
+fn parse_pct(line: &str) -> Option<f32> {
+    // Matches "  45% done." or just "45%"
+    let trimmed = line.trim();
+    let pct_pos = trimmed.find('%')?;
+    let before = trimmed[..pct_pos].trim();
+    // Take the last whitespace-delimited token before '%'
+    before.split_whitespace().last()?.parse::<f32>().ok()
+}
+
+fn emit_progress(pct: f32) {
+    println!("{{\"type\":\"progress\",\"pct\":{:.1}}}", pct);
+}
+
+fn emit_step(msg: &str) {
+    let escaped = msg.replace('\\', "\\\\").replace('"', "\\\"");
+    println!("{{\"type\":\"step\",\"msg\":\"{}\"}}", escaped);
+}
+
+// ── TOC generation ────────────────────────────────────────────────────────────
 
 fn generate_toc(session: &PreparedSession) -> String {
     let mut toc = String::from("CD_DA\n\n");
@@ -100,8 +156,6 @@ fn generate_toc(session: &PreparedSession) -> String {
     for (i, track_path) in session.tracks.iter().enumerate() {
         toc.push_str("TRACK AUDIO\n");
 
-        // Per-track CD-Text: use track_titles[i] if present, fall back to disc-level artist
-        // and auto-generated title.
         let per_track = session.track_titles.as_ref().and_then(|v| v.get(i));
         let auto_title = format!("Track {:02}", i + 1);
         let track_title = per_track
@@ -160,7 +214,6 @@ mod tests {
         let toc = generate_toc(&s);
         assert!(toc.contains("TITLE \"My Album\""));
         assert!(toc.contains("PERFORMER \"Artist\""));
-        // Auto-generated track title
         assert!(toc.contains("TITLE \"Track 01\""));
     }
 
@@ -178,14 +231,12 @@ mod tests {
         assert!(toc.contains("TITLE \"Song One\""));
         assert!(toc.contains("PERFORMER \"Solo Artist\""));
         assert!(toc.contains("TITLE \"Song Two\""));
-        // Track 2 has no per-track artist, falls back to disc artist
         let after_t2 = toc.split("TITLE \"Song Two\"").nth(1).unwrap();
         assert!(after_t2.contains("PERFORMER \"Band\""));
     }
 
     #[test]
     fn toc_partial_track_titles() {
-        // Only one track_title entry for two tracks — second track falls back to auto
         let s = session(
             vec!["t1.wav", "t2.wav"],
             Some(CdText { title: Some("Album".into()), artist: None }),
@@ -196,5 +247,13 @@ mod tests {
         let toc = generate_toc(&s);
         assert!(toc.contains("TITLE \"Opener\""));
         assert!(toc.contains("TITLE \"Track 02\""));
+    }
+
+    #[test]
+    fn parse_pct_cdrdao_style() {
+        assert_eq!(parse_pct(" 45% done."), Some(45.0));
+        assert_eq!(parse_pct("  0% done."), Some(0.0));
+        assert_eq!(parse_pct("100% done."), Some(100.0));
+        assert_eq!(parse_pct("no pct here"), None);
     }
 }
