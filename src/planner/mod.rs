@@ -256,6 +256,7 @@ mod tests {
         Session::Audio(AudioSession {
             tracks: tracks.iter().map(|s| s.to_string()).collect(),
             cd_text: None,
+            track_titles: None,
         })
     }
 

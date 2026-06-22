@@ -28,12 +28,27 @@ pub enum Session {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AudioSession {
     pub tracks: Vec<String>,
+    /// Disc-level CD-Text (album title, artist).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cd_text: Option<CdText>,
+    /// Per-track CD-Text. Index aligns with tracks[]. Missing entries fall back
+    /// to auto-generated "Track NN" titles.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub track_titles: Option<Vec<TrackTitle>>,
 }
 
+/// Disc-level CD-Text metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CdText {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artist: Option<String>,
+}
+
+/// Per-track CD-Text metadata.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrackTitle {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

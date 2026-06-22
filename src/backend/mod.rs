@@ -14,6 +14,24 @@ use crate::{
 pub fn execute(graph: &DiscGraph, plan: &BurnPlan, dev: &str, debug: bool) -> Result<(), Error> {
     device::check_device(dev)?;
 
+    // Pre-flight disc state check
+    match device::query_disc_state(dev) {
+        Ok(device::DiscState::Finalized) => {
+            return Err(Error::device(format!(
+                "Disc on {} is already finalized. Insert a blank disc or use `discctl recover --blank fast` for CD-RW.",
+                dev
+            )));
+        }
+        Ok(device::DiscState::OpenSession) => {
+            return Err(Error::device(format!(
+                "Disc on {} has an interrupted burn (open session). \
+                 Run `discctl recover --device {}` to attempt repair before burning.",
+                dev, dev
+            )));
+        }
+        Ok(_) | Err(_) => {} // blank, appendable, unknown: let the backend decide
+    }
+
     // Warn about CD-RW: multisession appends are not supported on CD-RW
     match device::detect_media_type(dev) {
         Ok(device::DiscMediaType::CdRw) => {

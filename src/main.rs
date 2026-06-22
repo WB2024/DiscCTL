@@ -22,6 +22,8 @@ enum Cmd {
     Plan(commands::plan::PlanArgs),
     /// Validate a disc graph JSON file
     Validate(commands::validate::ValidateArgs),
+    /// Inspect disc state and recover from interrupted burns
+    Recover(commands::recover::RecoverArgs),
 }
 
 fn main() {
@@ -30,6 +32,7 @@ fn main() {
         Cmd::Burn(args) => commands::burn::run(args),
         Cmd::Plan(args) => commands::plan::run(args),
         Cmd::Validate(args) => commands::validate::run(args),
+        Cmd::Recover(args) => commands::recover::run(args),
     };
     if let Err(e) = result {
         let disc_err = e.to_disc_error();

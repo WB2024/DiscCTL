@@ -23,6 +23,7 @@ pub fn from_cli(
                 title: Some(label.to_string()),
                 artist: None,
             }),
+            track_titles: None,
         }));
     }
 
