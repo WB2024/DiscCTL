@@ -92,7 +92,8 @@ fn validate_files(graph: &DiscGraph) -> Result<(), Error> {
                         return Err(Error::validation(format!("Track file not found: {}", track)));
                     }
                     match path.extension().and_then(|e| e.to_str()) {
-                        Some("wav") | Some("flac") => {}
+                        Some("wav") => validate_wav_format(track)?,
+                        Some("flac") => {} // FLAC format check requires decoding; deferred to backend
                         Some(ext) => {
                             return Err(Error::validation(format!(
                                 "Unsupported audio format '{}' for: {}. Use wav or flac",
@@ -115,10 +116,96 @@ fn validate_files(graph: &DiscGraph) -> Result<(), Error> {
                         data.source_dir
                     )));
                 }
+                validate_iso_size(&data.source_dir)?;
             }
         }
     }
     Ok(())
+}
+
+// Standard PCM WAV fmt chunk layout (offsets from file start):
+//   0-3: "RIFF", 4-7: file size, 8-11: "WAVE"
+//   12-15: "fmt ", 16-19: chunk size (16 for PCM)
+//   20-21: audio_format, 22-23: channels, 24-27: sample_rate
+//   28-31: byte_rate, 32-33: block_align, 34-35: bits_per_sample
+fn validate_wav_format(path: &str) -> Result<(), Error> {
+    use std::io::Read;
+    let mut f = std::fs::File::open(path)?;
+    let mut header = [0u8; 36];
+    f.read_exact(&mut header).map_err(|_| {
+        Error::validation(format!("'{}' is too small to be a valid WAV file", path))
+    })?;
+
+    if &header[0..4] != b"RIFF" || &header[8..12] != b"WAVE" {
+        return Err(Error::validation(format!("'{}' is not a valid WAV file", path)));
+    }
+    if &header[12..16] != b"fmt " {
+        return Err(Error::validation(format!(
+            "'{}' has unexpected WAV structure (missing fmt chunk)",
+            path
+        )));
+    }
+
+    let audio_format = u16::from_le_bytes([header[20], header[21]]);
+    let channels = u16::from_le_bytes([header[22], header[23]]);
+    let sample_rate = u32::from_le_bytes([header[24], header[25], header[26], header[27]]);
+    let bits_per_sample = u16::from_le_bytes([header[34], header[35]]);
+
+    // 1 = PCM
+    if audio_format != 1 {
+        return Err(Error::validation(format!(
+            "'{}' is not PCM audio (format code {}). Convert to 16-bit PCM WAV first.",
+            path, audio_format
+        )));
+    }
+    if channels != 2 {
+        return Err(Error::validation(format!(
+            "'{}' has {} channel(s); CDDA requires stereo (2 channels)",
+            path, channels
+        )));
+    }
+    if sample_rate != 44100 {
+        return Err(Error::validation(format!(
+            "'{}' has sample rate {}Hz; CDDA requires 44100Hz",
+            path, sample_rate
+        )));
+    }
+    if bits_per_sample != 16 {
+        return Err(Error::validation(format!(
+            "'{}' is {}-bit; CDDA requires 16-bit",
+            path, bits_per_sample
+        )));
+    }
+
+    Ok(())
+}
+
+const ISO_SIZE_LIMIT_BYTES: u64 = 700 * 1024 * 1024;
+
+fn validate_iso_size(source_dir: &str) -> Result<(), Error> {
+    let total = dir_size(std::path::Path::new(source_dir))?;
+    if total > ISO_SIZE_LIMIT_BYTES {
+        return Err(Error::validation(format!(
+            "Data directory '{}' is {:.1}MB, which exceeds the 700MB CD-R limit",
+            source_dir,
+            total as f64 / 1024.0 / 1024.0
+        )));
+    }
+    Ok(())
+}
+
+fn dir_size(path: &std::path::Path) -> Result<u64, Error> {
+    let mut total = 0u64;
+    for entry in std::fs::read_dir(path)? {
+        let entry = entry?;
+        let meta = entry.metadata()?;
+        if meta.is_dir() {
+            total += dir_size(&entry.path())?;
+        } else {
+            total += meta.len();
+        }
+    }
+    Ok(total)
 }
 
 pub fn build_steps(graph: &DiscGraph) -> Result<Vec<BurnStep>, Error> {
@@ -293,5 +380,79 @@ mod tests {
         ));
         assert!(matches!(&steps[1], BurnStep::AppendDataSession { .. }));
         assert!(matches!(&steps[2], BurnStep::FinalizeDisc));
+    }
+
+    // WAV format validation tests
+
+    #[test]
+    fn wav_rejects_missing_file() {
+        let err = validate_wav_format("/tmp/does_not_exist_discctl.wav").unwrap_err();
+        assert!(matches!(err, Error::Io(_)));
+    }
+
+    #[test]
+    fn wav_rejects_wrong_sample_rate() {
+        let path = write_test_wav("/tmp/discctl_test_48k.wav", 1, 2, 48000, 16);
+        let err = validate_wav_format(&path).unwrap_err();
+        assert!(err.to_string().contains("44100Hz"), "{}", err);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn wav_rejects_mono() {
+        let path = write_test_wav("/tmp/discctl_test_mono.wav", 1, 1, 44100, 16);
+        let err = validate_wav_format(&path).unwrap_err();
+        assert!(err.to_string().contains("stereo"), "{}", err);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn wav_rejects_24bit() {
+        let path = write_test_wav("/tmp/discctl_test_24bit.wav", 1, 2, 44100, 24);
+        let err = validate_wav_format(&path).unwrap_err();
+        assert!(err.to_string().contains("16-bit"), "{}", err);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn wav_accepts_cdda_spec() {
+        let path = write_test_wav("/tmp/discctl_test_cdda.wav", 1, 2, 44100, 16);
+        assert!(validate_wav_format(&path).is_ok());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn iso_size_accepts_small_dir() {
+        let dir = std::env::temp_dir().join("discctl_test_iso");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("file.txt"), b"hello").unwrap();
+        assert!(validate_iso_size(dir.to_str().unwrap()).is_ok());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn iso_size_rejects_missing_dir() {
+        assert!(validate_iso_size("/tmp/discctl_no_such_dir_xyz").is_err());
+    }
+
+    /// Writes a minimal 36-byte WAV fmt-only header (no data chunk) for testing.
+    fn write_test_wav(path: &str, audio_format: u16, channels: u16, sample_rate: u32, bits: u16) -> String {
+        let byte_rate = sample_rate * channels as u32 * bits as u32 / 8;
+        let block_align = channels * bits / 8;
+        let mut h = Vec::with_capacity(36);
+        h.extend_from_slice(b"RIFF");
+        h.extend_from_slice(&28u32.to_le_bytes()); // 36 - 8
+        h.extend_from_slice(b"WAVE");
+        h.extend_from_slice(b"fmt ");
+        h.extend_from_slice(&16u32.to_le_bytes()); // PCM fmt chunk size
+        h.extend_from_slice(&audio_format.to_le_bytes());
+        h.extend_from_slice(&channels.to_le_bytes());
+        h.extend_from_slice(&sample_rate.to_le_bytes());
+        h.extend_from_slice(&byte_rate.to_le_bytes());
+        h.extend_from_slice(&block_align.to_le_bytes());
+        h.extend_from_slice(&bits.to_le_bytes());
+        assert_eq!(h.len(), 36);
+        std::fs::write(path, &h).unwrap();
+        path.to_string()
     }
 }

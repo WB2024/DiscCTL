@@ -1,8 +1,45 @@
 use std::process::Command;
 use crate::{error::Error, model::disc::AudioSession};
+use super::convert;
+
+/// Converts any FLAC tracks to CDDA WAV, returns a session with resolved track paths.
+/// Caller is responsible for cleaning up converted temp files.
+pub fn prepare_tracks(session: &AudioSession, debug: bool) -> Result<PreparedSession, Error> {
+    let mut prepared_tracks = Vec::new();
+    let mut temp_files = Vec::new();
+
+    for track in &session.tracks {
+        let converted = convert::to_cdda_wav(track, debug)?;
+        if converted != *track {
+            temp_files.push(converted.clone());
+        }
+        prepared_tracks.push(converted);
+    }
+
+    Ok(PreparedSession {
+        tracks: prepared_tracks,
+        cd_text: session.cd_text.clone(),
+        _temp_files: temp_files,
+    })
+}
+
+pub struct PreparedSession {
+    pub tracks: Vec<String>,
+    pub cd_text: Option<crate::model::disc::CdText>,
+    /// Temp files to clean up when this struct is dropped
+    _temp_files: Vec<String>,
+}
+
+impl Drop for PreparedSession {
+    fn drop(&mut self) {
+        for path in &self._temp_files {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
 
 pub fn write_audio_session(
-    session: &AudioSession,
+    session: &PreparedSession,
     device: &str,
     keep_open: bool,
     debug: bool,
@@ -43,7 +80,7 @@ pub fn write_audio_session(
     Ok(())
 }
 
-fn generate_toc(session: &AudioSession) -> String {
+fn generate_toc(session: &PreparedSession) -> String {
     let mut toc = String::from("CD_DA\n\n");
 
     if let Some(cd_text) = &session.cd_text {

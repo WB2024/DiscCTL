@@ -1,4 +1,5 @@
 pub mod audio;
+pub mod convert;
 pub mod data;
 pub mod device;
 
@@ -13,6 +14,27 @@ use crate::{
 pub fn execute(graph: &DiscGraph, plan: &BurnPlan, dev: &str, debug: bool) -> Result<(), Error> {
     device::check_device(dev)?;
 
+    // Warn about CD-RW: multisession appends are not supported on CD-RW
+    match device::detect_media_type(dev) {
+        Ok(device::DiscMediaType::CdRw) => {
+            if plan.steps.iter().any(|s| matches!(s, BurnStep::AppendDataSession { .. })) {
+                return Err(Error::device(
+                    "CD-RW does not support multisession appends required for BlueBook/DataCD. \
+                     Use a CD-R, or blank the disc and burn in a single pass.",
+                ));
+            }
+        }
+        Ok(_) | Err(_) => {} // CD-R or unknown: proceed
+    }
+
+    // Warn if drive has no buffer underrun protection
+    if let Ok(false) = device::has_buffer_underrun_protection(dev) {
+        eprintln!(
+            "Warning: drive does not report buffer underrun protection (BURN-Proof/SMART-BURN). \
+             Ensure no background tasks compete for CPU/IO during burn."
+        );
+    }
+
     for step in &plan.steps {
         match step {
             BurnStep::BurnAudioSession {
@@ -24,7 +46,9 @@ pub fn execute(graph: &DiscGraph, plan: &BurnPlan, dev: &str, debug: bool) -> Re
                 })?;
                 match session {
                     Session::Audio(a) => {
-                        audio::write_audio_session(a, dev, !finalize, debug)?;
+                        // Convert any non-CDDA tracks before burning
+                        let prepared = audio::prepare_tracks(a, debug)?;
+                        audio::write_audio_session(&prepared, dev, !finalize, debug)?;
                     }
                     _ => return Err(Error::backend("Expected audio session")),
                 }
