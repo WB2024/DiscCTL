@@ -72,6 +72,10 @@ fn parse_format(s: &str) -> Result<DiscFormat, Error> {
     }
 }
 
+pub fn expand_audio_globs(patterns: &[String]) -> Result<Vec<String>, Error> {
+    expand_audio_patterns(patterns)
+}
+
 fn expand_audio_patterns(patterns: &[String]) -> Result<Vec<String>, Error> {
     let mut tracks = Vec::new();
     for pattern in patterns {

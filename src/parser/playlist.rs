@@ -3,9 +3,9 @@ use crate::error::Error;
 
 pub struct PlaylistEntry {
     pub path: String,
+    /// Track duration in whole seconds from #EXTINF, if present.
+    pub duration_secs: Option<u64>,
     /// From #EXTINF: "Artist - Title" display string, if present.
-    /// Retained for callers that want to use it as a CD-Text fallback.
-    #[allow(dead_code)]
     pub display: Option<String>,
 }
 
@@ -19,6 +19,7 @@ pub fn parse(playlist_path: &str) -> Result<Vec<PlaylistEntry>, Error> {
 
     let mut entries = Vec::new();
     let mut pending_display: Option<String> = None;
+    let mut pending_duration: Option<u64> = None;
 
     for line in content.lines() {
         let line = line.trim();
@@ -33,7 +34,12 @@ pub fn parse(playlist_path: &str) -> Result<Vec<PlaylistEntry>, Error> {
 
         if let Some(rest) = line.strip_prefix("#EXTINF:") {
             // Format: #EXTINF:<duration>,<display name>
-            pending_display = rest.splitn(2, ',').nth(1).map(|s| s.trim().to_string());
+            let mut parts = rest.splitn(2, ',');
+            pending_duration = parts
+                .next()
+                .and_then(|d| d.trim().parse::<f64>().ok())
+                .map(|f| f.abs() as u64);
+            pending_display = parts.next().map(|s| s.trim().to_string());
             continue;
         }
 
@@ -49,6 +55,7 @@ pub fn parse(playlist_path: &str) -> Result<Vec<PlaylistEntry>, Error> {
         {
             eprintln!("Warning: skipping URL (streaming not supported): {}", line);
             pending_display = None;
+            pending_duration = None;
             continue;
         }
 
@@ -58,6 +65,7 @@ pub fn parse(playlist_path: &str) -> Result<Vec<PlaylistEntry>, Error> {
             Ok(canonical) => {
                 entries.push(PlaylistEntry {
                     path: canonical.to_string_lossy().to_string(),
+                    duration_secs: pending_duration.take(),
                     display: pending_display.take(),
                 });
             }
@@ -67,6 +75,7 @@ pub fn parse(playlist_path: &str) -> Result<Vec<PlaylistEntry>, Error> {
                     resolved.display()
                 );
                 pending_display = None;
+                pending_duration = None;
             }
         }
     }
@@ -118,6 +127,7 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert!(entries[0].path.ends_with("track.flac"));
         assert_eq!(entries[0].display.as_deref(), Some("Artist - Song"));
+        assert_eq!(entries[0].duration_secs, Some(240));
         fs::remove_dir_all(&dir).ok();
     }
 

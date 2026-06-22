@@ -1,3 +1,5 @@
+pub mod split;
+
 use crate::{
     error::Error,
     model::{

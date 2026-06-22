@@ -19,7 +19,8 @@ pub fn append_data_session(
         .take(32)
         .map(|c| c.to_ascii_uppercase())
         .collect();
-    mkiso.arg("-V").arg(&vol_label);
+    mkiso.arg("-V").arg(&vol_label)
+         .arg("--dereference"); // follow symlinks rather than recording them
 
     if session.joliet {
         mkiso.arg("-J");
