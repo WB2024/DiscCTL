@@ -27,6 +27,9 @@ pub struct BurnArgs {
     /// Plan without writing to disc
     #[arg(long)]
     pub dry_run: bool,
+    /// Read CD-Text (title, artist) from embedded audio file tags
+    #[arg(long)]
+    pub cd_text: bool,
 }
 
 pub fn run(args: BurnArgs) -> Result<(), Error> {
@@ -38,6 +41,7 @@ pub fn run(args: BurnArgs) -> Result<(), Error> {
             args.audio.as_deref(),
             args.data.as_deref(),
             &args.label,
+            args.cd_text,
         )?
     };
 

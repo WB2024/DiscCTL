@@ -18,6 +18,9 @@ pub struct PlanArgs {
     /// Disc label
     #[arg(long, default_value = "Untitled")]
     pub label: String,
+    /// Read CD-Text (title, artist) from embedded audio file tags
+    #[arg(long)]
+    pub cd_text: bool,
 }
 
 pub fn run(args: PlanArgs) -> Result<(), Error> {
@@ -25,7 +28,7 @@ pub fn run(args: PlanArgs) -> Result<(), Error> {
         parser::from_file(path)?
     } else {
         let format = args.format.as_deref().unwrap_or("redbook");
-        parser::from_cli(format, args.audio.as_deref(), args.data.as_deref(), &args.label)?
+        parser::from_cli(format, args.audio.as_deref(), args.data.as_deref(), &args.label, args.cd_text)?
     };
 
     let plan = planner::plan(&graph)?;

@@ -1,3 +1,5 @@
+pub mod cdtext;
+
 use std::fs;
 use crate::{error::Error, model::disc::*};
 
@@ -11,19 +13,24 @@ pub fn from_cli(
     audio: Option<&[String]>,
     data: Option<&str>,
     label: &str,
+    use_cd_text: bool,
 ) -> Result<DiscGraph, Error> {
     let format = parse_format(format)?;
     let mut sessions = Vec::new();
 
     if let Some(patterns) = audio {
         let tracks = expand_audio_patterns(patterns)?;
+
+        let (cd_text, track_titles) = if use_cd_text {
+            cdtext::from_tags(&tracks)
+        } else {
+            (None, None)
+        };
+
         sessions.push(Session::Audio(AudioSession {
             tracks,
-            cd_text: Some(CdText {
-                title: Some(label.to_string()),
-                artist: None,
-            }),
-            track_titles: None,
+            cd_text,
+            track_titles,
         }));
     }
 

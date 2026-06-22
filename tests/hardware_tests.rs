@@ -77,7 +77,7 @@ mod hardware {
         use discctl::planner;
         let adir = audio_dir();
         let pattern = format!("{}/*.wav", adir);
-        let graph = discctl::parser::from_cli("redbook", Some(&[pattern]), None, "Fixture Test")
+        let graph = discctl::parser::from_cli("redbook", Some(&[pattern]), None, "Fixture Test", false)
             .expect("from_cli failed");
         // validate() checks WAV headers — will catch any spec violations
         planner::validate(&graph).expect("WAV validation failed on fixture files");
@@ -88,7 +88,7 @@ mod hardware {
     fn redbook_dry_run_plan() {
         let pattern = format!("{}/*.wav", audio_dir());
         let graph =
-            discctl::parser::from_cli("redbook", Some(&[pattern]), None, "HW Test RedBook")
+            discctl::parser::from_cli("redbook", Some(&[pattern]), None, "HW Test RedBook", false)
                 .unwrap();
         let plan = discctl::planner::plan(&graph).unwrap();
         println!("{}", serde_json::to_string_pretty(&plan).unwrap());
@@ -98,7 +98,7 @@ mod hardware {
     #[test]
     fn datacd_dry_run_plan() {
         let graph =
-            discctl::parser::from_cli("datacd", None, Some(&data_dir()), "HW Test DataCD")
+            discctl::parser::from_cli("datacd", None, Some(&data_dir()), "HW Test DataCD", false)
                 .unwrap();
         let plan = discctl::planner::plan(&graph).unwrap();
         println!("{}", serde_json::to_string_pretty(&plan).unwrap());
@@ -113,6 +113,7 @@ mod hardware {
             Some(&[pattern]),
             Some(&data_dir()),
             "HW Test BlueBook",
+            false,
         )
         .unwrap();
         let plan = discctl::planner::plan(&graph).unwrap();
@@ -130,7 +131,7 @@ mod hardware {
         }
         let pattern = format!("{}/*.wav", audio_dir());
         let graph =
-            discctl::parser::from_cli("redbook", Some(&[pattern]), None, "HW Burn RedBook")
+            discctl::parser::from_cli("redbook", Some(&[pattern]), None, "HW Burn RedBook", false)
                 .unwrap();
         let plan = discctl::planner::plan(&graph).unwrap();
         discctl::backend::execute(&graph, &plan, &device(), true).unwrap();
@@ -144,7 +145,7 @@ mod hardware {
             return;
         }
         let graph =
-            discctl::parser::from_cli("datacd", None, Some(&data_dir()), "HW Burn DataCD")
+            discctl::parser::from_cli("datacd", None, Some(&data_dir()), "HW Burn DataCD", false)
                 .unwrap();
         let plan = discctl::planner::plan(&graph).unwrap();
         discctl::backend::execute(&graph, &plan, &device(), true).unwrap();
@@ -163,6 +164,7 @@ mod hardware {
             Some(&[pattern]),
             Some(&data_dir()),
             "HW Burn BlueBook",
+            false,
         )
         .unwrap();
         let plan = discctl::planner::plan(&graph).unwrap();
@@ -187,7 +189,7 @@ mod hardware {
         println!("Burning Red Book after blank...");
         let pattern = format!("{}/*.wav", audio_dir());
         let graph =
-            discctl::parser::from_cli("redbook", Some(&[pattern]), None, "HW Blank+Burn")
+            discctl::parser::from_cli("redbook", Some(&[pattern]), None, "HW Blank+Burn", false)
                 .unwrap();
         let plan = discctl::planner::plan(&graph).unwrap();
         discctl::backend::execute(&graph, &plan, &device(), true).unwrap();
