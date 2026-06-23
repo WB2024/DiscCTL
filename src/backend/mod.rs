@@ -97,15 +97,19 @@ pub fn execute(graph: &DiscGraph, plan: &BurnPlan, dev: &str, debug: bool, progr
                 }
             }
             BurnStep::FinalizeDisc => {
-                // xorriso closes single-session discs automatically when writing without -multi.
-                // Check first so we don't error on an already-closed disc.
+                // xorriso cdrecord (without -multi) finalizes and ejects the disc
+                // automatically. Only attempt an explicit finalize if the disc is still
+                // in appendable state — in all other cases (already finalized, ejected,
+                // no disc, unknown state, or drive error) skip silently.
                 match device::query_disc_state(dev) {
-                    Ok(device::DiscState::Finalized) => {
+                    Ok(device::DiscState::Appendable { .. }) => {
+                        device::finalize_disc(dev, debug)?;
+                    }
+                    _ => {
                         if debug {
-                            println!("Disc already finalized by write backend — skipping FinalizeDisc.");
+                            eprintln!("FinalizeDisc: disc not in appendable state — skipping (likely already closed by write backend).");
                         }
                     }
-                    _ => device::finalize_disc(dev, debug)?,
                 }
             }
         }

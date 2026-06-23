@@ -19,7 +19,9 @@ pub fn append_data_session(
         .collect();
 
     // ── Phase 1: build ISO image ──────────────────────────────────────────────
-    let mut mkiso = Command::new("xorriso");
+    // Wrap in stdbuf -eL to force line-buffered stderr so progress arrives in
+    // real time rather than buffered until the process exits.
+    let mut mkiso = stdbuf_cmd("xorriso");
     mkiso.arg("-as").arg("mkisofs")
          .arg("-V").arg(&vol_label);
 
@@ -36,69 +38,37 @@ pub fn append_data_session(
 
     if progress_json {
         emit_step("Building ISO image...");
-        // xorriso mkisofs writes progress to stderr, not stdout.
-        // Stdout is empty; pipe it so it doesn't inherit ours.
         mkiso.stdout(Stdio::null());
         mkiso.stderr(Stdio::piped());
         let mut child = mkiso.spawn()?;
 
-        // Drain stderr with raw-byte reads so invalid UTF-8 never stops us early.
         let mut stderr_bytes: Vec<u8> = Vec::new();
         if let Some(mut stderr) = child.stderr.take() {
-            let mut buf = [0u8; 4096];
-            loop {
-                match stderr.read(&mut buf) {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        let chunk = &buf[..n];
-                        stderr_bytes.extend_from_slice(chunk);
-                        // Emit progress from any "X% done" lines seen so far
-                        let text = String::from_utf8_lossy(chunk);
-                        for line in text.lines() {
-                            if let Some(pct) = parse_xorriso_pct(line) {
-                                emit_progress(pct * 0.45);
-                            }
-                        }
-                    }
-                    Err(_) => break,
+            drain_with_progress(&mut stderr, &mut stderr_bytes, |line| {
+                if let Some(pct) = parse_xorriso_pct(line) {
+                    emit_progress(pct * 0.45);
                 }
-            }
+            });
         }
         let status = child.wait()?;
         if !status.success() {
             let _ = std::fs::remove_file(&iso_path);
-            let stderr_msg = String::from_utf8_lossy(&stderr_bytes);
-            let detail = stderr_msg.lines()
-                .filter(|l| l.contains("FAILURE") || l.contains("FATAL") || l.contains("Error"))
-                .collect::<Vec<_>>()
-                .join("; ");
-            let msg = if detail.is_empty() {
-                format!("xorriso mkisofs failed (exit {:?})", status.code())
-            } else {
-                format!("xorriso mkisofs failed: {}", detail)
-            };
-            return Err(Error::backend(msg));
+            return Err(Error::backend(format_xorriso_error(
+                "mkisofs", status.code(), &stderr_bytes,
+            )));
         }
     } else {
         let output = mkiso.output()?;
         if !output.status.success() {
             let _ = std::fs::remove_file(&iso_path);
-            let stderr_msg = String::from_utf8_lossy(&output.stderr);
-            let detail = stderr_msg.lines()
-                .filter(|l| l.contains("FAILURE") || l.contains("FATAL") || l.contains("Error"))
-                .collect::<Vec<_>>()
-                .join("; ");
-            let msg = if detail.is_empty() {
-                format!("xorriso mkisofs failed (exit {:?})", output.status.code())
-            } else {
-                format!("xorriso mkisofs failed: {}", detail)
-            };
-            return Err(Error::backend(msg));
+            return Err(Error::backend(format_xorriso_error(
+                "mkisofs", output.status.code(), &output.stderr,
+            )));
         }
     }
 
     // ── Phase 2: write ISO to disc ────────────────────────────────────────────
-    let mut write_cmd = Command::new("xorriso");
+    let mut write_cmd = stdbuf_cmd("xorriso");
     write_cmd
         .arg("-as").arg("cdrecord")
         .arg(format!("dev={}", device))
@@ -117,62 +87,32 @@ pub fn append_data_session(
         write_cmd.stderr(Stdio::piped());
         let mut child = write_cmd.spawn()?;
 
-        // Raw-byte drain: BufReader::lines() stops on non-UTF-8, which closes the pipe
-        // early and deadlocks child.wait(). Read raw bytes to always drain fully.
         let mut stderr_bytes: Vec<u8> = Vec::new();
         if let Some(mut stderr) = child.stderr.take() {
-            let mut buf = [0u8; 4096];
-            loop {
-                match stderr.read(&mut buf) {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        let chunk = &buf[..n];
-                        stderr_bytes.extend_from_slice(chunk);
-                        let text = String::from_utf8_lossy(chunk);
-                        for line in text.lines() {
-                            let lower = line.to_lowercase();
-                            if lower.contains("closing") || lower.contains("fixating") {
-                                emit_step("Closing disc...");
-                                emit_progress(99.0);
-                            } else if let Some(pct) = parse_xorriso_pct(line) {
-                                emit_progress(45.0 + pct * 0.54);
-                            }
-                        }
-                    }
-                    Err(_) => break,
+            drain_with_progress(&mut stderr, &mut stderr_bytes, |line| {
+                let lower = line.to_lowercase();
+                if lower.contains("closing") || lower.contains("fixating") {
+                    emit_step("Closing disc...");
+                    emit_progress(99.0);
+                } else if let Some(pct) = parse_xorriso_pct(line) {
+                    emit_progress(45.0 + pct * 0.54);
                 }
-            }
+            });
         }
         let status = child.wait()?;
         let _ = std::fs::remove_file(&iso_path);
         if !status.success() {
-            let stderr_msg = String::from_utf8_lossy(&stderr_bytes);
-            let detail = stderr_msg.lines()
-                .filter(|l| l.contains("FAILURE") || l.contains("FATAL") || l.contains("Error"))
-                .collect::<Vec<_>>()
-                .join("; ");
-            let msg = if detail.is_empty() {
-                format!("xorriso cdrecord failed (exit {:?})", status.code())
-            } else {
-                format!("xorriso cdrecord failed: {}", detail)
-            };
-            return Err(Error::backend(msg));
+            return Err(Error::backend(format_xorriso_error(
+                "cdrecord", status.code(), &stderr_bytes,
+            )));
         }
     } else {
         let output = write_cmd.output()?;
         let _ = std::fs::remove_file(&iso_path);
         if !output.status.success() {
-            let stderr_msg = String::from_utf8_lossy(&output.stderr);
-            let detail = stderr_msg.lines()
-                .filter(|l| l.contains("FAILURE") || l.contains("FATAL") || l.contains("Error"))
-                .collect::<Vec<_>>()
-                .join("; ");
-            let msg = if detail.is_empty() {
-                format!("xorriso cdrecord failed (exit {:?})", output.status.code())
-            } else {
-                format!("xorriso cdrecord failed: {}", detail)
-            };
-            return Err(Error::backend(msg));
+            return Err(Error::backend(format_xorriso_error(
+                "cdrecord", output.status.code(), &output.stderr,
+            )));
         }
     }
 
@@ -181,10 +121,70 @@ pub fn append_data_session(
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
+/// Build a Command wrapped in `stdbuf -eL` to force line-buffered stderr.
+/// Falls back to running the command directly if stdbuf is not available.
+fn stdbuf_cmd(program: &str) -> Command {
+    if std::path::Path::new("/usr/bin/stdbuf").exists()
+        || std::path::Path::new("/usr/local/bin/stdbuf").exists()
+    {
+        let mut cmd = Command::new("stdbuf");
+        cmd.arg("-eL").arg(program);
+        cmd
+    } else {
+        Command::new(program)
+    }
+}
+
+/// Drain a pipe handle line by line using raw bytes so non-UTF-8 output never
+/// stops the reader early (avoiding a deadlock in child.wait()). Each complete
+/// line is passed to `on_line` for progress parsing.
+fn drain_with_progress<F>(reader: &mut impl Read, buf_out: &mut Vec<u8>, mut on_line: F)
+where
+    F: FnMut(&str),
+{
+    let mut buf = [0u8; 4096];
+    let mut line_buf: Vec<u8> = Vec::new();
+
+    loop {
+        match reader.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                buf_out.extend_from_slice(&buf[..n]);
+                for &byte in &buf[..n] {
+                    if byte == b'\n' {
+                        let line = String::from_utf8_lossy(&line_buf);
+                        on_line(line.trim_end_matches('\r'));
+                        line_buf.clear();
+                    } else {
+                        line_buf.push(byte);
+                    }
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    // Flush any trailing partial line (no final newline)
+    if !line_buf.is_empty() {
+        let line = String::from_utf8_lossy(&line_buf);
+        on_line(line.trim_end_matches('\r'));
+    }
+}
+
+fn format_xorriso_error(phase: &str, code: Option<i32>, stderr: &[u8]) -> String {
+    let stderr_msg = String::from_utf8_lossy(stderr);
+    let detail = stderr_msg
+        .lines()
+        .filter(|l| l.contains("FAILURE") || l.contains("FATAL") || l.contains("Error"))
+        .collect::<Vec<_>>()
+        .join("; ");
+    if detail.is_empty() {
+        format!("xorriso {} failed (exit {:?})", phase, code)
+    } else {
+        format!("xorriso {} failed: {}", phase, detail)
+    }
+}
+
 fn parse_xorriso_pct(line: &str) -> Option<f32> {
-    // Matches:
-    //   "xorriso : UPDATE :  5.00% done"
-    //   " 5.00% done, estimate finish ..."
     let pos = line.find('%')?;
     let before = line[..pos].trim();
     before.split_whitespace().last()?.parse::<f32>().ok()

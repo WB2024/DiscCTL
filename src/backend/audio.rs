@@ -75,39 +75,23 @@ pub fn write_audio_session(
         cmd.stderr(Stdio::piped());
         let mut child = cmd.spawn()?;
 
-        // Raw-byte drain prevents BufReader::lines() from stopping on non-UTF-8
-        // output (e.g. binary SCSI sense data in cdrdao error messages) which would
-        // close the pipe early and deadlock child.wait().
         let mut tracks_done = 0.0f32;
         let mut stderr_bytes: Vec<u8> = Vec::new();
         if let Some(mut stderr) = child.stderr.take() {
-            let mut buf = [0u8; 4096];
-            loop {
-                match stderr.read(&mut buf) {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        let chunk = &buf[..n];
-                        stderr_bytes.extend_from_slice(chunk);
-                        let text = String::from_utf8_lossy(chunk);
-                        for line in text.lines() {
-                            let lower = line.to_lowercase();
-                            let upper = line.to_uppercase();
-                            if lower.contains("writing track") {
-                                emit_step(line);
-                            } else if upper.contains("DONE.") || line.contains(": DONE") {
-                                tracks_done += 1.0;
-                            } else if let Some(pct) = parse_pct(line) {
-                                let overall = ((tracks_done + pct / 100.0) / total_tracks) * 100.0;
-                                emit_progress(overall.min(99.0));
-                            } else if lower.contains("fixating") {
-                                emit_step("Fixating disc...");
-                                emit_progress(99.5);
-                            }
-                        }
-                    }
-                    Err(_) => break,
+            drain_with_progress(&mut stderr, &mut stderr_bytes, |line| {
+                let lower = line.to_lowercase();
+                if lower.contains("writing track") {
+                    emit_step(line);
+                } else if lower.contains("done.") || line.contains(": DONE") {
+                    tracks_done += 1.0;
+                } else if let Some(pct) = parse_pct(line) {
+                    let overall = ((tracks_done + pct / 100.0) / total_tracks) * 100.0;
+                    emit_progress(overall.min(99.0));
+                } else if lower.contains("fixating") {
+                    emit_step("Fixating disc...");
+                    emit_progress(99.5);
                 }
-            }
+            });
         }
 
         let status = child.wait()?;
@@ -146,7 +130,38 @@ pub fn write_audio_session(
     Ok(())
 }
 
-// ── progress helpers ──────────────────────────────────────────────────────────
+// ── helpers ───────────────────────────────────────────────────────────────────
+
+fn drain_with_progress<F>(reader: &mut impl Read, buf_out: &mut Vec<u8>, mut on_line: F)
+where
+    F: FnMut(&str),
+{
+    let mut buf = [0u8; 4096];
+    let mut line_buf: Vec<u8> = Vec::new();
+
+    loop {
+        match reader.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                buf_out.extend_from_slice(&buf[..n]);
+                for &byte in &buf[..n] {
+                    if byte == b'\n' {
+                        let line = String::from_utf8_lossy(&line_buf);
+                        on_line(line.trim_end_matches('\r'));
+                        line_buf.clear();
+                    } else {
+                        line_buf.push(byte);
+                    }
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    if !line_buf.is_empty() {
+        let line = String::from_utf8_lossy(&line_buf);
+        on_line(line.trim_end_matches('\r'));
+    }
+}
 
 fn parse_pct(line: &str) -> Option<f32> {
     // Matches "  45% done." or just "45%"
