@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  <em>A blazing-fast disc authoring CLI for Linux — burn Red Book audio CDs, Data CDs,<br>and Blue Book/CD Extra enhanced discs straight from the terminal.</em>
+  <em>A blazing-fast optical disc toolkit for Linux — burn, rip, archive, and verify<br>Red Book audio CDs, Data CDs, and Blue Book/CD Extra enhanced discs.</em>
 </p>
 
 <p align="center">
@@ -27,11 +27,20 @@
 - [Quick Start](#quick-start)
 - [Disc Formats](#disc-formats)
 - [Commands](#commands)
+  - [info](#rustydisc-info)
   - [burn](#rustydisc-burn)
+  - [rip](#rustydisc-rip)
+  - [verify](#rustydisc-verify)
   - [plan](#rustydisc-plan)
   - [validate](#rustydisc-validate)
   - [recover](#rustydisc-recover)
 - [Usage Examples](#usage-examples)
+  - [Inspecting a Disc](#inspecting-a-disc)
+  - [Ripping Audio CDs](#ripping-audio-cds)
+  - [Ripping Data CDs](#ripping-data-cds)
+  - [Ripping Blue Book / CD Extra](#ripping-blue-book--cd-extra)
+  - [Archive Mode](#archive-mode)
+  - [Verifying an Archive](#verifying-an-archive)
   - [Red Book Audio CDs](#red-book-audio-cds)
   - [Data CDs](#data-cds)
   - [Blue Book / CD Extra](#blue-book--cd-extra)
@@ -50,10 +59,19 @@
 
 ## Overview
 
-Rusty Disc treats disc authoring as a **compiler problem**: you describe what you want to burn (tracks, files, format, label), and it figures out the rest — validating format rules, generating a deterministic burn plan, transcoding if needed, splitting across multiple discs automatically, and delegating the actual write to the appropriate backend.
+Rusty Disc treats optical discs as structured objects, not just files. The core abstraction is the **DiscGraph** — a unified intermediate representation that drives both directions of the pipeline:
 
-The pipeline is:
+```
+          DiscGraph
+         /         \
+   Burn Plan     Rip Plan
+        ↓             ↑
+   Physical Disc ↔ Physical Disc
+```
 
+Burning and ripping are inverse operations of the same graph. You describe what you want (tracks, files, format, label), RustyDisc figures out the rest.
+
+**Burn pipeline:**
 ```
 CLI flags / JSON graph
         │
@@ -73,22 +91,57 @@ CLI flags / JSON graph
   Hardware Device Layer   ← ATIP detection, buffer underrun guard, multi-session
 ```
 
+**Rip pipeline:**
+```
+Physical Disc
+        │
+        ▼
+  Disc Analyzer           ← reads TOC, detects format, extracts CD-Text
+        │
+        ▼
+    Rip Planner           ← determines what to extract and how
+        │
+        ▼
+  Secure Rip Engine       ← cdparanoia (EAC-grade: multiple reads, jitter correction, C2 errors)
+        │
+        ▼
+   Audio Encoders         ← ffmpeg → WAV / FLAC / ALAC / AIFF / OGG / MP3 / Opus
+   Data Extractor         ← xorriso → directory tree or ISO image
+        │
+        ▼
+  Metadata + Checksums    ← cdtext.json, disc.json, checksums.json (SHA256)
+```
+
 Format constraints are enforced **before** any hardware is touched, so you get a clear error rather than a half-burned coaster.
 
 ---
 
 ## Features
 
+### Burning
 - **Three disc formats** — Red Book Audio, ISO9660 Data CD, Blue Book/CD Extra enhanced CD
 - **Playlist support** — burn directly from an M3U or M3U8 playlist, durations read from `#EXTINF` tags
 - **FFmpeg transcoding** — convert any audio format to MP3, AAC, Opus, FLAC, or WAV before burning; stage and clean up automatically
-- **Multi-disc splitting** — automatically detects when content exceeds a single disc and prompts you to swap discs, no manual slicing required
+- **Multi-disc splitting** — automatically detects when content exceeds a single disc and prompts you to swap discs
 - **CD-Text from tags** — reads track title, artist, and album from embedded metadata (ID3, Vorbis, etc.) and writes it to the disc lead-in
-- **Disc state detection** — uses ATIP to reliably distinguish blank, appendable, and finalized discs; refuses to write on a full disc
-- **CD-RW guard** — blocks multi-session Blue Book burns on rewriteable media; allows single-session DataCD on CD-RW
+- **Disc state detection** — uses ATIP to reliably distinguish blank, appendable, and finalized discs
+- **CD-RW guard** — blocks multi-session Blue Book burns on rewriteable media
 - **Buffer underrun protection detection** — warns if your drive lacks BURN-Proof/SMART-BURN
 - **Dry run mode** — `--dry-run` prints the full execution plan as JSON without touching hardware
+
+### Ripping
+- **Secure audio extraction** — cdparanoia backend: multiple reads per sector, jitter correction, C2 error pointer support, paranoia retry logic — equivalent to EAC quality
+- **Seven audio output formats** — WAV, FLAC (level 8 compression), ALAC, AIFF, OGG Vorbis, MP3 (VBR best), Opus (320kbps)
+- **Automatic disc detection** — `rustydisc info` and `rustydisc rip` auto-detect Red Book, Data CD, and Blue Book without needing to specify the type
+- **CD-Text preservation** — reads CD-Text from disc via cdrdao, embeds tags into every encoded audio file automatically
+- **Blue Book session-aware ripping** — extracts audio and data sessions independently into `audio/` and `data/` subdirectories
+- **Data session extraction** — xorriso extracts the ISO filesystem as a directory tree; ISO image output also supported
+- **Archive mode** — `--archive` produces a complete reconstruction kit: `disc.json` + `cdtext.json` + `checksums.json`
+- **SHA256 verification** — `rustydisc verify` checks every ripped file against its stored checksum
+
+### General
 - **Structured errors** — every error is machine-readable JSON with a code, message, and `recoverable` flag
+- **Machine-readable progress** — `--progress-json` emits newline-delimited JSON events for integration with frontends (e.g. TrackBridge)
 
 ---
 
@@ -96,29 +149,38 @@ Format constraints are enforced **before** any hardware is touched, so you get a
 
 ### Runtime dependencies
 
-| Tool | Purpose | Required |
-|------|---------|----------|
-| `cdrdao` | Red Book audio DAO burning | Yes (audio burns) |
-| `xorriso` | ISO9660 generation, data burns, multisession | Yes (data/Blue Book) |
-| `cdrecord` | Disc state detection (ATIP, -msinfo) | Yes |
-| `ffmpeg` | Audio transcoding and format probing | Optional |
+| Tool | Purpose | Required for |
+|------|---------|-------------|
+| `cdrdao` | Red Book audio DAO burning; CD-Text reading | Burn (audio), Rip |
+| `xorriso` | ISO9660 generation, data burns, data extraction | Burn (data), Rip |
+| `cdrecord` | Disc state detection (ATIP, msinfo, TOC) | Burn, Rip |
+| `isoinfo` | Data session metadata (volume label, size) | Rip |
+| `cdparanoia` | Secure audio ripping | Rip (audio) |
+| `ffmpeg` | Audio transcoding and encoding | Burn (transcode), Rip (encode) |
 
 ### Install on Debian / Ubuntu
 
 ```bash
-sudo apt install cdrdao xorriso cdrecord ffmpeg
+# Burning
+sudo apt install cdrdao xorriso cdrecord
+
+# Ripping
+sudo apt install cdparanoia ffmpeg
+
+# All at once
+sudo apt install cdrdao xorriso cdrecord cdparanoia ffmpeg
 ```
 
 ### Install on Arch Linux
 
 ```bash
-sudo pacman -S cdrtools cdrdao xorriso ffmpeg
+sudo pacman -S cdrtools cdrdao xorriso cdparanoia ffmpeg
 ```
 
 ### Install on Fedora
 
 ```bash
-sudo dnf install cdrtools cdrdao xorriso ffmpeg
+sudo dnf install cdrtools cdrdao xorriso cdparanoia ffmpeg
 ```
 
 ### Rust toolchain
@@ -161,6 +223,15 @@ rustydisc --help
 ## Quick Start
 
 ```bash
+# What's on the disc?
+rustydisc info
+
+# Rip a disc to FLAC
+rustydisc rip --format flac --output ~/rips/my_album
+
+# Rip with full archive (checksums, metadata, disc graph)
+rustydisc rip --format flac --output ~/rips/my_album --archive
+
 # Burn a set of WAV files as a Red Book audio CD
 rustydisc burn --format redbook --audio ~/music/album/*.wav --label "My Album"
 
@@ -170,7 +241,7 @@ rustydisc burn --format datacd --data ~/files/backup --label "Backup 2026"
 # Burn from a playlist
 rustydisc burn --format redbook --playlist "Smooch Hits.m3u8" --label "Smooch Hits"
 
-# Preview the plan without touching the drive
+# Preview a burn plan without touching the drive
 rustydisc plan --format redbook --audio ~/music/album/*.wav --label "My Album"
 ```
 
@@ -202,6 +273,46 @@ Session ordering (Audio → Data) is enforced at plan time. Blue Book requires a
 
 ## Commands
 
+### `rustydisc info`
+
+Reads the disc in the drive and reports its format, session layout, track list, durations, data session sizes, and CD-Text — without modifying anything.
+
+```bash
+rustydisc info
+rustydisc info --device /dev/sr1
+rustydisc info --json
+```
+
+| Flag | Description |
+|------|-------------|
+| `--device <dev>` | Drive to inspect (default: `/dev/sr0`) |
+| `--json` | Output raw JSON (DiscInfo struct) instead of formatted text |
+
+**Example output:**
+```
+Disc Type:  Red Book Audio CD
+Sessions:   1
+
+Session 1 — Audio  (12 tracks, 47:32)  «Loveless» — My Bloody Valentine
+  Track  1  04:16  "Only Shallow" — My Bloody Valentine
+  Track  2  04:02  "Loomer" — My Bloody Valentine
+  Track  3  05:22  "Touched" — My Bloody Valentine
+  ...
+```
+
+```
+Disc Type:  Blue Book (Enhanced CD / CD Extra)
+Sessions:   2
+
+Session 1 — Audio  (8 tracks, 35:20)  «Album Title» — Artist
+  Track  1  04:23  "Track One"
+  ...
+
+Session 2 — Data   (ISO9660, 18.4 MB)  Volume: EXTRAS
+```
+
+---
+
 ### `rustydisc burn`
 
 Burns a disc from command-line flags or a JSON disc graph.
@@ -229,6 +340,7 @@ rustydisc burn [OPTIONS]
 | `--dry-run` | Print the burn plan as JSON — do not burn |
 | `--debug` | Print backend commands and verbose output |
 | `--cd-text` | Read CD-Text (title, artist) from embedded audio file tags |
+| `--progress-json` | Emit machine-readable JSON progress events to stdout |
 
 #### Transcoding flags
 
@@ -240,6 +352,94 @@ rustydisc burn [OPTIONS]
 
 ---
 
+### `rustydisc rip`
+
+Rips the disc in the drive to files. Auto-detects the disc format and handles Red Book audio, Data CD, and Blue Book appropriately.
+
+```
+rustydisc rip [OPTIONS]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--device <dev>` | Drive to rip from (default: `/dev/sr0`) |
+| `--output <dir>` | Output directory (default: `disc_rip`) |
+| `--format <fmt>` | Audio format: `wav`, `flac`, `alac`, `aiff`, `ogg`, `mp3`, `opus` (default: `flac`) |
+| `--archive` | Archive mode: also writes `disc.json`, `cdtext.json`, `checksums.json` |
+| `--debug` | Verbose output |
+| `--progress-json` | Emit machine-readable JSON progress events to stdout |
+
+**Audio formats:**
+
+| Format | Type | Notes |
+|--------|------|-------|
+| `wav` | Lossless | Raw CDDA PCM — no encoding step, fastest |
+| `flac` | Lossless | FLAC compression level 8, metadata embedded |
+| `alac` | Lossless | Apple Lossless, `.m4a` container |
+| `aiff` | Lossless | Big-endian PCM, archival format |
+| `ogg` | Lossy | OGG Vorbis quality 10 (~500 kbps) |
+| `mp3` | Lossy | LAME VBR quality 0 (highest) |
+| `opus` | Lossy | Opus 320 kbps |
+
+**Output layout (exploded, default):**
+```
+disc_rip/
+  audio/
+    01 - Track Title.flac
+    02 - Track Title.flac
+    ...
+  data/           ← Blue Book only
+    [filesystem contents]
+  metadata/
+    disc.json
+    cdtext.json   ← only if CD-Text is present
+```
+
+**Output layout (archive, `--archive`):**
+```
+disc_rip/
+  audio/
+    01 - Track Title.flac
+    ...
+  data/           ← Blue Book only
+  metadata/
+    disc.json
+    cdtext.json
+    checksums.json   ← SHA256 per file
+```
+
+---
+
+### `rustydisc verify`
+
+Verifies a ripped archive against its `checksums.json`. Checks every file's SHA256 hash and byte count.
+
+```bash
+rustydisc verify ~/rips/my_album
+```
+
+| Argument | Description |
+|----------|-------------|
+| `<directory>` | Root directory of the ripped archive (must contain `metadata/checksums.json`) |
+
+**Example output:**
+```
+Verifying archive: /home/user/rips/my_album
+Passed: 12
+OK — all 12 files verified.
+```
+
+```
+Verifying archive: /home/user/rips/my_album
+FAILED (1):
+  ✗  audio/03 - Track Title.flac
+Passed: 11
+```
+
+Exit code `0` on success, `1` on failure (with structured JSON error on stderr).
+
+---
+
 ### `rustydisc plan`
 
 Prints the burn plan as JSON without writing to any device. Useful for scripting and verifying disc layout before committing to media.
@@ -248,16 +448,6 @@ Prints the burn plan as JSON without writing to any device. Useful for scripting
 rustydisc plan --format redbook --audio ~/music/*.wav --label "Preview"
 rustydisc plan --input disc.json
 ```
-
-| Flag | Description |
-|------|-------------|
-| `--format` | Disc format |
-| `--audio` | Audio files or globs |
-| `--playlist` | M3U/M3U8 playlist |
-| `--data` | Data source directory |
-| `--label` | Volume label |
-| `--input` | Disc graph JSON |
-| `--cd-text` | Include CD-Text in plan |
 
 ---
 
@@ -292,6 +482,107 @@ rustydisc recover --device /dev/sr0 --blank full
 
 ## Usage Examples
 
+### Inspecting a Disc
+
+```bash
+# Human-readable summary
+rustydisc info
+
+# JSON output (for scripting)
+rustydisc info --json | jq '.sessions[0].tracks | length'
+```
+
+---
+
+### Ripping Audio CDs
+
+```bash
+# Rip to FLAC (default output dir: disc_rip/)
+rustydisc rip --format flac
+
+# Rip to WAV (fastest — no encoding step)
+rustydisc rip --format wav --output ~/rips/album
+
+# Rip to MP3
+rustydisc rip --format mp3 --output ~/rips/album_mp3
+
+# Rip to ALAC (Apple ecosystem)
+rustydisc rip --format alac --output ~/rips/album_alac
+
+# Rip with full debug output
+rustydisc rip --format flac --output ~/rips/album --debug
+```
+
+CD-Text (disc/track titles, artist) is read automatically and embedded as tags in every encoded file.
+
+---
+
+### Ripping Data CDs
+
+```bash
+# Extract filesystem as directory tree
+rustydisc rip --output ~/rips/data_disc
+
+# With debug output showing xorriso progress
+rustydisc rip --output ~/rips/data_disc --debug
+```
+
+---
+
+### Ripping Blue Book / CD Extra
+
+Blue Book is handled automatically. Both sessions are detected and extracted:
+
+```bash
+rustydisc rip --format flac --output ~/rips/enhanced_cd
+```
+
+Produces:
+```
+~/rips/enhanced_cd/
+  audio/         ← Session 1: FLAC files with CD-Text tags
+  data/          ← Session 2: ISO filesystem contents
+  metadata/
+    disc.json
+    cdtext.json
+```
+
+---
+
+### Archive Mode
+
+Archive mode produces a complete set of files for long-term preservation and disc reconstruction:
+
+```bash
+rustydisc rip --format flac --output ~/archive/my_album --archive
+```
+
+Produces:
+```
+~/archive/my_album/
+  audio/
+    01 - Track Title.flac
+    ...
+  metadata/
+    disc.json       ← full DiscInfo including session layout, track LBAs
+    cdtext.json     ← CD-Text in structured JSON
+    checksums.json  ← SHA256 + size per file
+```
+
+The `disc.json` contains everything needed to reconstruct the original disc's burn graph in future.
+
+---
+
+### Verifying an Archive
+
+```bash
+rustydisc verify ~/archive/my_album
+```
+
+Verifies every file in the archive against the SHA256 checksums recorded at rip time. Useful for long-term storage integrity checks.
+
+---
+
 ### Red Book Audio CDs
 
 **Burn a single album from WAV files:**
@@ -311,8 +602,8 @@ rustydisc burn --format redbook \
 
 **Burn from a playlist, dry-run first:**
 ```bash
-rustydisc plan --format redbook --playlist "Smooch Hits.m3u8" --label "Smooch Hits"
-rustydisc burn --format redbook --playlist "Smooch Hits.m3u8" --label "Smooch Hits"
+rustydisc plan --format redbook --playlist "Mix.m3u8" --label "Mix"
+rustydisc burn --format redbook --playlist "Mix.m3u8" --label "Mix"
 ```
 
 **Convert MP3s to WAV automatically, then burn:**
@@ -340,16 +631,6 @@ rustydisc burn --format datacd \
   --data /srv/Media/Music \
   --transcode mp3:256 \
   --label "Music Collection"
-```
-
-**Keep the transcoded files after burn:**
-```bash
-rustydisc burn --format datacd \
-  --data /srv/Media/Music \
-  --transcode mp3:192 \
-  --stage-dir ~/staged \
-  --keep-staged \
-  --label "Music 192k"
 ```
 
 ---
@@ -399,17 +680,9 @@ The `--transcode` flag accepts a format name with an optional bitrate:
 | `aac:256` | AAC at 256 kbps |
 | `opus:192` | Opus at 192 kbps |
 | `flac` | Lossless FLAC (no bitrate) |
-| `wav` | PCM WAV — required for Red Book if source is not already 44.1/16/stereo |
+| `wav` | PCM WAV — required for Red Book if source is not 44.1/16/stereo |
 
 Transcoded files are staged in a temporary directory, used for the burn, then deleted. Supply `--stage-dir` to control where they land, and `--keep-staged` to retain them.
-
-**Transcode a playlist to AAC, burn as data disc:**
-```bash
-rustydisc burn --format datacd \
-  --playlist "Collection.m3u8" \
-  --transcode aac:256 \
-  --label "Collection AAC"
-```
 
 ---
 
@@ -435,27 +708,9 @@ rustydisc burn --format redbook \
 ══ Disc 1 of 6 ═══════════════════════════════════════
   17 tracks  |  73:44
 Insert blank disc 1 into /dev/sr0 and press ENTER to burn...
-
-[burns disc 1]
-
-Disc 1/6 complete. Remove the disc.
-
-══ Disc 2 of 6 ═══════════════════════════════════════
-  18 tracks  |  74:01
-Insert blank disc 2 into /dev/sr0 and press ENTER to burn...
 ```
 
 Each disc's volume label is automatically suffixed: `"Giant Collection (1/6)"`, `"Giant Collection (2/6)"`, etc.
-
-With transcoding, all files are converted **first**, then the staged output is measured and split:
-
-```bash
-rustydisc burn --format datacd \
-  --data /srv/Media/Library \
-  --transcode mp3:128 \
-  --label "Library"
-# transcodes all files, then: "23 discs required"
-```
 
 ---
 
@@ -471,13 +726,7 @@ rustydisc burn --format datacd \
 
 Supported tag formats: ID3v2 (WAV, MP3), Vorbis comments (FLAC, OGG), iTunes atoms (M4A).
 
-```bash
-rustydisc burn --format redbook \
-  --audio ~/music/album/*.flac \
-  --transcode wav \
-  --cd-text \
-  --label "Album Name"
-```
+When **ripping**, CD-Text is read from the disc automatically (no flag needed) and embedded into all encoded output files.
 
 ---
 
@@ -496,14 +745,6 @@ rustydisc recover --device /dev/sr0 --blank fast
 **Full-erase a CD-RW (complete physical erase — slower but thorough):**
 ```bash
 rustydisc recover --device /dev/sr0 --blank full
-```
-
-**Burn a single-session Data CD to a CD-RW:**
-```bash
-rustydisc burn --format datacd \
-  --data ~/files \
-  --label "Test" \
-  --device /dev/sr0
 ```
 
 > **Note:** CD-RW only supports single-session burns. Blue Book (multi-session) requires a CD-R.
@@ -545,20 +786,14 @@ All disc definitions share a common JSON schema. This is the intermediate repres
 }
 ```
 
-**Format values:**
-
-| Value | Description |
-|-------|-------------|
-| `redbook` | Red Book Audio CD |
-| `datacd` | ISO9660 Data CD |
-| `bluebook` | Blue Book / CD Extra |
-
 **Burn from a JSON graph:**
 ```bash
 rustydisc burn --input disc.json --device /dev/sr0
 rustydisc plan --input disc.json
 rustydisc validate disc.json
 ```
+
+A ripped archive's `metadata/disc.json` is a valid DiscInfo export — future versions will support `rustydisc burn` directly from this file to reconstruct the original disc.
 
 ---
 
@@ -576,21 +811,21 @@ All errors are emitted to stderr as structured JSON:
 
 ```json
 {
+  "error": "BACKEND_ERROR",
+  "message": "cdparanoia is not installed. Run: sudo apt install cdparanoia",
+  "recoverable": false
+}
+```
+
+```json
+{
   "error": "DISC_ALREADY_FINALIZED",
   "message": "Disc on /dev/sr0 is already finalized. Insert a blank disc or use `rustydisc recover --blank fast` for CD-RW.",
   "recoverable": true
 }
 ```
 
-```json
-{
-  "error": "WAV_SPEC_INVALID",
-  "message": "track01.wav: expected 44100 Hz stereo 16-bit PCM, got 48000 Hz",
-  "recoverable": false
-}
-```
-
-`recoverable: true` means you can fix the issue (insert a blank disc, erase the CD-RW, etc.) and retry the same command. `recoverable: false` means there is a problem with your input that must be corrected before burning.
+`recoverable: true` means you can fix the issue and retry the same command. `recoverable: false` means there is a problem with your input that must be corrected.
 
 Exit codes:
 - `0` — success
@@ -607,15 +842,9 @@ Rusty Disc uses ATIP (Absolute Time in Pregroove) as its primary signal for disc
 - **ATIP readable** → the disc is a blank or partially-written writable disc (CD-R/CD-RW)
 - **ATIP not readable** → the disc is finalized (pressed or burned and closed)
 
-This is more reliable than reading the TOC, which can be present on both blank and finalized discs.
+### Secure ripping
 
-### Drive requirements
-
-Any standard CD-R/CD-RW burner supported by Linux will work. The device node is typically `/dev/sr0` or `/dev/cdrom`. Use `--device` to specify a different path.
-
-### Buffer underrun protection
-
-Rusty Disc warns at burn time if your drive does not report buffer underrun protection (BURN-Proof, BurnFree, SMART-BURN, JustLink). On modern drives this is almost always supported. If you see the warning, avoid running heavy background tasks during the burn.
+Audio extraction uses **cdparanoia**, the same algorithm underpinning Exact Audio Copy (EAC) and dBpoweramp on Windows. It reads each sector multiple times, compares results, re-reads on disagreement, and uses majority voting to produce the most accurate possible extraction. Drive read offset is automatically handled by cdparanoia's jitter correction.
 
 ### CD-RW vs CD-R
 
@@ -625,6 +854,7 @@ Rusty Disc warns at burn time if your drive does not report buffer underrun prot
 | Data CD burn | Yes | Yes |
 | Blue Book / multisession | Yes | **No** |
 | Can be erased and reused | No | Yes |
+| Rippable | Yes | Yes |
 
 ---
 
@@ -666,20 +896,20 @@ DISCCTL_TEST_DEVICE=/dev/sr0 \
 cargo test --features hardware_tests -- --test-threads=1
 ```
 
-Environment variables:
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `DISCCTL_TEST_DEVICE` | `/dev/sr0` | Drive device node |
-| `DISCCTL_TEST_AUDIO_DIR` | `tests/fixtures/audio` | WAV fixtures directory |
-| `DISCCTL_TEST_DATA_DIR` | `tests/fixtures/data` | Data fixtures directory |
-| `DISCCTL_ENABLE_BURN_TESTS` | `0` | Set to `1` to run destructive burns |
-
 ### Architecture
 
 ```
 src/
 ├── main.rs               ← CLI entry point (clap)
+├── analyzer/
+│   └── mod.rs            ← Disc Analyzer: TOC via cdrecord, CD-Text via cdrdao,
+│                             data session metadata via isoinfo; builds DiscInfo
+├── rip/
+│   ├── mod.rs            ← Rip coordinator: analyzes disc, orchestrates all steps
+│   ├── engine.rs         ← Secure rip engine: cdparanoia wrapper (EAC-grade)
+│   ├── encoder.rs        ← AudioFormat enum + ffmpeg-based encoding for all 7 formats
+│   ├── data.rs           ← Data session extraction via xorriso osirrox
+│   └── metadata.rs       ← SHA256 checksum generation and verification
 ├── model/
 │   ├── disc.rs           ← DiscGraph, Session, AudioSession, DataSession
 │   └── plan.rs           ← BurnPlan, BurnStep
@@ -698,6 +928,9 @@ src/
 │   ├── transcode.rs      ← TranscodeSpec, StagedDir, full transcode pipeline
 │   └── device.rs         ← ATIP, msinfo, finalize, blank, buffer underrun
 ├── commands/
+│   ├── info.rs           ← InfoArgs → analyzer::analyze() + display
+│   ├── rip.rs            ← RipArgs → rip::rip()
+│   ├── verify.rs         ← VerifyArgs → metadata::verify_checksums()
 │   ├── burn.rs           ← BurnArgs, multi-disc orchestration
 │   ├── plan.rs           ← PlanArgs
 │   ├── validate.rs       ← ValidateArgs
@@ -713,4 +946,4 @@ MIT — see [LICENSE](LICENSE) for details.
 
 ---
 
-*Built with Rust. Burns with precision.*
+*Built with Rust. Burns and rips with precision.*
