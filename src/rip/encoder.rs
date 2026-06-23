@@ -75,6 +75,10 @@ pub struct TrackTags {
     pub track_total: Option<usize>,
     pub songwriter: Option<String>,
     pub composer: Option<String>,
+    pub year: Option<String>,
+    pub mb_release_id: Option<String>,
+    pub mb_recording_id: Option<String>,
+    pub mb_artist_id: Option<String>,
 }
 
 /// Encode a raw CDDA WAV file to the target format.
@@ -135,6 +139,7 @@ pub fn encode(
     if let Some(ref v) = tags.album_artist  { cmd.arg("-metadata").arg(format!("album_artist={}", v)); }
     if let Some(ref v) = tags.songwriter    { cmd.arg("-metadata").arg(format!("composer={}", v)); }
     if let Some(ref v) = tags.composer      { cmd.arg("-metadata").arg(format!("composer={}", v)); }
+    if let Some(ref v) = tags.year          { cmd.arg("-metadata").arg(format!("date={}", v)); }
     if let Some(n) = tags.track_number {
         let tag = if let Some(total) = tags.track_total {
             format!("{}/{}", n, total)
@@ -142,6 +147,17 @@ pub fn encode(
             n.to_string()
         };
         cmd.arg("-metadata").arg(format!("track={}", tag));
+    }
+    // MusicBrainz identifiers — stored as custom tags; most players / taggers
+    // recognise these field names (Picard convention).
+    if let Some(ref v) = tags.mb_recording_id {
+        cmd.arg("-metadata").arg(format!("MUSICBRAINZ_TRACKID={}", v));
+    }
+    if let Some(ref v) = tags.mb_release_id {
+        cmd.arg("-metadata").arg(format!("MUSICBRAINZ_ALBUMID={}", v));
+    }
+    if let Some(ref v) = tags.mb_artist_id {
+        cmd.arg("-metadata").arg(format!("MUSICBRAINZ_ARTISTID={}", v));
     }
 
     cmd.arg(output_path);

@@ -2,11 +2,13 @@ pub mod data;
 pub mod encoder;
 pub mod engine;
 pub mod metadata;
+pub mod musicbrainz;
 
 use std::path::Path;
 use crate::{analyzer::{self, DiscFormat, SessionKind, TrackKind}, error::Error};
 use encoder::{AudioFormat, TrackTags, track_filename};
 use engine::{emit_progress, emit_step};
+use musicbrainz::ReleaseInfo;
 
 /// How to lay out the ripped output.
 #[derive(Debug, Clone, PartialEq)]
@@ -24,6 +26,8 @@ pub struct RipOptions {
     pub layout: RipLayout,
     pub debug: bool,
     pub progress_json: bool,
+    /// Skip MusicBrainz lookup (for offline use or when you know the disc isn't in the DB).
+    pub no_musicbrainz: bool,
 }
 
 /// Rip a disc according to the provided options.
@@ -38,14 +42,58 @@ pub fn rip(opts: &RipOptions) -> Result<(), Error> {
     } else {
         eprintln!("Detected: {}", info.format);
         eprintln!("Sessions: {}", info.sessions.len());
+        if let Some(ref id) = info.discid {
+            eprintln!("DiscID:   {}", id);
+        }
     }
 
     std::fs::create_dir_all(&opts.output_dir)?;
 
+    // Step 2: MusicBrainz lookup (before ripping so we have metadata ready for tags)
+    let mb = if !opts.no_musicbrainz {
+        if let Some(ref discid) = info.discid {
+            if opts.progress_json { emit_step("Looking up metadata on MusicBrainz..."); }
+            else { eprintln!("Looking up DiscID on MusicBrainz..."); }
+
+            match musicbrainz::lookup(discid, opts.debug) {
+                Ok(Some(ref release)) => {
+                    if opts.progress_json {
+                        emit_step(&format!("Found: {} — {}", release.album, release.album_artist));
+                    } else {
+                        eprintln!("Found: \"{}\" by \"{}\"{}",
+                            release.album,
+                            release.album_artist,
+                            release.year.as_deref().map(|y| format!(" ({})", y)).unwrap_or_default()
+                        );
+                        if release.total_releases > 1 {
+                            eprintln!("  ({} releases share this DiscID — using first match)",
+                                release.total_releases);
+                        }
+                    }
+                }
+                Ok(None) => {
+                    if !opts.progress_json { eprintln!("Not found in MusicBrainz — using CD-Text/defaults"); }
+                }
+                Err(ref e) => {
+                    if !opts.progress_json { eprintln!("MusicBrainz error (non-fatal): {}", e); }
+                }
+            }
+
+            musicbrainz::lookup(discid, opts.debug).unwrap_or(None)
+        } else {
+            if !opts.progress_json && !matches!(info.format, DiscFormat::DataCD) {
+                eprintln!("No DiscID available — skipping MusicBrainz lookup");
+            }
+            None
+        }
+    } else {
+        None
+    };
+
     match info.format {
-        DiscFormat::RedBook => rip_redbook(&info, opts),
-        DiscFormat::DataCD  => rip_datacd(&info, opts),
-        DiscFormat::BlueBook => rip_bluebook(&info, opts),
+        DiscFormat::RedBook  => rip_redbook(&info, &mb, opts),
+        DiscFormat::DataCD   => rip_datacd(&info, opts),
+        DiscFormat::BlueBook => rip_bluebook(&info, &mb, opts),
         DiscFormat::Unknown  => Err(Error::validation(
             "Could not determine disc format. Insert a disc and try again.",
         )),
@@ -56,6 +104,7 @@ pub fn rip(opts: &RipOptions) -> Result<(), Error> {
 
 fn rip_redbook(
     info: &analyzer::DiscInfo,
+    mb: &Option<ReleaseInfo>,
     opts: &RipOptions,
 ) -> Result<(), Error> {
     let Some(session) = info.sessions.first() else {
@@ -70,66 +119,79 @@ fn rip_redbook(
     std::fs::create_dir_all(&audio_dir)?;
 
     let track_count = session.tracks.len();
-    let disc_title  = session.cd_text.as_ref().and_then(|c| c.title.as_deref());
-    let disc_artist = session.cd_text.as_ref().and_then(|c| c.artist.as_deref());
 
-    // Rip all tracks to a temp WAV dir using cdparanoia.
+    // Fallback metadata from CD-Text
+    let cd_disc_title  = session.cd_text.as_ref().and_then(|c| c.title.as_deref());
+    let cd_disc_artist = session.cd_text.as_ref().and_then(|c| c.artist.as_deref());
+
+    // Prefer MusicBrainz; fall back to CD-Text
+    let album       = mb.as_ref().map(|r| r.album.as_str()).or(cd_disc_title);
+    let album_artist = mb.as_ref().map(|r| r.album_artist.as_str()).or(cd_disc_artist);
+    let year         = mb.as_ref().and_then(|r| r.year.as_deref());
+    let mb_release_id = mb.as_ref().map(|r| r.mb_release_id.clone());
+    let mb_album_artist_id = mb.as_ref().and_then(|r| r.mb_artist_id.clone());
+
     let wav_dir = format!("/tmp/rustydisc_rip_{}", std::process::id());
     let wav_tracks = engine::rip_all_tracks(
         &opts.device, &wav_dir, track_count,
         opts.debug, opts.progress_json,
     )?;
 
-    // Encode each WAV to the target format.
-    let ext = opts.format.extension();
+    let ext   = opts.format.extension();
     let total = wav_tracks.len();
 
     for (i, (track_num, wav_path)) in wav_tracks.iter().enumerate() {
         let track_info = session.tracks.iter().find(|t| t.number == *track_num);
+        let mb_track   = mb.as_ref().and_then(|r| r.tracks.iter().find(|t| t.number == *track_num));
 
-        let track_title = track_info
-            .and_then(|t| t.cd_text.as_ref())
-            .and_then(|c| c.title.as_deref());
-        let track_artist = track_info
-            .and_then(|t| t.cd_text.as_ref())
-            .and_then(|c| c.artist.as_deref())
-            .or(disc_artist);
+        // Title: MB > CD-Text > auto
+        let title = mb_track.map(|t| t.title.as_str())
+            .or_else(|| track_info.and_then(|t| t.cd_text.as_ref()).and_then(|c| c.title.as_deref()));
 
-        let filename = track_filename(*track_num, total, track_title, ext);
+        // Artist: MB track override > album artist (don't duplicate if same)
+        let artist = mb_track.and_then(|t| t.artist.as_deref())
+            .or_else(|| track_info.and_then(|t| t.cd_text.as_ref()).and_then(|c| c.artist.as_deref()))
+            .or(album_artist);
+
+        let filename = track_filename(*track_num, total, title, ext);
         let out_path = format!("{}/{}", audio_dir, filename);
 
         if opts.progress_json {
             emit_step(&format!("Encoding track {} of {} — {}", i + 1, total, filename));
-            // Progress: rip took 0-5%, encoding is 5-95% spread across tracks
             let pct = 5.0 + (i as f32 / total as f32) * 90.0;
             emit_progress(pct);
         } else {
-            eprintln!("Encoding {} → {}", track_num, filename);
+            eprintln!("Encoding track {} → {}", track_num, filename);
         }
 
         let tags = TrackTags {
-            title:        track_title.map(str::to_string),
-            artist:       track_artist.map(str::to_string),
-            album:        disc_title.map(str::to_string),
-            album_artist: disc_artist.map(str::to_string),
-            track_number: Some(*track_num),
-            track_total:  Some(total),
-            songwriter:   track_info.and_then(|t| t.cd_text.as_ref()).and_then(|c| c.songwriter.as_deref()).map(str::to_string),
-            composer:     track_info.and_then(|t| t.cd_text.as_ref()).and_then(|c| c.composer.as_deref()).map(str::to_string),
+            title:            title.map(str::to_string),
+            artist:           artist.map(str::to_string),
+            album:            album.map(str::to_string),
+            album_artist:     album_artist.map(str::to_string),
+            track_number:     Some(*track_num),
+            track_total:      Some(total),
+            year:             year.map(str::to_string),
+            songwriter:       track_info.and_then(|t| t.cd_text.as_ref()).and_then(|c| c.songwriter.as_deref()).map(str::to_string),
+            composer:         track_info.and_then(|t| t.cd_text.as_ref()).and_then(|c| c.composer.as_deref()).map(str::to_string),
+            mb_release_id:    mb_release_id.clone(),
+            mb_recording_id:  mb_track.and_then(|t| t.mb_recording_id.clone()),
+            mb_artist_id:     mb_track.and_then(|t| t.mb_artist_id.clone()).or_else(|| mb_album_artist_id.clone()),
         };
 
         encoder::encode(wav_path, &out_path, &opts.format, &tags, opts.debug)?;
     }
 
-    // Clean up temp WAV files.
     let _ = std::fs::remove_dir_all(&wav_dir);
 
-    // Metadata dir
     let meta_dir = format!("{}/metadata", opts.output_dir);
     std::fs::create_dir_all(&meta_dir)?;
 
     write_disc_json(info, opts)?;
     write_cdtext_json(info, opts)?;
+    if let Some(release) = mb {
+        write_mb_json(release, opts)?;
+    }
 
     if matches!(opts.layout, RipLayout::Archive) {
         if opts.progress_json { emit_step("Generating checksums..."); emit_progress(96.0); }
@@ -177,6 +239,7 @@ fn rip_datacd(
 
 fn rip_bluebook(
     info: &analyzer::DiscInfo,
+    mb: &Option<ReleaseInfo>,
     opts: &RipOptions,
 ) -> Result<(), Error> {
     let audio_dir = format!("{}/audio", opts.output_dir);
@@ -195,8 +258,13 @@ fn rip_bluebook(
             .filter(|t| t.kind == TrackKind::Audio)
             .count();
 
-        let disc_title  = session.cd_text.as_ref().and_then(|c| c.title.as_deref());
-        let disc_artist = session.cd_text.as_ref().and_then(|c| c.artist.as_deref());
+        let cd_title  = session.cd_text.as_ref().and_then(|c| c.title.as_deref());
+        let cd_artist = session.cd_text.as_ref().and_then(|c| c.artist.as_deref());
+        let album       = mb.as_ref().map(|r| r.album.as_str()).or(cd_title);
+        let album_artist = mb.as_ref().map(|r| r.album_artist.as_str()).or(cd_artist);
+        let year         = mb.as_ref().and_then(|r| r.year.as_deref());
+        let mb_release_id = mb.as_ref().map(|r| r.mb_release_id.clone());
+        let mb_album_artist_id = mb.as_ref().and_then(|r| r.mb_artist_id.clone());
 
         let wav_dir = format!("/tmp/rustydisc_rip_{}", std::process::id());
         let wav_tracks = engine::rip_all_tracks(
@@ -204,21 +272,23 @@ fn rip_bluebook(
             opts.debug, opts.progress_json,
         )?;
 
-        let ext = opts.format.extension();
+        let ext   = opts.format.extension();
         let total = wav_tracks.len();
 
         for (i, (track_num, wav_path)) in wav_tracks.iter().enumerate() {
             let track_info = session.tracks.iter().find(|t| t.number == *track_num);
-            let track_title = track_info.and_then(|t| t.cd_text.as_ref())
-                .and_then(|c| c.title.as_deref());
-            let track_artist = track_info.and_then(|t| t.cd_text.as_ref())
-                .and_then(|c| c.artist.as_deref()).or(disc_artist);
+            let mb_track   = mb.as_ref().and_then(|r| r.tracks.iter().find(|t| t.number == *track_num));
 
-            let filename = track_filename(*track_num, total, track_title, ext);
+            let title = mb_track.map(|t| t.title.as_str())
+                .or_else(|| track_info.and_then(|t| t.cd_text.as_ref()).and_then(|c| c.title.as_deref()));
+            let artist = mb_track.and_then(|t| t.artist.as_deref())
+                .or_else(|| track_info.and_then(|t| t.cd_text.as_ref()).and_then(|c| c.artist.as_deref()))
+                .or(album_artist);
+
+            let filename = track_filename(*track_num, total, title, ext);
             let out_path = format!("{}/{}", audio_dir, filename);
 
             if opts.progress_json {
-                // Audio rip/encode = 0–60%, data extraction = 60–90%
                 let pct = 5.0 + (i as f32 / total as f32) * 55.0;
                 emit_step(&format!("Encoding track {} of {} — {}", i + 1, total, filename));
                 emit_progress(pct);
@@ -227,14 +297,18 @@ fn rip_bluebook(
             }
 
             let tags = TrackTags {
-                title:        track_title.map(str::to_string),
-                artist:       track_artist.map(str::to_string),
-                album:        disc_title.map(str::to_string),
-                album_artist: disc_artist.map(str::to_string),
-                track_number: Some(*track_num),
-                track_total:  Some(total),
-                songwriter:   track_info.and_then(|t| t.cd_text.as_ref()).and_then(|c| c.songwriter.as_deref()).map(str::to_string),
-                composer:     track_info.and_then(|t| t.cd_text.as_ref()).and_then(|c| c.composer.as_deref()).map(str::to_string),
+                title:           title.map(str::to_string),
+                artist:          artist.map(str::to_string),
+                album:           album.map(str::to_string),
+                album_artist:    album_artist.map(str::to_string),
+                track_number:    Some(*track_num),
+                track_total:     Some(total),
+                year:            year.map(str::to_string),
+                songwriter:      track_info.and_then(|t| t.cd_text.as_ref()).and_then(|c| c.songwriter.as_deref()).map(str::to_string),
+                composer:        track_info.and_then(|t| t.cd_text.as_ref()).and_then(|c| c.composer.as_deref()).map(str::to_string),
+                mb_release_id:   mb_release_id.clone(),
+                mb_recording_id: mb_track.and_then(|t| t.mb_recording_id.clone()),
+                mb_artist_id:    mb_track.and_then(|t| t.mb_artist_id.clone()).or_else(|| mb_album_artist_id.clone()),
             };
 
             encoder::encode(wav_path, &out_path, &opts.format, &tags, opts.debug)?;
@@ -250,6 +324,9 @@ fn rip_bluebook(
 
     write_disc_json(info, opts)?;
     write_cdtext_json(info, opts)?;
+    if let Some(release) = mb {
+        write_mb_json(release, opts)?;
+    }
 
     if matches!(opts.layout, RipLayout::Archive) {
         if opts.progress_json { emit_step("Generating checksums..."); emit_progress(95.0); }
@@ -268,6 +345,14 @@ fn write_disc_json(info: &analyzer::DiscInfo, opts: &RipOptions) -> Result<(), E
     std::fs::create_dir_all(&meta_dir)?;
     let path = format!("{}/disc.json", meta_dir);
     std::fs::write(path, serde_json::to_string_pretty(info)?)?;
+    Ok(())
+}
+
+fn write_mb_json(release: &ReleaseInfo, opts: &RipOptions) -> Result<(), Error> {
+    let meta_dir = format!("{}/metadata", opts.output_dir);
+    std::fs::create_dir_all(&meta_dir)?;
+    let path = format!("{}/musicbrainz.json", meta_dir);
+    std::fs::write(path, serde_json::to_string_pretty(release)?)?;
     Ok(())
 }
 

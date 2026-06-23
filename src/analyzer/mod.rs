@@ -1,5 +1,7 @@
 use std::process::Command;
 use serde::{Deserialize, Serialize};
+use sha1::Digest as _;
+use base64::Engine as _;
 use crate::error::Error;
 
 // ── Public types ──────────────────────────────────────────────────────────────
@@ -10,6 +12,10 @@ pub struct DiscInfo {
     pub sessions: Vec<SessionInfo>,
     pub is_writable: bool,
     pub device: String,
+    /// MusicBrainz DiscID — SHA-1 hash of the audio TOC, base64 with MB substitutions.
+    /// None for data-only discs or if the TOC could not be parsed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub discid: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -106,13 +112,10 @@ pub fn analyze(device: &str) -> Result<DiscInfo, Error> {
             sessions: vec![],
             is_writable,
             device: device.to_string(),
+            discid: None,
         });
     }
 
-    // Separate tracks into sessions by type transitions.
-    // Blue Book: audio tracks followed by a data track (in separate sessions).
-    // DataCD: only data tracks.
-    // RedBook: only audio tracks.
     let has_audio = raw_tracks.iter().any(|t| t.kind == TrackKind::Audio);
     let has_data  = raw_tracks.iter().any(|t| t.kind == TrackKind::Data);
 
@@ -126,13 +129,53 @@ pub fn analyze(device: &str) -> Result<DiscInfo, Error> {
         DiscFormat::DataCD
     };
 
-    // Build sessions — for Blue Book split at the audio/data boundary.
-    let sessions = build_sessions(&raw_tracks, &format, device);
+    // Compute DiscID from audio tracks only (data tracks are excluded — this is
+    // what libdiscid and every other tool does for CD Extra / Blue Book).
+    let discid = compute_discid(&raw_tracks);
 
-    // Overlay CD-Text from cdrdao if available.
+    let sessions = build_sessions(&raw_tracks, &format, device);
     let sessions = overlay_cdtext(sessions, device);
 
-    Ok(DiscInfo { format, sessions, is_writable, device: device.to_string() })
+    Ok(DiscInfo { format, sessions, is_writable, device: device.to_string(), discid })
+}
+
+// ── DiscID (MusicBrainz) ─────────────────────────────────────────────────────
+
+/// Compute the MusicBrainz DiscID from the raw TOC.
+///
+/// Algorithm: SHA-1 of a 804-character string built from:
+///   first_track (2 hex) + last_track (2 hex) + leadout (8 hex) +
+///   track1_offset (8 hex) + ... + track99_offset (8 hex, zero-padded)
+///
+/// All offsets are LBA + 150 (absolute sectors from the physical disc start).
+/// Only audio tracks are included; data tracks are excluded per the MB spec.
+///
+/// Reference: https://musicbrainz.org/doc/Disc_ID_Calculation
+fn compute_discid(raw: &[RawTrack]) -> Option<String> {
+    let audio: Vec<&RawTrack> = raw.iter().filter(|t| t.kind == TrackKind::Audio).collect();
+    if audio.is_empty() {
+        return None;
+    }
+
+    let first: u8 = 1;
+    let last: u8  = audio.len() as u8;
+    // Leadout = lba_end of the last audio track (next track / session start).
+    let leadout: u32 = audio.last()?.lba_end + 150;
+
+    let mut s = format!("{:02X}{:02X}{:08X}", first, last, leadout);
+
+    for i in 0..99usize {
+        let offset = if i < audio.len() {
+            audio[i].lba_start + 150
+        } else {
+            0
+        };
+        s.push_str(&format!("{:08X}", offset));
+    }
+
+    let hash = sha1::Sha1::digest(s.as_bytes());
+    let b64  = base64::engine::general_purpose::STANDARD.encode(hash);
+    Some(b64.replace('+', ".").replace('/', "_").replace('=', "-"))
 }
 
 // ── TOC reading via cdrecord ──────────────────────────────────────────────────
@@ -486,6 +529,9 @@ pub fn display(info: &DiscInfo) {
     println!("Disc Type:  {}", info.format);
     println!("Sessions:   {}", info.sessions.len());
     if info.is_writable { println!("Media:      Writable (CD-R / CD-RW)"); }
+    if let Some(ref id) = info.discid {
+        println!("DiscID:     {}", id);
+    }
     println!();
 
     for session in &info.sessions {

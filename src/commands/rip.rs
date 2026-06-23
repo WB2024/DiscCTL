@@ -18,6 +18,9 @@ pub struct RipArgs {
     /// Archive mode: include disc.json, cdtext.json, checksums.json for reconstruction
     #[arg(long)]
     pub archive: bool,
+    /// Skip MusicBrainz lookup (for offline use or when the disc is not in the database)
+    #[arg(long)]
+    pub no_musicbrainz: bool,
     /// Print debug information
     #[arg(long)]
     pub debug: bool,
@@ -50,6 +53,7 @@ pub fn run(args: RipArgs) -> Result<(), Error> {
         layout,
         debug: args.debug,
         progress_json: args.progress_json,
+        no_musicbrainz: args.no_musicbrainz,
     };
 
     rip::rip(&opts)?;
