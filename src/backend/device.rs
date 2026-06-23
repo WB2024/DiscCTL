@@ -107,18 +107,18 @@ pub fn recover_open_session(device: &str, debug: bool) -> Result<bool, Error> {
             cmd.arg(format!("dev={}", device)).arg("-fix");
 
             if debug {
-                println!("Running: {:?}", cmd);
+                eprintln!("Running: {:?}", cmd);
             }
 
-            let status = cmd.status()?;
-            if status.success() {
+            let output = cmd.output()?;
+            if output.status.success() {
                 eprintln!("Session closed successfully.");
                 Ok(true)
             } else {
                 Err(Error::device(format!(
-                    "cdrecord -fix failed on {}: exit code {:?}",
+                    "cdrecord -fix failed on {}: {}",
                     device,
-                    status.code()
+                    String::from_utf8_lossy(&output.stderr).trim()
                 )))
             }
         }
@@ -159,16 +159,16 @@ pub fn blank_cdrw(device: &str, mode: &str, debug: bool) -> Result<(), Error> {
         .arg(format!("blank={}", mode));
 
     if debug {
-        println!("Running: {:?}", cmd);
+        eprintln!("Running: {:?}", cmd);
     }
 
-    let status = cmd.status()?;
-    if !status.success() {
+    let output = cmd.output()?;
+    if !output.status.success() {
         return Err(Error::device(format!(
-            "cdrecord blank={} failed on {}: exit code {:?}",
+            "cdrecord blank={} failed on {}: {}",
             mode,
             device,
-            status.code()
+            String::from_utf8_lossy(&output.stderr).trim()
         )));
     }
 
@@ -262,15 +262,15 @@ pub fn finalize_disc(device: &str, debug: bool) -> Result<(), Error> {
     cmd.arg(format!("dev={}", device)).arg("-fix");
 
     if debug {
-        println!("Running: {:?}", cmd);
+        eprintln!("Running: {:?}", cmd);
     }
 
-    let status = cmd.status()?;
-    if !status.success() {
+    let output = cmd.output()?;
+    if !output.status.success() {
         return Err(Error::device(format!(
-            "Failed to finalize disc on {}: exit code {:?}",
+            "Failed to finalize disc on {}: {}",
             device,
-            status.code()
+            String::from_utf8_lossy(&output.stderr).trim()
         )));
     }
 
