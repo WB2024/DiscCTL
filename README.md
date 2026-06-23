@@ -1,8 +1,4 @@
 <p align="center">
-  <img src="Images/Assets/Untitled1.jpeg" alt="" width="100%">
-</p>
-
-<p align="center">
   <img src="Images/Assets/Logo.jpeg" alt="Rusty Disc" width="320">
 </p>
 
