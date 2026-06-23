@@ -87,47 +87,79 @@ pub struct TrackTags {
 /// `output_path` — full path for the encoded output file
 /// `format` — target codec
 /// `tags` — optional metadata tags to embed
+/// `cover_art` — optional path to a cover image to embed
 pub fn encode(
     input_wav: &str,
     output_path: &str,
     format: &AudioFormat,
     tags: &TrackTags,
+    cover_art: Option<&str>,
     debug: bool,
 ) -> Result<(), Error> {
     if *format == AudioFormat::Wav {
-        // WAV is already what cdparanoia produces — just copy it.
         std::fs::copy(input_wav, output_path)?;
         return Ok(());
     }
 
     let mut cmd = Command::new("ffmpeg");
-    cmd.arg("-y")               // overwrite output
+    cmd.arg("-y")
        .arg("-i").arg(input_wav);
+
+    // Add cover art input if available (not supported for AIFF)
+    let embed_art = cover_art.is_some() && !matches!(format, AudioFormat::Aiff);
+    if let Some(art) = cover_art {
+        if embed_art {
+            cmd.arg("-i").arg(art);
+        }
+    }
+
+    // Stream mapping: audio from input 0, cover art from input 1 (if present)
+    if embed_art {
+        cmd.arg("-map").arg("0:a").arg("-map").arg("1:v");
+    }
 
     // Codec flags per format
     match format {
         AudioFormat::Flac => {
             cmd.arg("-c:a").arg("flac")
                .arg("-compression_level").arg("8");
+            if embed_art {
+                cmd.arg("-c:v").arg("copy")
+                   .arg("-metadata:s:v").arg("title=Album cover")
+                   .arg("-metadata:s:v").arg("comment=Cover (front)");
+            }
         }
         AudioFormat::Alac => {
             cmd.arg("-c:a").arg("alac");
+            if embed_art {
+                cmd.arg("-c:v").arg("copy");
+            }
         }
         AudioFormat::Aiff => {
             cmd.arg("-f").arg("aiff")
-               .arg("-c:a").arg("pcm_s16be"); // AIFF uses big-endian PCM
+               .arg("-c:a").arg("pcm_s16be");
+            // AIFF cover art embedding is not reliably supported by ffmpeg
         }
         AudioFormat::OggVorbis => {
             cmd.arg("-c:a").arg("libvorbis")
-               .arg("-q:a").arg("10"); // ~500kbps, highest Vorbis quality
+               .arg("-q:a").arg("10");
+            if embed_art {
+                cmd.arg("-c:v").arg("copy");
+            }
         }
         AudioFormat::Mp3 => {
             cmd.arg("-c:a").arg("libmp3lame")
-               .arg("-q:a").arg("0");  // VBR quality 0 = highest
+               .arg("-q:a").arg("0");
+            if embed_art {
+                cmd.arg("-c:v").arg("copy")
+                   .arg("-metadata:s:v").arg("title=Album cover")
+                   .arg("-metadata:s:v").arg("comment=Cover (front)");
+            }
         }
         AudioFormat::Opus => {
             cmd.arg("-c:a").arg("libopus")
                .arg("-b:a").arg("320k");
+            // Opus cover art via ffmpeg is unreliable; skip embedding
         }
         AudioFormat::Wav => unreachable!(),
     }
@@ -178,20 +210,39 @@ pub fn encode(
 }
 
 /// Build a safe filename for a track.
-pub fn track_filename(number: usize, total: usize, title: Option<&str>, ext: &str) -> String {
+/// Format: `01. Artist - Album - Title.ext`
+pub fn track_filename(
+    number: usize,
+    total: usize,
+    artist: Option<&str>,
+    album: Option<&str>,
+    title: Option<&str>,
+    ext: &str,
+) -> String {
     let width = if total >= 100 { 3 } else { 2 };
-    let prefix = format!("{:0width$}", number, width = width);
-    if let Some(t) = title {
-        let safe: String = t.chars()
-            .map(|c| if c.is_ascii_alphanumeric() || " .-_'&()".contains(c) { c } else { '_' })
-            .collect();
-        let safe = safe.trim().to_string();
-        if safe.is_empty() {
-            format!("Track {}.{}", prefix, ext)
-        } else {
-            format!("{} - {}.{}", prefix, safe, ext)
+    let prefix = format!("{:0width$}.", number, width = width);
+
+    let sanitise = |s: &str| -> String {
+        s.chars()
+            .map(|c| if c.is_ascii_alphanumeric() || " .-_'&()!,".contains(c) { c } else { '_' })
+            .collect::<String>()
+            .trim()
+            .to_string()
+    };
+
+    match (artist, album, title) {
+        (Some(ar), Some(al), Some(ti)) => {
+            format!("{} {} - {} - {}.{}", prefix, sanitise(ar), sanitise(al), sanitise(ti), ext)
         }
-    } else {
-        format!("Track {}.{}", prefix, ext)
+        (Some(ar), None, Some(ti)) => {
+            format!("{} {} - {}.{}", prefix, sanitise(ar), sanitise(ti), ext)
+        }
+        (None, Some(al), Some(ti)) => {
+            format!("{} {} - {}.{}", prefix, sanitise(al), sanitise(ti), ext)
+        }
+        (_, _, Some(ti)) => {
+            format!("{} {}.{}", prefix, sanitise(ti), ext)
+        }
+        _ => format!("{} Track {}.{}", prefix, number, ext),
     }
 }

@@ -1,3 +1,4 @@
+use std::io::Read;
 use serde::{Deserialize, Serialize};
 use crate::error::Error;
 
@@ -86,6 +87,40 @@ struct MbRecording {
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
+
+/// Fetch the front cover art for a release from the Cover Art Archive.
+///
+/// Tries full-size first, falls back to 500px thumbnail.
+/// Returns the raw image bytes and a file extension ("jpg" or "png").
+pub fn fetch_cover_art(mb_release_id: &str, debug: bool) -> Option<(Vec<u8>, &'static str)> {
+    // CAA redirects to the actual image — ureq follows redirects automatically.
+    let url = format!("https://coverartarchive.org/release/{}/front", mb_release_id);
+    if debug { eprintln!("Cover Art Archive: {}", url); }
+
+    let resp = ureq::get(&url)
+        .set("User-Agent", USER_AGENT)
+        .call();
+
+    match resp {
+        Ok(r) => {
+            let content_type = r.header("Content-Type").unwrap_or("").to_lowercase();
+            let ext = if content_type.contains("png") { "png" } else { "jpg" };
+            let mut bytes = Vec::new();
+            r.into_reader().read_to_end(&mut bytes).ok()?;
+            if bytes.is_empty() { return None; }
+            if debug { eprintln!("Cover art: {} bytes ({})", bytes.len(), ext); }
+            Some((bytes, ext))
+        }
+        Err(ureq::Error::Status(404, _)) => {
+            if debug { eprintln!("Cover Art Archive: no image for release {}", mb_release_id); }
+            None
+        }
+        Err(e) => {
+            if debug { eprintln!("Cover Art Archive: network error — {}", e); }
+            None
+        }
+    }
+}
 
 /// Look up a disc by its MusicBrainz DiscID.
 ///

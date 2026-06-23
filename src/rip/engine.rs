@@ -1,4 +1,4 @@
-use std::io::Read;
+use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use crate::error::Error;
@@ -17,13 +17,6 @@ pub fn check_available() -> Result<(), Error> {
 
 /// Rip all audio tracks from `device` into `output_dir` as numbered WAV files.
 /// Returns a Vec of (track_number, wav_path) in track order.
-///
-/// Output files are named: track01.cdda.wav, track02.cdda.wav, etc. — the
-/// standard cdparanoia batch-mode naming convention.
-///
-/// Calls `on_progress` with (0.0..=1.0) once the rip is complete (cdparanoia
-/// does not expose per-sector progress in a parseable form, so we report
-/// completion as a single event).
 pub fn rip_all_tracks(
     device: &str,
     output_dir: &str,
@@ -32,39 +25,52 @@ pub fn rip_all_tracks(
     progress_json: bool,
 ) -> Result<Vec<(usize, String)>, Error> {
     check_available()?;
-
     std::fs::create_dir_all(output_dir)?;
 
     if progress_json {
         emit_step("Ripping audio tracks from disc...");
         emit_progress(0.0);
+    } else {
+        eprintln!("Ripping {} tracks from disc (this takes a while)...", track_count);
     }
 
     let mut cmd = Command::new("cdparanoia");
     cmd.arg("-d").arg(device)
-       .arg("-B")           // batch mode: one WAV per track
-       .arg("-w");          // force WAV output
-    // cdparanoia writes to the current directory; we change the working dir.
+       .arg("-B")   // batch mode: one WAV per track
+       .arg("-w");  // force WAV output
     cmd.current_dir(output_dir);
-
-    if !debug {
-        cmd.stdout(Stdio::null());
-        cmd.stderr(Stdio::piped());
-    }
+    cmd.stdout(Stdio::null());
+    cmd.stderr(Stdio::piped());
 
     if debug { eprintln!("Running: {:?}", cmd); }
 
     let mut child = cmd.spawn()?;
 
-    // Drain stderr so the child never blocks on a full pipe.
-    let mut _stderr_bytes: Vec<u8> = Vec::new();
-    if !debug {
-        if let Some(mut stderr) = child.stderr.take() {
-            let mut buf = [0u8; 4096];
-            loop {
-                match stderr.read(&mut buf) {
-                    Ok(0) | Err(_) => break,
-                    Ok(n) => _stderr_bytes.extend_from_slice(&buf[..n]),
+    // Parse cdparanoia's stderr so we can report per-track progress.
+    // Key line patterns:
+    //   "outputting to track01.cdda.wav"  → just started ripping track 1
+    //   "Ripping from sector N (track M"  → also contains track number
+    if let Some(stderr) = child.stderr.take() {
+        let reader = BufReader::new(stderr);
+        let mut last_reported: usize = 0;
+
+        for line in reader.lines().map_while(Result::ok) {
+            if debug { eprintln!("[cdparanoia] {}", line); }
+
+            // "outputting to track01.cdda.wav"
+            let lower = line.to_lowercase();
+            if lower.contains("outputting to track") {
+                if let Some(track_num) = parse_track_number_from_output_line(&line) {
+                    if track_num != last_reported {
+                        last_reported = track_num;
+                        if progress_json {
+                            let pct = (track_num as f32 - 1.0) / track_count as f32 * 5.0;
+                            emit_step(&format!("Ripping track {} of {}...", track_num, track_count));
+                            emit_progress(pct);
+                        } else {
+                            eprintln!("  Ripping track {} of {}...", track_num, track_count);
+                        }
+                    }
                 }
             }
         }
@@ -72,31 +78,24 @@ pub fn rip_all_tracks(
 
     let status = child.wait()?;
     if !status.success() {
-        let msg = String::from_utf8_lossy(&_stderr_bytes);
         return Err(Error::backend(format!(
-            "cdparanoia failed (exit {:?}): {}",
+            "cdparanoia failed (exit {:?}) — try running with --debug for details",
             status.code(),
-            msg.lines().last().unwrap_or("see debug output")
         )));
     }
 
     if progress_json {
-        emit_progress(5.0); // rip done, encoding starts
+        emit_progress(5.0);
+    } else {
+        eprintln!("  Rip complete — encoding...");
     }
 
-    // Collect files in the order cdparanoia created them.
+    // Collect the WAV files cdparanoia wrote.
     let mut tracks: Vec<(usize, String)> = Vec::new();
     for i in 1..=track_count {
-        let name = format!("track{:02}.cdda.wav", i);
-        let path = format!("{}/{}", output_dir, name);
+        let path = format!("{}/track{:02}.cdda.wav", output_dir, i);
         if Path::new(&path).exists() {
             tracks.push((i, path));
-        } else {
-            // cdparanoia sometimes zero-pads differently; try alternate naming.
-            let alt = format!("{}/track{:02}.cdda.wav", output_dir, i);
-            if Path::new(&alt).exists() {
-                tracks.push((i, alt));
-            }
         }
     }
 
@@ -107,6 +106,15 @@ pub fn rip_all_tracks(
     }
 
     Ok(tracks)
+}
+
+/// Parse "outputting to track01.cdda.wav" → Some(1)
+fn parse_track_number_from_output_line(line: &str) -> Option<usize> {
+    // Find "track" then parse the digits that follow.
+    let lower = line.to_lowercase();
+    let after = lower.split("track").nth(1)?;
+    let digits: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
+    digits.parse().ok()
 }
 
 pub(super) fn emit_progress(pct: f32) {

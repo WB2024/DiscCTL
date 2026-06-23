@@ -103,14 +103,13 @@ impl CdTextBlock {
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 pub fn analyze(device: &str) -> Result<DiscInfo, Error> {
-    let is_writable = detect_writable(device);
     let (raw_tracks, disc_cd_type) = read_toc_cdrecord(device)?;
 
     if raw_tracks.is_empty() {
         return Ok(DiscInfo {
             format: DiscFormat::Unknown,
             sessions: vec![],
-            is_writable,
+            is_writable: false,
             device: device.to_string(),
             discid: None,
         });
@@ -136,7 +135,7 @@ pub fn analyze(device: &str) -> Result<DiscInfo, Error> {
     let sessions = build_sessions(&raw_tracks, &format, device);
     let sessions = overlay_cdtext(sessions, device);
 
-    Ok(DiscInfo { format, sessions, is_writable, device: device.to_string(), discid })
+    Ok(DiscInfo { format, sessions, is_writable: false, device: device.to_string(), discid })
 }
 
 // ── DiscID (MusicBrainz) ─────────────────────────────────────────────────────
@@ -213,18 +212,24 @@ fn read_toc_cdrecord(device: &str) -> Result<(Vec<RawTrack>, String), Error> {
             }
         }
 
-        // "track:  1 lba:      0 (0x000000) 00:02:00.000 adr:  1 ctrl:  0 mode:   -1"
-        // "track:   1 lba:         0 (         0) 00:02:00.000 adr:  1 ctrl:  4 mode:   1"
-        if lower.trim_start().starts_with("track:") || lower.trim_start().starts_with("track ") {
+        // Leadout — must be checked before the generic track branch because
+        // wodim/cdrecord formats it as "track:lout lba: N ..." which starts
+        // with "track:" and would otherwise be silently swallowed.
+        let trimmed = lower.trim_start();
+        if trimmed.starts_with("lout:")
+            || trimmed.starts_with("leadout")
+            || (trimmed.starts_with("track:") && lower.contains("lout"))
+        {
+            leadout_lba = parse_lba_from_line(line);
+            continue;
+        }
+
+        // Track lines: "track:   1 lba:  0 ... control: 0 ..."
+        if trimmed.starts_with("track:") || trimmed.starts_with("track ") {
             if let Some((num, kind, lba)) = parse_track_line(line) {
                 raw.push((num, kind, lba));
             }
             continue;
-        }
-
-        // Leadout line
-        if lower.trim_start().starts_with("lout:") || lower.trim_start().starts_with("leadout") {
-            leadout_lba = parse_lba_from_line(line);
         }
     }
 
@@ -244,22 +249,28 @@ fn read_toc_cdrecord(device: &str) -> Result<(Vec<RawTrack>, String), Error> {
 }
 
 fn parse_track_line(line: &str) -> Option<(usize, TrackKind, u32)> {
-    // Handles: "track:  1 lba:      0 ..." and "track   1: 00 LBA:   0 ..."
     let lower = line.to_lowercase();
 
-    // Extract track number — first integer after "track"
+    // Extract track number.
+    // Both formats place it right after "track", but the colon may be glued:
+    //   "track:   1 lba: 0 ..."  → after "track" = ":   1 lba: 0 ..."
+    //   "track   1: 0 ..."       → after "track" = "   1: 0 ..."
     let after_track = lower.split("track").nth(1)?;
+    // Strip a possible leading colon before whitespace-splitting.
+    let after_track = after_track.trim_start_matches(':');
     let num_str = after_track.split_whitespace().next()?.trim_end_matches(':');
     let number: usize = num_str.parse().ok()?;
 
-    // Extract LBA — first integer after "lba"
+    // Extract LBA — first integer after "lba:"
     let after_lba = lower.split("lba:").nth(1)
         .or_else(|| lower.split("lba ").nth(1))?;
     let lba_str = after_lba.split_whitespace().next()?.trim_start_matches('(');
     let lba: u32 = lba_str.trim_end_matches(')').parse().ok()?;
 
-    // Determine track type from ctrl field: ctrl: 0 = audio, ctrl: 4 = data
-    let kind = if let Some(after_ctrl) = lower.split("ctrl:").nth(1)
+    // Determine track type from ctrl/control field.
+    // wodim uses "control:" while some other tools use "ctrl:" or "ctrl ".
+    let kind = if let Some(after_ctrl) = lower.split("control:").nth(1)
+        .or_else(|| lower.split("ctrl:").nth(1))
         .or_else(|| lower.split("ctrl ").nth(1)) {
         let ctrl_str = after_ctrl.split_whitespace().next().unwrap_or("0");
         let ctrl: u8 = ctrl_str.parse().unwrap_or(0);
@@ -404,8 +415,11 @@ fn overlay_cdtext(mut sessions: Vec<SessionInfo>, device: &str) -> Vec<SessionIn
     let ok = Command::new("cdrdao")
         .arg("read-toc")
         .arg("--device").arg(device)
-        .arg("--quiet")
+        .arg("--fast-toc")
+        .arg("-v").arg("0")
         .arg(&toc_path)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
         .status()
         .map(|s| s.success())
         .unwrap_or(false);
