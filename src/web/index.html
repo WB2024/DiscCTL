@@ -508,7 +508,7 @@ pre.json { background: var(--bg); border: 1px solid var(--line); border-radius: 
         <div id="auth-env" class="muted hidden">The login is set by the <code>RUSTYDISC_AUTH_USER</code> / <code>RUSTYDISC_AUTH_PASSWORD</code> environment variables; change it there.</div>
         <div id="auth-form">
           <div class="row">
-            <label>User name <input id="auth-user" autocomplete="off" style="width:200px"></label>
+            <label>User name <input id="auth-user" type="text" autocomplete="off" style="width:200px"></label>
             <label>Password <input id="auth-pass" type="password" autocomplete="new-password" style="width:220px"></label>
           </div>
           <div class="row"><button class="btn primary" id="auth-save">Turn on login</button><button class="btn hidden" id="auth-off">Turn off login</button><span class="muted" id="auth-status"></span></div>
@@ -1668,9 +1668,9 @@ function openFormatForm(wrap, d) {
     <div style="margin-top:6px">This <b>erases everything</b> ${d.files ? `— ${nf(d.files)} files —` : ""} and can't be undone.</div>
     <div class="row" style="margin-top:10px;align-items:flex-end">
       <label class="field">New filesystem<select id="fmt-fs">${opts}</select></label>
-      <label class="field">Name<input id="fmt-label" value="${esc((d.name || "MUSIC").replace(/[^A-Za-z0-9 _-]/g, "").slice(0, 11))}" style="width:160px"></label>
+      <label class="field">Name<input id="fmt-label" type="text" value="${esc((d.name || "MUSIC").replace(/[^A-Za-z0-9 _-]/g, "").slice(0, 11))}" style="width:160px"></label>
       <label class="field" id="fmt-table-wrap">Partition table<select id="fmt-table"><option value="dos">MBR (most compatible)</option><option value="gpt">GPT</option></select></label>
-      <label class="field"><span id="fmt-confirm-label"></span><input id="fmt-confirm" autocomplete="off" style="width:120px"></label>
+      <label class="field"><span id="fmt-confirm-label"></span><input id="fmt-confirm" type="text" autocomplete="off" style="width:120px"></label>
       <button class="btn danger" id="fmt-go">Erase and format</button>
     </div>
     <div class="muted" id="fmt-note" style="margin-top:6px"></div></div>`;
