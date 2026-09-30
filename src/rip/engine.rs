@@ -64,7 +64,7 @@ pub fn rip_all_tracks(
                     if track_num != last_reported {
                         last_reported = track_num;
                         if progress_json {
-                            let pct = (track_num as f32 - 1.0) / track_count as f32 * 5.0;
+                            let pct = (track_num as f32 - 1.0) / track_count as f32 * 85.0;
                             emit_step(&format!("Ripping track {} of {}...", track_num, track_count));
                             emit_progress(pct);
                         } else {
@@ -85,7 +85,7 @@ pub fn rip_all_tracks(
     }
 
     if progress_json {
-        emit_progress(5.0);
+        emit_progress(85.0);
     } else {
         eprintln!("  Rip complete — encoding...");
     }

@@ -20,7 +20,7 @@ pub fn run(args: VerifyArgs) -> Result<(), Error> {
 
     eprintln!("Verifying archive: {}", args.directory);
 
-    let result = metadata::verify_checksums(&search_dir)?;
+    let result = metadata::verify_manifest(&search_dir, &args.directory)?;
 
     if !result.missing.is_empty() {
         eprintln!("MISSING ({}):", result.missing.len());

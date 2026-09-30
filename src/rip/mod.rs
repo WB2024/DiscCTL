@@ -231,7 +231,7 @@ fn rip_redbook(
 
         if opts.progress_json {
             emit_step(&format!("Encoding track {} of {} — {}", i + 1, total, filename));
-            emit_progress(5.0 + (i as f32 / total as f32) * 90.0);
+            emit_progress(85.0 + (i as f32 / total as f32) * 10.0);
         } else {
             eprintln!("  Encoding track {:2} → {}", track_num, filename);
         }
@@ -352,7 +352,7 @@ fn rip_bluebook(
 
             if opts.progress_json {
                 emit_step(&format!("Encoding track {} of {} — {}", i + 1, total, filename));
-                emit_progress(5.0 + (i as f32 / total as f32) * 55.0);
+                emit_progress(85.0 + (i as f32 / total as f32) * 5.0);
             } else {
                 eprintln!("  Encoding track {:2} → {}", track_num, filename);
             }
@@ -376,9 +376,9 @@ fn rip_bluebook(
         let _ = std::fs::remove_dir_all(&wav_dir);
     }
 
-    if opts.progress_json { emit_step("Extracting data session..."); emit_progress(62.0); }
+    if opts.progress_json { emit_step("Extracting data session..."); emit_progress(91.0); }
     data::extract_data_session(&opts.device, &data_dir, false, opts.debug)?;
-    if opts.progress_json { emit_progress(90.0); }
+    if opts.progress_json { emit_progress(95.0); }
 
     std::fs::create_dir_all(&meta_dir)?;
     write_disc_json(info, output_dir)?;

@@ -40,7 +40,7 @@ fn collect_files(
                 .unwrap_or_else(|_| path.to_string_lossy().to_string());
 
             // Skip the manifest itself
-            if rel == "checksums.json" { continue; }
+            if rel == "checksums.json" || rel == "metadata/checksums.json" { continue; }
 
             let (sha256, size) = hash_file(path.to_str().unwrap_or(""))?;
             out.insert(rel, FileChecksum { sha256, size_bytes: size });
@@ -74,12 +74,14 @@ pub fn write_checksums(manifest: &ChecksumManifest, dir: &str) -> Result<(), Err
     Ok(())
 }
 
-/// Verify all files in `dir` against an existing `checksums.json`.
-/// Returns (passed, failed) counts; prints failures to stderr.
-pub fn verify_checksums(dir: &str) -> Result<VerifyResult, Error> {
-    let manifest_path = format!("{}/checksums.json", dir);
+/// Verify against `<manifest_dir>/checksums.json`, resolving the manifest's relative
+/// paths against `base_dir`. Archive rips keep the manifest in `metadata/` but its
+/// keys are relative to the rip's root folder.
+pub fn verify_manifest(manifest_dir: &str, base_dir: &str) -> Result<VerifyResult, Error> {
+    let dir = base_dir;
+    let manifest_path = format!("{}/checksums.json", manifest_dir);
     let json = std::fs::read_to_string(&manifest_path).map_err(|_| {
-        Error::validation(format!("No checksums.json found in {}", dir))
+        Error::validation(format!("No checksums.json found in {}", manifest_dir))
     })?;
 
     let manifest: ChecksumManifest = serde_json::from_str(&json)?;
