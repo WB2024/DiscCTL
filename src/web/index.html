@@ -689,6 +689,9 @@ function openMbSearch() {
     $$(".ms-item.sel", list).forEach(x => x.classList.remove("sel")); el?.classList.add("sel");
     const box = q(".ms-detail");
     box.innerHTML = `<div class="muted">Loading release…</div>`;
+    // MusicBrainz is rate limited: when clicking quickly through results, only look up where we stop.
+    await new Promise(r => setTimeout(r, 350));
+    if (selected !== id) return;
     const p = new URLSearchParams({ release: id, tracks: MB.tracks });
     if (MB.discid) p.set("discid", MB.discid);
     try {

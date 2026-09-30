@@ -1,9 +1,90 @@
-use std::io::Read;
+use std::{
+    io::Read,
+    sync::Mutex,
+    time::{Duration, Instant},
+};
 use serde::{Deserialize, Serialize};
 use crate::error::Error;
 
 const MB_API: &str = "https://musicbrainz.org/ws/2";
-const USER_AGENT: &str = "RustyDisc/0.1 ( https://github.com/WB2024/DiscCTL )";
+const USER_AGENT: &str = concat!("RustyDisc/", env!("CARGO_PKG_VERSION"), " ( https://github.com/WB2024/DiscCTL )");
+
+// ── Rate limiting ─────────────────────────────────────────────────────────────
+//
+// MusicBrainz allows an average of one request per second per client and answers
+// 503 to clients that go faster. Every call to the MusicBrainz API (not the Cover Art
+// Archive) goes through `mb_call`, which spaces requests out, queueing concurrent
+// callers, and backs off and retries when the server says to slow down.
+
+/// Minimum gap between requests; a little over the 1 request/second limit.
+const MIN_INTERVAL: Duration = Duration::from_millis(1100);
+/// Longest a caller will queue for a slot before giving up (keeps the web UI responsive).
+const MAX_QUEUE_WAIT: Duration = Duration::from_secs(10);
+/// Retries after a 429/503 response.
+const MAX_RETRIES: u32 = 3;
+
+struct Limiter {
+    next_slot: Mutex<Instant>,
+    interval: Duration,
+}
+
+impl Limiter {
+    const fn new(interval: Duration, now: Instant) -> Self {
+        Limiter { next_slot: Mutex::new(now), interval }
+    }
+
+    /// Claim the next request slot and return how long to wait before using it, or `None`
+    /// if the queue is already longer than `max_wait` (no slot is claimed then).
+    fn reserve(&self, max_wait: Duration) -> Option<Duration> {
+        let mut next = self.next_slot.lock().unwrap_or_else(|e| e.into_inner());
+        let now = Instant::now();
+        let start = (*next).max(now);
+        let wait = start - now;
+        if wait > max_wait {
+            return None;
+        }
+        *next = start + self.interval;
+        Some(wait)
+    }
+}
+
+static LIMITER: std::sync::LazyLock<Limiter> =
+    std::sync::LazyLock::new(|| Limiter::new(MIN_INTERVAL, Instant::now()));
+
+/// How long to back off after the server asked us to slow down.
+fn retry_delay(retry_after: Option<&str>, attempt: u32) -> Duration {
+    let secs = retry_after
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .unwrap_or(2u64 << attempt.min(4)); // 2s, 4s, 8s, ...
+    Duration::from_secs(secs.clamp(1, 30))
+}
+
+/// Make a MusicBrainz API request politely. `build` is called once per attempt.
+fn mb_call(build: impl Fn() -> ureq::Request) -> Result<ureq::Response, ureq::Error> {
+    let mut attempt = 0;
+    loop {
+        match LIMITER.reserve(MAX_QUEUE_WAIT) {
+            Some(wait) if !wait.is_zero() => std::thread::sleep(wait),
+            Some(_) => {}
+            None => {
+                return Err(ureq::Error::Status(
+                    503,
+                    ureq::Response::new(503, "Busy", "too many queued MusicBrainz requests")
+                        .expect("static response"),
+                ));
+            }
+        }
+        match build().call() {
+            Err(ureq::Error::Status(code @ (429 | 503), resp)) if attempt < MAX_RETRIES => {
+                let delay = retry_delay(resp.header("Retry-After"), attempt);
+                eprintln!("MusicBrainz asked us to slow down (HTTP {code}); waiting {}s before retrying", delay.as_secs());
+                std::thread::sleep(delay);
+                attempt += 1;
+            }
+            other => return other,
+        }
+    }
+}
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -153,9 +234,7 @@ pub fn lookup(discid: &str, debug: bool) -> Result<Option<ReleaseInfo>, Error> {
 
     if debug { eprintln!("MusicBrainz lookup: {}", url); }
 
-    let response = ureq::get(&url)
-        .set("User-Agent", USER_AGENT)
-        .call();
+    let response = mb_call(|| ureq::get(&url).set("User-Agent", USER_AGENT));
 
     match response {
         Err(ureq::Error::Status(404, _)) => {
@@ -249,10 +328,13 @@ pub fn lookup_release(
     let url = format!("{}/release/{}?inc=recordings+artist-credits+discids&fmt=json", MB_API, mbid);
     if debug { eprintln!("MusicBrainz release lookup: {}", url); }
 
-    let release: MbRelease = match ureq::get(&url).set("User-Agent", USER_AGENT).call() {
+    let release: MbRelease = match mb_call(|| ureq::get(&url).set("User-Agent", USER_AGENT)) {
         Ok(resp) => resp.into_json().map_err(|e| Error::backend(format!("MusicBrainz response parse error: {}", e)))?,
         Err(ureq::Error::Status(404, _)) => {
             return Err(Error::validation(format!("MusicBrainz has no release with ID {}", mbid)));
+        }
+        Err(ureq::Error::Status(429 | 503, _)) => {
+            return Err(Error::backend("MusicBrainz is busy or rate limiting requests — try again in a few seconds"));
         }
         Err(ureq::Error::Status(code, _)) => {
             return Err(Error::backend(format!("MusicBrainz returned HTTP {} for release {}", code, mbid)));
@@ -435,18 +517,21 @@ pub fn search_releases(q: &SearchQuery, debug: bool) -> Result<SearchResults, Er
     };
     if debug { eprintln!("MusicBrainz search: {}", query); }
 
-    let resp = ureq::get(&format!("{}/release", MB_API))
-        .set("User-Agent", USER_AGENT)
-        .query("query", &query)
-        .query("fmt", "json")
-        .query("limit", "20")
-        .query("offset", &q.offset.to_string())
-        .call();
+    let search_url = format!("{}/release", MB_API);
+    let offset = q.offset.to_string();
+    let resp = mb_call(|| {
+        ureq::get(&search_url)
+            .set("User-Agent", USER_AGENT)
+            .query("query", &query)
+            .query("fmt", "json")
+            .query("limit", "20")
+            .query("offset", &offset)
+    });
 
     let parsed: MbSearchResponse = match resp {
         Ok(r) => r.into_json().map_err(|e| Error::backend(format!("MusicBrainz response parse error: {}", e)))?,
-        Err(ureq::Error::Status(503, _)) => {
-            return Err(Error::backend("MusicBrainz is rate limiting requests — wait a second and try again"));
+        Err(ureq::Error::Status(429 | 503, _)) => {
+            return Err(Error::backend("MusicBrainz is busy or rate limiting requests — wait a few seconds and try again"));
         }
         Err(ureq::Error::Status(code, _)) => {
             return Err(Error::backend(format!("MusicBrainz returned HTTP {}", code)));
@@ -612,5 +697,55 @@ mod tests {
         println!("{} results", r.count);
         for h in r.releases.iter().take(5) { println!("{} — {} [{}] {:?} {:?}", h.title, h.artist, h.format, h.disc_track_counts, h.year); }
         assert!(!r.releases.is_empty());
+    }
+
+    #[test]
+    fn limiter_spaces_requests_and_refuses_long_queues() {
+        let l = Limiter::new(Duration::from_millis(200), Instant::now());
+        let first = l.reserve(Duration::from_secs(5)).unwrap();
+        let second = l.reserve(Duration::from_secs(5)).unwrap();
+        let third = l.reserve(Duration::from_secs(5)).unwrap();
+        assert!(first < Duration::from_millis(20), "first request goes straight away");
+        assert!(second >= Duration::from_millis(150) && second <= Duration::from_millis(210), "{second:?}");
+        assert!(third >= Duration::from_millis(350) && third <= Duration::from_millis(410), "{third:?}");
+        // A queue longer than the caller will accept is refused without claiming a slot.
+        assert!(l.reserve(Duration::from_millis(100)).is_none());
+        let fourth = l.reserve(Duration::from_secs(5)).unwrap();
+        assert!(fourth >= Duration::from_millis(550), "{fourth:?}");
+    }
+
+    #[test]
+    fn limiter_recovers_after_idle_time() {
+        let l = Limiter::new(Duration::from_millis(50), Instant::now());
+        l.reserve(Duration::from_secs(1)).unwrap();
+        std::thread::sleep(Duration::from_millis(80));
+        assert!(l.reserve(Duration::from_secs(1)).unwrap() < Duration::from_millis(10));
+    }
+
+    #[test]
+    fn retry_delay_honours_retry_after_and_backs_off() {
+        assert_eq!(retry_delay(Some("5"), 0), Duration::from_secs(5));
+        assert_eq!(retry_delay(Some(" 3 "), 2), Duration::from_secs(3));
+        assert_eq!(retry_delay(Some("9999"), 0), Duration::from_secs(30)); // capped
+        assert_eq!(retry_delay(None, 0), Duration::from_secs(2));
+        assert_eq!(retry_delay(None, 1), Duration::from_secs(4));
+        assert_eq!(retry_delay(None, 2), Duration::from_secs(8));
+        assert_eq!(retry_delay(Some("soon"), 1), Duration::from_secs(4)); // unparsable → backoff
+    }
+
+    /// Fires several real requests at once; they must be spaced out, not rejected.
+    /// Run with `cargo test -- --ignored`.
+    #[test]
+    #[ignore]
+    fn live_burst_is_throttled() {
+        let start = Instant::now();
+        let handles: Vec<_> = (0..4).map(|_| std::thread::spawn(|| {
+            lookup_release("bc8d517f-6ce0-4e45-b6d8-af0f29cdd1ea", None, None, false).is_ok()
+        })).collect();
+        let ok = handles.into_iter().map(|h| h.join().unwrap()).filter(|&b| b).count();
+        let took = start.elapsed();
+        println!("{ok}/4 ok in {took:?}");
+        assert_eq!(ok, 4);
+        assert!(took >= Duration::from_millis(3200), "4 requests must take >= 3 intervals, took {took:?}");
     }
 }

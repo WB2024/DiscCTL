@@ -177,6 +177,7 @@ Format constraints are enforced **before** any hardware is touched, so you get a
 - **MusicBrainz metadata** — computes the MusicBrainz DiscID from the TOC and queries the MusicBrainz API to fetch album title, artist, release year, and per-track titles and recording IDs; embedded as tags in every encoded file
 - **Cover art** — downloads the front cover image from the [Cover Art Archive](https://coverartarchive.org) and saves it as `cover.jpg` (or `cover.png`) in the output directory; the image is also embedded directly into each audio file
 - **Auto-named output folder** — `--dir` creates `Artist - Album (Year)/` automatically from metadata; no need to name it yourself
+- **Polite to MusicBrainz** — every API call is spaced to stay under MusicBrainz's 1 request/second limit (concurrent requests queue rather than fail), and 429/503 responses are retried with back-off, honouring `Retry-After`
 - **Manual release override** — if the DiscID isn't matched (or matches the wrong edition), pass `--mb-release <id or URL>`, or in the web UI paste it or search MusicBrainz with the built-in **Find…** browser and preview the release first
 - **CD-Text fallback** — if the disc is not in MusicBrainz, CD-Text is read via cdrdao and used for tags instead
 - **Blue Book session-aware ripping** — extracts audio and data sessions independently into `audio/` and `data/` subdirectories
