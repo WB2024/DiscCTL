@@ -1539,8 +1539,9 @@ async function openRip(name) {
           <div class="muted mono" style="margin:6px 0">${esc(d.name)}</div>
           <div class="row"><span class="badge">${d.audio_files} audio files</span><span class="badge">${fmtBytes(d.total_bytes)}</span>
             ${d.archive ? `<span class="badge accent">archive</span>` : ""}${d.has_data ? `<span class="badge">data session</span>` : ""}</div>
+          ${d.archive ? "" : `<div class="muted" style="margin-top:8px;font-size:13px">This rip has no checksums yet (they're made by archive mode). <b>Create checksums</b> records a SHA-256 of every file now, so you can verify the rip later.</div>`}
           <div class="row" style="margin-top:12px">
-            <button class="btn primary" id="verify" ${d.archive ? "" : "disabled title='Only archive-mode rips have checksums'"}>Verify checksums</button>
+            <button class="btn primary" id="verify">${d.archive ? "Verify checksums" : "Create checksums"}</button>
             <button class="btn" id="lib-cover-pick">${d.cover ? "Change cover…" : "Add cover art…"}</button>
             <button class="btn" id="lib-edit-album">Edit album tags</button>
             <input type="file" id="lib-cover-file" accept="image/jpeg,image/png" class="hidden">
@@ -1566,6 +1567,12 @@ async function openRip(name) {
     wireRipEditing(name, d);
     if (audio.length) wireQuality(name);
     $("#verify").onclick = async () => {
+      if (!d.archive) {
+        if (!confirmBox("Record a SHA-256 checksum of every file in this rip now?\n\nVerifying later will then flag any file that has changed.")) return;
+        try { const r = await api("/api/library/" + encodeURIComponent(name) + "/checksums", { body: {} }); toast(`Checksums created for ${r.files} files`, "ok", 4000); openRip(name); }
+        catch (e) { toast(e.message, "err", 8000); }
+        return;
+      }
       try {
         const job = await api("/api/jobs/verify", { body: { name } });
         jobPanel($("#verify-job"), job.id, { onEnd: refreshJobs });

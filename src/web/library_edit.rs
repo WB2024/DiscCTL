@@ -20,6 +20,35 @@ use crate::{
 
 pub const MAX_IMAGE: usize = 25 * 1024 * 1024;
 
+fn manifest_path(dir: &Path) -> Option<PathBuf> {
+    ["metadata/checksums.json", "checksums.json"].iter().map(|f| dir.join(f)).find(|p| p.is_file())
+}
+
+/// After the audio files are changed (tags, cover, ReplayGain) a rip's saved checksums have to be
+/// brought up to date, or "Verify checksums" would report the edit as damage.
+pub fn refresh_manifest(dir: &Path) {
+    use crate::rip::metadata;
+    let Some(path) = manifest_path(dir) else { return };
+    if let (Ok(m), Some(parent)) = (metadata::generate_checksums(&dir.to_string_lossy()), path.parent()) {
+        let _ = metadata::write_checksums(&m, &parent.to_string_lossy());
+    }
+}
+
+/// Create (or refresh) the SHA-256 checksums of a rip that was made without archive mode, so it can be verified later.
+pub async fn create_checksums(State(st): S, UrlPath(name): UrlPath<String>) -> ApiResult<Json<Value>> {
+    let dir = rip_dir(&st, &name)?;
+    let n = tokio::task::spawn_blocking(move || -> Result<usize, Error> {
+        use crate::rip::metadata;
+        let target = manifest_path(&dir).and_then(|p| p.parent().map(|d| d.to_path_buf())).unwrap_or_else(|| dir.clone());
+        let m = metadata::generate_checksums(&dir.to_string_lossy())?;
+        metadata::write_checksums(&m, &target.to_string_lossy())?;
+        Ok(m.files.len())
+    })
+    .await
+    .map_err(|e| Error::backend(e.to_string()))??;
+    Ok(Json(json!({"files": n})))
+}
+
 fn image_of(body: &Bytes) -> ApiResult<&'static str> {
     if body.is_empty() {
         return Err(ApiError::bad("No image was sent"));
@@ -152,12 +181,15 @@ pub async fn save_tags(State(st): S, UrlPath(name): UrlPath<String>, Json(req): 
         jobs.push((e.file, p, Edit { set: e.set, raw: e.raw }));
     }
     let results = tokio::task::spawn_blocking(move || {
-        jobs.into_iter()
+        let dir2 = dir.clone();
+        let out: Vec<Value> = jobs.into_iter()
             .map(|(file, p, edit)| match tagedit::apply(&p, &edit) {
                 Ok(()) => json!({"file": file, "ok": true}),
                 Err(e) => json!({"file": file, "ok": false, "error": e}),
             })
-            .collect::<Vec<_>>()
+            .collect();
+        refresh_manifest(&dir2);
+        out
     })
     .await
     .map_err(|e| Error::backend(e.to_string()))?;
@@ -212,6 +244,7 @@ pub async fn set_cover(State(st): S, UrlPath(name): UrlPath<String>, Query(q): Q
                 }
             }
         }
+        refresh_manifest(&dir);
         json!({"saved": saved, "embedded": embedded, "failed": failed})
     })
     .await

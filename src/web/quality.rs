@@ -119,6 +119,9 @@ pub async fn loudness(State(st): S, UrlPath(name): UrlPath<String>, Json(req): J
                 }
             }
         }
+        if written > 0 {
+            super::library_edit::refresh_manifest(&dir);
+        }
         let rows: Vec<Value> = files
             .iter()
             .zip(&tracks)

@@ -242,6 +242,7 @@ pub async fn serve(cfg: Config, bind: SocketAddr) -> Result<(), Error> {
         .route("/api/browse", get(browse))
         .route("/api/library", get(library))
         .route("/api/library/{name}", get(library_entry))
+        .route("/api/library/{name}/checksums", post(library_edit::create_checksums))
         .route("/api/library/{name}/quality", get(quality::facts))
         .route("/api/library/{name}/quality/integrity", post(quality::integrity))
         .route("/api/library/{name}/quality/loudness", post(quality::loudness))
