@@ -433,7 +433,9 @@ pre.json { background: var(--bg); border: 1px solid var(--line); border-radius: 
 
       <div class="card">
         <h2>2 · How to import</h2>
-        <div class="grid2">
+        <label class="field" style="max-width:460px;margin-bottom:14px">Import with
+          <select id="imp-target"><option value="rustydisc">RustyDisc — filed by your naming script</option><option value="lidarr">Lidarr — it matches, names and files them</option></select></label>
+        <div class="grid2" id="imp-rd-opts">
           <div style="display:flex;flex-direction:column;gap:12px">
             <label class="field">Files go into the library by
               <select id="imp-mode"><option value="move">Moving them (the rip folder is emptied)</option><option value="copy">Copying them (the rip stays)</option><option value="hardlink">Hard links (the rip stays, no extra space)</option></select></label>
@@ -450,6 +452,10 @@ pre.json { background: var(--bg); border: 1px solid var(--line); border-radius: 
 
       <div class="card">
         <h2>3 · Plan</h2>
+        <div class="grid2 hidden" id="imp-ld-opts" style="margin-bottom:12px">
+          <label class="field">Files go into Lidarr by<select id="imp-ld-mode"><option value="move">Moving them (the rip folder is emptied)</option><option value="copy">Copying them (the rip stays)</option></select></label>
+          <label class="check" style="align-self:flex-end"><input type="checkbox" id="imp-ld-delete"><span>Delete whatever is left in the rip folder afterwards<small>only when every file was imported</small></span></label>
+        </div>
         <div id="imp-plan"><span class="muted">Choose a rip to see where its files will go.</span></div>
       </div>
 
@@ -541,6 +547,27 @@ pre.json { background: var(--bg); border: 1px solid var(--line); border-radius: 
             <label class="check"><input type="checkbox" id="set-noar"><span>Skip the AccurateRip check</span></label>
           </div>
         </div>
+      </div>
+
+      <div class="card" id="lidarr-card">
+        <h2>Lidarr</h2>
+        <p class="muted" style="margin-top:0">Import can hand a rip to Lidarr instead. The rip already carries its MusicBrainz IDs, so Lidarr is told exactly which album it is; the artist and album are added (unmonitored, nothing gets searched or downloaded) if Lidarr doesn't have them.</p>
+        <div class="grid2">
+          <label class="field">Lidarr address<input type="text" id="ld-url" spellcheck="false" placeholder="http://192.168.1.110:8686"></label>
+          <label class="field">API key <small>Lidarr → Settings → General</small><input type="password" id="ld-key" autocomplete="new-password" spellcheck="false"></label>
+        </div>
+        <div class="row" style="margin-top:10px"><button class="btn small" id="ld-test">Test connection</button><span class="muted grow" id="ld-msg"></span><button class="btn small danger hidden" id="ld-key-remove">Remove saved key</button></div>
+        <div class="grid2" style="margin-top:14px">
+          <label class="field">New artists go in<small>A Lidarr root folder.</small><select id="ld-root"><option value="">Lidarr's first root folder</option></select></label>
+          <label class="field">Import files by<select id="ld-mode"><option value="move">Moving them (the rip folder is emptied)</option><option value="copy">Copying them (the rip stays)</option></select></label>
+          <label class="field">Quality profile for new artists<select id="ld-quality"><option value="0">The root folder's default</option></select></label>
+          <label class="field">Metadata profile for new artists<select id="ld-metadata"><option value="0">The root folder's default</option></select></label>
+        </div>
+        <div class="grid2" style="margin-top:14px">
+          <label class="field">The rips folder, as RustyDisc sees it<small>Only needed if Lidarr sees the same folder under another path.</small><input type="text" id="ld-from" spellcheck="false" placeholder="/rips"></label>
+          <label class="field">…and as Lidarr sees it<input type="text" id="ld-to" spellcheck="false" placeholder="/data/CD Rips"></label>
+        </div>
+        <label class="field" style="margin-top:14px;max-width:420px">Import uses by default<select id="ld-target"><option value="rustydisc">RustyDisc (naming script)</option><option value="lidarr">Lidarr</option></select></label>
       </div>
 
       <div class="card" id="library-card">
@@ -1900,7 +1927,10 @@ async function loadImport() {
     $("#imp-conflict").innerHTML = i.conflicts.map(c => `<option value="${c.id}">${esc(c.label)}</option>`).join("");
     $("#imp-mode").value = i.defaults.mode; $("#imp-conflict").value = i.defaults.conflict;
     $("#imp-cover").checked = i.defaults.include_cover; $("#imp-other").checked = i.defaults.include_other; $("#imp-delete").checked = i.defaults.delete_leftovers;
-    ["imp-mode", "imp-conflict", "imp-cover", "imp-other", "imp-delete"].forEach(id => $("#" + id).onchange = replanImport);
+    $("#imp-target").value = (typeof SET !== "undefined" && SET?.import_target) || "rustydisc";
+    $("#imp-ld-mode").value = SET?.lidarr_mode || "move"; $("#imp-ld-delete").checked = i.defaults.delete_leftovers;
+    ["imp-mode", "imp-conflict", "imp-cover", "imp-other", "imp-delete", "imp-target", "imp-ld-mode", "imp-ld-delete"].forEach(id => $("#" + id).onchange = () => { syncImportTarget(); replanImport(); });
+    syncImportTarget();
     $("#imp-refresh").onclick = loadImport;
     $("#imp-go").onclick = startImport;
   }
@@ -1927,6 +1957,14 @@ function renderImportList() {
   });
 }
 
+const viaLidarr = () => $("#imp-target").value === "lidarr";
+function syncImportTarget() {
+  const ld = viaLidarr();
+  $("#imp-rd-opts").classList.toggle("hidden", ld); $("#imp-ld-opts").classList.toggle("hidden", !ld);
+  $("#imp-go").textContent = ld ? "Import with Lidarr" : "Import to library";
+}
+IMP.matches = {};
+
 function impOptions() {
   return { mode: $("#imp-mode").value, conflict: $("#imp-conflict").value, include_cover: $("#imp-cover").checked, include_other: $("#imp-other").checked, delete_leftovers: $("#imp-delete").checked };
 }
@@ -1936,15 +1974,38 @@ function replanImportSoon() { clearTimeout(IMP.timer); IMP.timer = setTimeout(do
 async function doImportPlan() {
   const box = $("#imp-plan"), seq = ++IMP.seq;
   if (!IMP.selected.size) { IMP.plans = null; box.innerHTML = `<span class="muted">Choose a rip to see where its files will go.</span>`; $("#imp-hint").textContent = ""; return; }
-  if (!IMP.info.library) { box.innerHTML = `<span class="muted">Set the library folder in Settings first.</span>`; return; }
+  if (!IMP.info.library && !viaLidarr()) { box.innerHTML = `<span class="muted">Set the library folder in Settings first.</span>`; return; }
   box.innerHTML = `<span class="muted">Working out where everything goes…</span>`;
   try {
+    if (viaLidarr()) {
+      const r = await api("/api/import/lidarr/plan", { body: { rips: [...IMP.selected], matches: IMP.matches } });
+      if (seq !== IMP.seq) return;
+      IMP.plans = r.plans; box.innerHTML = r.plans.map((p, i) => renderLidarrPlan(p, [...IMP.selected][i])).join("");
+      $$(".ld-recheck", box).forEach(b => b.onclick = () => { const name = b.dataset.rip; IMP.matches[name] = $(`input[data-rip="${CSS.escape(name)}"]`, box).value.trim(); replanImportSoon(); });
+      const n = r.plans.reduce((a, p) => a + p.matched, 0);
+      $("#imp-hint").textContent = n ? `Lidarr will import ${n} file${n === 1 ? "" : "s"}` : "Lidarr has nothing to import yet";
+      return;
+    }
     const r = await api("/api/import/plan", { body: { rips: [...IMP.selected], options: impOptions() } });
     if (seq !== IMP.seq) return;
     IMP.plans = r.plans; box.innerHTML = r.plans.map(renderImportPlan).join("");
     const n = r.plans.reduce((a, p) => a + p.to_import + p.replacing, 0);
     $("#imp-hint").textContent = n ? `${n} file${n === 1 ? "" : "s"} to ${IMP.info.library}` : "Nothing new to import";
   } catch (e) { if (seq === IMP.seq) { IMP.plans = null; box.innerHTML = `<div class="notice err">${esc(e.message)}</div>`; } }
+}
+
+function renderLidarrPlan(p, name) {
+  const m = p.match, id = p.identity;
+  const head = m
+    ? `<div style="font-size:17px;font-weight:700">${esc(m.album)} <span class="muted" style="font-weight:400">${esc(m.artist)}</span></div>
+       <div style="margin-top:4px">${m.artist_in_lidarr ? `<span class="badge ok">artist in Lidarr</span>` : `<span class="badge">artist will be added</span>`} ${m.album_in_lidarr ? `<span class="badge ok">album in Lidarr</span>` : `<span class="badge">album will be added</span>`} <span class="muted">matched by ${esc(m.how)}</span></div>
+       <div class="muted" style="margin-top:6px">Lidarr matches ${p.matched} of ${p.matched + p.unmatched} file${p.matched + p.unmatched === 1 ? "" : "s"}${p.unmatched ? ` — the rest stay in the rip folder` : ""}${!m.artist_in_lidarr ? " (files are matched once the artist has been added)" : ""}</div>`
+    : `<div style="font-size:17px;font-weight:700">${esc(id.album || name)} <span class="muted" style="font-weight:400">${esc(id.artist || "")}</span></div><div class="notice err" style="margin-top:8px">${esc(p.error || "Lidarr couldn't identify this rip.")}</div>`;
+  const warn = noticeList("Heads up", p.warnings.map(w => `<li>${esc(w)}</li>`), "warn");
+  const rows = p.files.map(f => `<div class="tfile">${f.rejections.length ? "⚠️" : "🎵"} <span class="mono">${esc(f.name)}</span> <span class="muted">${f.track ? "→ " + esc(f.track) : ""}${f.quality ? " · " + esc(f.quality) : ""}${f.rejections.length ? " — " + esc(f.rejections.join("; ")) : ""}</span></div>`).join("");
+  const files = p.files.length ? `<details style="margin-top:8px"><summary style="cursor:pointer"><b>How Lidarr matched the files</b> <span class="muted">(${p.files.length})</span></summary><div style="margin-top:6px">${rows}</div></details>` : "";
+  const fix = `<div class="row" style="margin-top:10px"><input type="text" data-rip="${esc(name)}" value="${esc(IMP.matches[name] || "")}" placeholder="Wrong album? Paste its MusicBrainz release or release group link" spellcheck="false" style="flex:1"><button class="btn small ld-recheck" data-rip="${esc(name)}">Use this</button></div>`;
+  return `<div class="notice" style="margin-bottom:12px">${head}${warn}${files}${fix}</div>`;
 }
 
 function renderImportPlan(p) {
@@ -1962,6 +2023,17 @@ async function startImport() {
   if (!IMP.selected.size) return toast("Choose a rip first", "err");
   if (!IMP.plans) return toast("Wait for the plan", "err");
   const dry = $("#imp-dry").checked, o = impOptions();
+  if (viaLidarr()) {
+    const good = IMP.plans.filter(p => p.match);
+    if (!good.length) return toast("Lidarr couldn't identify any of these rips", "err");
+    if (!dry && !confirmBox(`Ask Lidarr to import ${good.length} album${good.length === 1 ? "" : "s"}?${IMP.plans.some(p => p.will_add_artist) ? "\n\nArtists Lidarr doesn't have yet will be added (unmonitored)." : ""}\n\nLidarr names and files them by its own rules.`)) return;
+    try {
+      const job = await api("/api/jobs/import-lidarr", { body: { rips: [...IMP.selected], matches: IMP.matches, mode: $("#imp-ld-mode").value, delete_leftovers: $("#imp-ld-delete").checked, dry_run: dry } });
+      jobPanel($("#imp-job"), job.id, { onEnd: () => { loadImport(); } });
+      refreshJobs();
+    } catch (e) { toast(e.message, "err", 9000); }
+    return;
+  }
   const n = IMP.plans.reduce((a, p) => a + p.to_import + p.replacing, 0);
   if (!dry) {
     if (!n) return toast("Nothing new to import", "info");
@@ -2018,6 +2090,7 @@ function renderSettings() {
   $("#set-stick-preset").value = SET.stick_preset || "artist-album";
   renderConvertCache();
   renderLibrarySettings();
+  renderLidarrSettings();
   $("#fanart-key").value = "";
   $("#fanart-key").placeholder = SET.fanart_api_key_set ? `Key saved (${SET.fanart_api_key_hint}) — paste a new one to replace it` : "Paste your fanart.tv API key";
   $("#fanart-remove").classList.toggle("hidden", !SET.fanart_api_key_set);
@@ -2084,6 +2157,34 @@ async function previewScript() {
   } catch (e) { box.textContent = e.message; }
 }
 
+function fillSelect(sel, list, label, current, zero) {
+  const first = zero ? `<option value="${zero[0]}">${esc(zero[1])}</option>` : "";
+  sel.innerHTML = first + list.map(x => `<option value="${esc(String(label === "path" ? x.path : x.id))}">${esc(label === "path" ? x.path : x.name)}</option>`).join("");
+  if (current !== undefined && [...sel.options].some(o => o.value === String(current))) sel.value = String(current);
+  else if (current) { const o = document.createElement("option"); o.value = current; o.textContent = current + " (saved)"; sel.append(o); sel.value = current; }
+}
+function renderLidarrSettings() {
+  $("#ld-url").value = SET.lidarr_url || ""; $("#ld-key").value = "";
+  $("#ld-key").placeholder = SET.lidarr_api_key_set ? `Key saved (${SET.lidarr_api_key_hint}) — paste a new one to replace it` : "Paste Lidarr's API key";
+  $("#ld-key-remove").classList.toggle("hidden", !SET.lidarr_api_key_set);
+  $("#ld-mode").value = SET.lidarr_mode; $("#ld-from").value = SET.lidarr_path_from || ""; $("#ld-to").value = SET.lidarr_path_to || "";
+  $("#ld-target").value = SET.import_target;
+  for (const [id, cur, zero] of [["ld-root", SET.lidarr_root_folder, ["", "Lidarr's first root folder"]], ["ld-quality", SET.lidarr_quality_profile, ["0", "The root folder's default"]], ["ld-metadata", SET.lidarr_metadata_profile, ["0", "The root folder's default"]]]) {
+    const sel = $("#" + id); if (cur && ![...sel.options].some(o => o.value === String(cur))) { const o = document.createElement("option"); o.value = cur; o.textContent = cur + " (saved)"; sel.append(o); } sel.value = cur ? String(cur) : zero[0];
+  }
+  $("#ld-test").onclick = async () => {
+    const msg = $("#ld-msg"); msg.textContent = "Connecting…";
+    try {
+      const r = await api("/api/lidarr/test", { body: { url: $("#ld-url").value.trim(), api_key: $("#ld-key").value.trim() } });
+      msg.innerHTML = `<span class="ar-ok">✔</span> ${esc(r.app || "Lidarr")} ${esc(r.version || "")} — ${r.root_folders.length} root folder${r.root_folders.length === 1 ? "" : "s"}`;
+      fillSelect($("#ld-root"), r.root_folders, "path", SET.lidarr_root_folder, ["", "Lidarr's first root folder"]);
+      fillSelect($("#ld-quality"), r.quality_profiles, "id", SET.lidarr_quality_profile || 0, ["0", "The root folder's default"]);
+      fillSelect($("#ld-metadata"), r.metadata_profiles, "id", SET.lidarr_metadata_profile || 0, ["0", "The root folder's default"]);
+    } catch (e) { msg.innerHTML = `<span class="ar-bad">✖ ${esc(e.message)}</span>`; }
+  };
+  $("#ld-key-remove").onclick = () => { if (confirmBox("Remove the saved Lidarr API key?")) saveSettings({ lidarr_api_key: "" }); };
+}
+
 function renderConvertCache() {
   $$('input[name="cc-mode"]').forEach(r => { r.checked = r.value === SET.convert_cache_mode; r.onchange = syncConvertCache; });
   $("#cc-days").value = SET.convert_cache_days; $("#cc-max").value = SET.convert_cache_max_gb; $("#cc-dir").value = SET.convert_cache_dir || "";
@@ -2121,9 +2222,14 @@ async function saveSettings(extra = {}) {
     convert_cache_dir: $("#cc-dir").value.trim(),
     library_path: $("#lib-path").value.trim(), library_script: $("#lib-script").value,
     import_mode: $("#lib-mode").value, import_conflict: $("#lib-conflict").value,
+    lidarr_url: $("#ld-url").value.trim(), lidarr_root_folder: $("#ld-root").value, lidarr_mode: $("#ld-mode").value,
+    lidarr_quality_profile: +$("#ld-quality").value || 0, lidarr_metadata_profile: +$("#ld-metadata").value || 0,
+    lidarr_path_from: $("#ld-from").value.trim(), lidarr_path_to: $("#ld-to").value.trim(), import_target: $("#ld-target").value,
     import_cover: $("#lib-cover").checked, import_other: $("#lib-other").checked, import_delete_leftovers: $("#lib-delete").checked,
     ...extra,
   };
+  const typedLidarr = $("#ld-key").value.trim();
+  if (typedLidarr && !("lidarr_api_key" in extra)) body.lidarr_api_key = typedLidarr;
   const typed = $("#fanart-key").value.trim();
   if (typed && !("fanart_api_key" in extra)) body.fanart_api_key = typed;
   const st = $("#settings-status");

@@ -43,6 +43,22 @@ Import relies on the tags in the files, so ripping now writes everything MusicBr
 
 If MusicBrainz can't be reached the rip carries on with the basic tags. Rips made before this version have only the basic tags; the naming script's fallbacks apply for what's missing.
 
+## Importing through Lidarr
+
+If Lidarr manages your library, choose **Import with → Lidarr** (or make it the default in Settings). Since every rip carries its MusicBrainz release and release group IDs, Lidarr is told exactly which album it is; nothing is guessed. For each rip RustyDisc:
+
+1. Finds the album in Lidarr by its release group (asking MusicBrainz first if the rip only knows its release). Older rips without IDs are matched by name, and only when the match is exact.
+2. Adds the artist and album to Lidarr if they aren't there, **unmonitored**, so nothing is searched for or downloaded.
+3. Asks Lidarr how it matches each file to its tracks, and shows you that before you commit.
+4. Has Lidarr import the matched files, by moving or copying, with Lidarr's own naming, quality and rules. Unmatched files stay in the rip folder.
+5. Optionally deletes what is left in the rip folder, but only when every file was imported.
+
+Wrong album? Paste its MusicBrainz release or release group link under the plan and re-check.
+
+Set it up in **Settings → Lidarr**: the address, the API key (Lidarr → Settings → General), which root folder, quality profile and metadata profile new artists get (**Test connection** fills these lists in), and a **path mapping** if Lidarr sees the rips folder under a different path than RustyDisc does. If both containers mount the disk at the same place there is nothing to map. The key is stored on the server and never sent back to the browser.
+
+On the command line: `rustydisc import-lidarr --rip <dir> --url http://lidarr:8686` (key in `RUSTYDISC_LIDARR_KEY`), with `--plan`, `--dry-run`, `--mode move|copy`, `--match FOLDER=MBID` and `--delete-leftovers`.
+
 ## Docker
 
 The library folder must be writable inside the container. Simplest is to give RustyDisc the same view of your disk that your other tools have:

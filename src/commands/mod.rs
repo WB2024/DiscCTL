@@ -1,5 +1,6 @@
 pub mod burn;
 pub mod import;
+pub mod import_lidarr;
 pub mod info;
 pub mod plan;
 pub mod recover;

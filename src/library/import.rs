@@ -484,6 +484,27 @@ pub fn execute(rip: &Path, plan: &ImportPlan, opts: &ImportOptions, progress: &P
     Ok(summary)
 }
 
+/// Delete everything in a rip folder and the folder itself. Returns the number of files deleted
+/// and whether the folder is gone.
+pub fn remove_leftovers(rip: &Path) -> (usize, bool) {
+    fn walk(dir: &Path, n: &mut usize) {
+        let Ok(rd) = std::fs::read_dir(dir) else { return };
+        for e in rd.filter_map(|e| e.ok()) {
+            let p = e.path();
+            let is_link = std::fs::symlink_metadata(&p).map(|m| m.file_type().is_symlink()).unwrap_or(false);
+            if p.is_dir() && !is_link {
+                walk(&p, n);
+                let _ = std::fs::remove_dir(&p);
+            } else if std::fs::remove_file(&p).is_ok() {
+                *n += 1;
+            }
+        }
+    }
+    let mut n = 0;
+    walk(rip, &mut n);
+    (n, std::fs::remove_dir(rip).is_ok())
+}
+
 /// Has this rip been imported already? (`imported.json` is written by [`execute`].)
 pub fn imported_marker(rip: &Path) -> Option<serde_json::Value> {
     std::fs::read(rip.join(MARKER)).ok().and_then(|b| serde_json::from_slice(&b).ok())

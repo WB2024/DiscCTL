@@ -240,3 +240,108 @@ pub async fn start(State(st): S, Json(req): Json<StartReq>) -> ApiResult<Json<Va
 pub async fn default_script() -> Json<Value> {
     Json(json!({"script": script::DEFAULT_SCRIPT}))
 }
+
+// ── Lidarr ───────────────────────────────────────────────────────────────────
+
+use crate::library::lidarr::{self, Lidarr};
+
+fn lidarr_client(st: &AppState, url: Option<&str>, key: Option<&str>) -> ApiResult<Lidarr> {
+    let s = st.settings.get();
+    let url = url.filter(|u| !u.trim().is_empty()).map(|u| u.trim().trim_end_matches('/').to_string()).unwrap_or(s.lidarr_url.clone());
+    let api_key = key.filter(|k| !k.trim().is_empty()).map(|k| k.trim().to_string()).unwrap_or(s.lidarr_api_key.clone());
+    if url.is_empty() {
+        return Err(ApiError::bad("Enter Lidarr's address first"));
+    }
+    if api_key.is_empty() {
+        return Err(ApiError::bad("Enter Lidarr's API key first (Lidarr → Settings → General)"));
+    }
+    Ok(Lidarr {
+        url,
+        api_key,
+        root_folder: s.lidarr_root_folder,
+        quality_profile: Some(s.lidarr_quality_profile).filter(|p| *p > 0),
+        metadata_profile: Some(s.lidarr_metadata_profile).filter(|p| *p > 0),
+        path_from: s.lidarr_path_from,
+        path_to: s.lidarr_path_to,
+        mode: s.lidarr_mode,
+    })
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+pub struct LidarrTest {
+    url: String,
+    api_key: String,
+}
+
+/// Check the address and key, and list what Lidarr offers (root folders, profiles).
+pub async fn lidarr_test(State(st): S, Json(req): Json<LidarrTest>) -> ApiResult<Json<Value>> {
+    let l = lidarr_client(&st, Some(&req.url), Some(&req.api_key))?;
+    let out = tokio::task::spawn_blocking(move || l.test()).await.map_err(|e| Error::backend(e.to_string()))??;
+    Ok(Json(out))
+}
+
+#[derive(Deserialize)]
+pub struct LidarrPlanReq {
+    rips: Vec<String>,
+    /// rip folder name → a MusicBrainz ID or URL, for a wrong match
+    #[serde(default)]
+    matches: HashMap<String, String>,
+}
+
+pub async fn lidarr_plan(State(st): S, Json(req): Json<LidarrPlanReq>) -> ApiResult<Json<Value>> {
+    let l = lidarr_client(&st, None, None)?;
+    let paths = rip_paths(&st, &req.rips)?;
+    let names = req.rips.clone();
+    let matches = req.matches.clone();
+    let plans = tokio::task::spawn_blocking(move || -> Result<Vec<Value>, Error> {
+        paths.iter().zip(names.iter()).map(|(p, n)| Ok(serde_json::to_value(lidarr::plan(&l, p, matches.get(n).map(String::as_str))?)?)).collect()
+    })
+    .await
+    .map_err(|e| Error::backend(e.to_string()))??;
+    Ok(Json(json!({"plans": plans, "path_mapped": !st.settings.get().lidarr_path_from.is_empty()})))
+}
+
+#[derive(Deserialize)]
+pub struct LidarrStartReq {
+    rips: Vec<String>,
+    #[serde(default)]
+    matches: HashMap<String, String>,
+    #[serde(default)]
+    delete_leftovers: Option<bool>,
+    #[serde(default)]
+    mode: Option<String>,
+    #[serde(default)]
+    dry_run: bool,
+}
+
+pub async fn lidarr_start(State(st): S, Json(req): Json<LidarrStartReq>) -> ApiResult<Json<Value>> {
+    let l = lidarr_client(&st, None, None)?;
+    let paths = rip_paths(&st, &req.rips)?;
+    if st.jobs.all().iter().any(|j| j.kind == "import" && !j.status().is_terminal()) {
+        return Err(ApiError::bad("An import is already running"));
+    }
+    let s = st.settings.get();
+    let mode = req.mode.clone().unwrap_or(s.lidarr_mode.clone());
+    let mut a: Vec<String> = vec!["import-lidarr".into(), "--url".into(), l.url.clone(), "--progress-json".into(), "--mode".into(), mode];
+    for p in &paths {
+        a.extend(["--rip".into(), path_str(p)]);
+    }
+    if !l.root_folder.is_empty() { a.extend(["--root-folder".into(), l.root_folder.clone()]); }
+    if let Some(q) = l.quality_profile { a.extend(["--quality-profile".into(), q.to_string()]); }
+    if let Some(m) = l.metadata_profile { a.extend(["--metadata-profile".into(), m.to_string()]); }
+    if !l.path_from.is_empty() { a.extend(["--path-from".into(), l.path_from.clone(), "--path-to".into(), l.path_to.clone()]); }
+    for (name, id) in &req.matches {
+        if req.rips.contains(name) && !id.trim().is_empty() {
+            a.extend(["--match".into(), format!("{name}={}", id.trim())]);
+        }
+    }
+    if req.delete_leftovers.unwrap_or(s.import_delete_leftovers) { a.push("--delete-leftovers".into()); }
+    if req.dry_run { a.push("--dry-run".into()); }
+
+    let title = if req.rips.len() == 1 { format!("Import {} via Lidarr", req.rips[0]) } else { format!("Import {} albums via Lidarr", req.rips.len()) };
+    let job = start_job(&st, "import", &title, false)?;
+    // The API key travels in the environment, not on the command line.
+    super::spawn_cli_env(&st, job.clone(), a, None, vec![("RUSTYDISC_LIDARR_KEY".into(), l.api_key.clone())]);
+    Ok(Json(json!(job.summary())))
+}

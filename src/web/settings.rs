@@ -60,6 +60,24 @@ pub struct Settings {
     /// skip | replace | higher_quality | lower_quality | newer | keep_both
     pub import_conflict: String,
 
+    // Lidarr
+    pub lidarr_url: String,
+    /// Never sent back to the browser.
+    #[serde(default)]
+    pub lidarr_api_key: String,
+    /// Where new artists go; empty = Lidarr's first root folder.
+    pub lidarr_root_folder: String,
+    /// 0 = the root folder's default.
+    pub lidarr_quality_profile: u64,
+    pub lidarr_metadata_profile: u64,
+    /// A RustyDisc path prefix and what Lidarr calls the same place.
+    pub lidarr_path_from: String,
+    pub lidarr_path_to: String,
+    /// "move" or "copy"
+    pub lidarr_mode: String,
+    /// "rustydisc" (the naming script) or "lidarr": what Import uses by default.
+    pub import_target: String,
+
     // Optional login
     pub auth_user: String,
     /// Argon2 hash. Never sent to the browser.
@@ -90,6 +108,15 @@ impl Default for Settings {
             import_other: false,
             import_delete_leftovers: false,
             import_conflict: "skip".into(),
+            lidarr_url: String::new(),
+            lidarr_api_key: String::new(),
+            lidarr_root_folder: String::new(),
+            lidarr_quality_profile: 0,
+            lidarr_metadata_profile: 0,
+            lidarr_path_from: String::new(),
+            lidarr_path_to: String::new(),
+            lidarr_mode: "move".into(),
+            import_target: "rustydisc".into(),
             auth_user: String::new(),
             auth_password_hash: String::new(),
         }
@@ -153,6 +180,23 @@ impl Settings {
             }
             crate::library::script::check(&self.library_script).map_err(|e| format!("The naming script has a problem: {e}"))?;
         }
+        self.lidarr_url = self.lidarr_url.trim().trim_end_matches('/').to_string();
+        if !self.lidarr_url.is_empty() && !(self.lidarr_url.starts_with("http://") || self.lidarr_url.starts_with("https://")) {
+            return Err("The Lidarr address must start with http:// or https://".into());
+        }
+        self.lidarr_api_key = self.lidarr_api_key.trim().to_string();
+        if self.lidarr_api_key.len() > 200 || self.lidarr_api_key.chars().any(char::is_whitespace) {
+            return Err("That doesn't look like a Lidarr API key".into());
+        }
+        self.lidarr_root_folder = self.lidarr_root_folder.trim().to_string();
+        self.lidarr_path_from = self.lidarr_path_from.trim().trim_end_matches('/').to_string();
+        self.lidarr_path_to = self.lidarr_path_to.trim().trim_end_matches('/').to_string();
+        if self.lidarr_mode != "copy" {
+            self.lidarr_mode = "move".into();
+        }
+        if self.import_target != "lidarr" {
+            self.import_target = "rustydisc".into();
+        }
         self.fanart_api_key = self.fanart_api_key.trim().to_string();
         if self.fanart_api_key.len() > 200 || self.fanart_api_key.chars().any(char::is_whitespace) {
             return Err("That doesn't look like a fanart.tv API key".into());
@@ -176,6 +220,10 @@ impl Settings {
             o.remove("fanart_api_key");
             o.remove("auth_password_hash");
             o.remove("auth_user");
+            o.remove("lidarr_api_key");
+            let lk = &self.lidarr_api_key;
+            o.insert("lidarr_api_key_set".into(), serde_json::json!(!lk.is_empty()));
+            o.insert("lidarr_api_key_hint".into(), serde_json::json!(if lk.len() > 4 { format!("••••{}", &lk[lk.len() - 4..]) } else if lk.is_empty() { String::new() } else { "••••".into() }));
             let key = &self.fanart_api_key;
             o.insert("fanart_api_key_set".into(), serde_json::json!(!key.is_empty()));
             let hint = if key.len() > 4 { format!("••••{}", &key[key.len() - 4..]) } else if key.is_empty() { String::new() } else { "••••".into() };

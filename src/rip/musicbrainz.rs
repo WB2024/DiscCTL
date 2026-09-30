@@ -372,6 +372,15 @@ pub fn parse_release_id(input: &str) -> Result<String, Error> {
     }
 }
 
+/// Pull the ID out of any MusicBrainz URL or bare UUID (release group, artist, ...).
+pub fn parse_uuid(input: &str) -> Result<String, Error> {
+    let s = input.trim();
+    let candidate = s.rsplit('/').find(|p| !p.is_empty()).unwrap_or(s).split(['?', '#']).next().unwrap_or("").to_ascii_lowercase();
+    let b = candidate.as_bytes();
+    let ok = b.len() == 36 && [8usize, 13, 18, 23].iter().all(|&i| b[i] == b'-') && b.iter().enumerate().all(|(i, ch)| [8usize, 13, 18, 23].contains(&i) || ch.is_ascii_hexdigit());
+    if ok { Ok(candidate) } else { Err(Error::validation(format!("'{s}' doesn't contain a MusicBrainz ID"))) }
+}
+
 /// Fetch a specific release by MBID, for when the DiscID lookup finds nothing (or the
 /// wrong release).
 ///

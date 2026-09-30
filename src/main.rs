@@ -45,6 +45,8 @@ enum Cmd {
     Stick(commands::stick::StickArgs),
     /// Import ripped albums into the music library, named by a Picard naming script
     Import(commands::import::ImportArgs),
+    /// Hand ripped albums to Lidarr to import (adds the artist and album if needed)
+    ImportLidarr(commands::import_lidarr::ImportLidarrArgs),
 }
 
 fn main() {
@@ -60,6 +62,7 @@ fn main() {
         Cmd::Serve(args)    => commands::serve::run(args),
         Cmd::Stick(args)    => commands::stick::run(args),
         Cmd::Import(args)   => commands::import::run(args),
+        Cmd::ImportLidarr(args) => commands::import_lidarr::run(args),
     };
     if let Err(e) = result {
         let disc_err = e.to_disc_error();

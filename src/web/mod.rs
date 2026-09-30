@@ -208,6 +208,9 @@ pub async fn serve(cfg: Config, bind: SocketAddr) -> Result<(), Error> {
         .route("/api/import/plan", post(import::plan))
         .route("/api/import/preview", post(import::preview))
         .route("/api/import/default-script", get(import::default_script))
+        .route("/api/lidarr/test", post(import::lidarr_test))
+        .route("/api/import/lidarr/plan", post(import::lidarr_plan))
+        .route("/api/jobs/import-lidarr", post(import::lidarr_start))
         .route("/api/jobs/import", post(import::start))
         .route("/api/cache", get(cache::info))
         .route("/api/cache/clear", post(cache::clear))
@@ -533,6 +536,16 @@ struct SettingsUpdate {
     import_other: Option<bool>,
     import_delete_leftovers: Option<bool>,
     import_conflict: Option<String>,
+    /// Omit to keep the stored key; send "" to remove it.
+    lidarr_api_key: Option<String>,
+    lidarr_url: Option<String>,
+    lidarr_root_folder: Option<String>,
+    lidarr_quality_profile: Option<u64>,
+    lidarr_metadata_profile: Option<u64>,
+    lidarr_path_from: Option<String>,
+    lidarr_path_to: Option<String>,
+    lidarr_mode: Option<String>,
+    import_target: Option<String>,
 }
 
 async fn put_settings(State(st): S, Json(u): Json<SettingsUpdate>) -> ApiResult<Json<Value>> {
@@ -559,6 +572,15 @@ async fn put_settings(State(st): S, Json(u): Json<SettingsUpdate>) -> ApiResult<
         import_other: u.import_other.unwrap_or(current.import_other),
         import_delete_leftovers: u.import_delete_leftovers.unwrap_or(current.import_delete_leftovers),
         import_conflict: u.import_conflict.unwrap_or(current.import_conflict),
+        lidarr_url: u.lidarr_url.unwrap_or(current.lidarr_url),
+        lidarr_api_key: u.lidarr_api_key.unwrap_or(current.lidarr_api_key),
+        lidarr_root_folder: u.lidarr_root_folder.unwrap_or(current.lidarr_root_folder),
+        lidarr_quality_profile: u.lidarr_quality_profile.unwrap_or(current.lidarr_quality_profile),
+        lidarr_metadata_profile: u.lidarr_metadata_profile.unwrap_or(current.lidarr_metadata_profile),
+        lidarr_path_from: u.lidarr_path_from.unwrap_or(current.lidarr_path_from),
+        lidarr_path_to: u.lidarr_path_to.unwrap_or(current.lidarr_path_to),
+        lidarr_mode: u.lidarr_mode.unwrap_or(current.lidarr_mode),
+        import_target: u.import_target.unwrap_or(current.import_target),
         auth_user: current.auth_user,
         auth_password_hash: current.auth_password_hash,
     }
