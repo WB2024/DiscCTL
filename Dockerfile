@@ -3,6 +3,7 @@ FROM rust:1-slim-trixie AS build
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
+COPY userscripts ./userscripts
 RUN cargo build --release --locked
 
 # ── Runtime ──────────────────────────────────────────────────────────────────
