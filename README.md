@@ -7,7 +7,7 @@
 **Rip, burn and archive CDs and DVDs — and fill USB sticks — from your browser.**<br>
 Built in Rust for Linux. Runs headless in Docker, so the drive can live in a server and you drive it from anywhere.
 
-[![Version](https://img.shields.io/badge/version-0.10-e8743b?style=flat-square)](https://github.com/WB2024/DiscCTL)
+[![Version](https://img.shields.io/badge/version-0.15-e8743b?style=flat-square)](https://github.com/WB2024/DiscCTL)
 [![Docker pulls](https://img.shields.io/docker/pulls/wb20244/rustydisc?style=flat-square&logo=docker&logoColor=white&color=2496ED)](https://hub.docker.com/r/wb20244/rustydisc)
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange?style=flat-square&logo=rust)](docs/install.md)
 [![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](#license)
@@ -25,8 +25,9 @@ Built in Rust for Linux. Runs headless in Docker, so the drive can live in a ser
 
 ## Why RustyDisc?
 
-- 🎧 **Rips you can trust.** Secure ripping, automatic MusicBrainz tags and cover art, and an [AccurateRip](https://www.accuraterip.com) check that tells you whether each track matches other people's rips.
+- 🎧 **Rips you can trust.** Secure ripping, every MusicBrainz tag on every file, cover art from where you want (or your own), and an [AccurateRip](https://www.accuraterip.com) check that tells you whether each track matches other people's rips.
 - 🔥 **One tool for every disc.** Audio CDs, data CDs, Blue Book enhanced CDs, data DVDs and music DVDs that play in any DVD player. Everything is planned and validated *before* the drive is touched, so mistakes fail early instead of wasting a disc.
+- 📥 **Straight into your library.** File rips with your own Picard naming script (or build one in a few clicks), or hand them to Lidarr, matched by MusicBrainz ID.
 - 🔌 **Rusty Stick.** Put music on a USB stick filed exactly the way you want, converted to fit, without clobbering what's already there.
 - 🖥️ **Runs where the drive is.** A web UI for your headless server or Proxmox box, with live progress in every open browser. Prefer a terminal? Everything is scriptable, with JSON output.
 
@@ -41,14 +42,11 @@ Built in Rust for Linux. Runs headless in Docker, so the drive can live in a ser
 ### 💿 Rip
 - Secure extraction with error correction
 - **FLAC, ALAC, WAV, AIFF, MP3, Opus, OGG**
-- MusicBrainz tags, plus a built-in **search** when the match is wrong
-- Cover art from Cover Art Archive and/or fanart.tv, saved and embedded
-- **AccurateRip** verification (v1 + v2, offset tolerant)
 - **Every MusicBrainz tag** on every file: IDs, sort names, disc, label, ISRCs, credits
-- **Your own cover art**: upload a picture when ripping, or add one later in the Library
-- **Edit tags in the Library**: album-wide or per track, every field including MusicBrainz IDs
-- **Import into your library** with your own Picard naming script, or hand rips to **Lidarr**, matched by MusicBrainz ID
-- **Archive mode:** disc structure, CD-Text and SHA-256 checksums, re-verifiable years later
+- MusicBrainz **search** when the match is wrong
+- Cover art from Cover Art Archive and/or fanart.tv, or **upload your own**
+- **AccurateRip** verification (v1 + v2, offset tolerant)
+- **Archive mode:** structure, CD-Text and SHA-256 checksums, re-verifiable years later
 - Enhanced CDs: audio and data sessions ripped separately
 
 </td>
@@ -61,31 +59,38 @@ Built in Rust for Linux. Runs headless in Docker, so the drive can live in a ser
 - **Enhanced Music DVD**: plays in any DVD player
 - Files, folders or **M3U / M3U8 playlists**
 - **Transcoding** to fit, and **multi-disc** planning that counts the converted size
-- *Show plan* before you commit
+- *Show plan* before you commit; kept conversions are reused
 
 </td>
 </tr>
 <tr>
 <td width="50%" valign="top">
 
-### 🔌 Rusty Stick
-- **Identify** any stick: filesystem, partitions, what's on it, how it's organised
-- **Inspect** it down to individual tracks
-- **Reformat** the whole stick (exFAT, FAT32, ext4, NTFS)
-- File music your way: A–Z, artist, album, disc, or your own pattern
-- **Convert to fit**, with one-click size suggestions, and keep converted files for reuse (or delete them right away, your call)
-- **Tidy existing music** and resolve duplicates by quality, date or rule
+### 📥 Library & import
+- **Picard naming scripts** run as written, plus a **script builder** with six presets
+- **Import** rips: move, copy or hard link, with conflict rules by quality, date or name
+- **Lidarr** import: matched by MusicBrainz ID, artists and albums added unmonitored
+- **Edit tags** per track or album-wide, and **add or change cover art**, right in the Library
+- Browse, play, download and **verify** every rip
 
 </td>
 <td width="50%" valign="top">
 
+### 🔌 Rusty Stick
+- **Identify** any stick: filesystem, partitions, contents, layout
+- **Inspect** it down to individual tracks
+- **Reformat** the whole stick (exFAT, FAT32, ext4, NTFS)
+- File music your way: A–Z, artist, album, disc, or your own pattern
+- **Convert to fit**, with one-click size suggestions
+- **Tidy existing music** and resolve duplicates by quality, date or rule
+
+</td>
+</tr>
+<tr>
+<td colspan="2" valign="top">
+
 ### 🖥️ Web UI & platform
-- Library with cover grid, in-browser playback and **one-click verification**
-- Job history with full logs, cancel, and multi-disc prompts
-- **Optional login** (Argon2, rate limited)
-- Docker image, Dockge stack, Proxmox friendly
-- Errors and progress are structured **JSON** for scripting
-- `--mock` mode to try everything without a drive
+Live job progress in every open tab, with full history and logs · **optional login** (Argon2, rate limited) · Docker image, Dockge stack and Proxmox notes · converted files **kept for reuse** or deleted right away, your call · errors and progress as structured **JSON** for scripting · `--mock` mode to try everything without a drive
 
 </td>
 </tr>
@@ -119,47 +124,127 @@ Want a look around first? Add `RUSTYDISC_MOCK: "true"` for a simulated drive, no
 
 ```bash
 rustydisc rip --dir ~/Music/CDRips --archive      # rip the disc; the folder is named from MusicBrainz
+rustydisc import --rip "~/Music/CDRips/Artist - Album (2001)" --library ~/Music
 rustydisc burn --format redbook --playlist mix.m3u8 --cd-text
 rustydisc stick --target /run/media/you/STICK --folder ~/Music --transcode mp3:256
 ```
 
-Running on Proxmox, adding a login, or letting RustyDisc mount USB sticks itself? See [Web UI & Docker](docs/web-ui-and-docker.md). Installing from source? See [Install](docs/install.md).
+Running on Proxmox, adding a login, letting RustyDisc mount USB sticks itself, or pointing Import at your library? See [Web UI & Docker](docs/web-ui-and-docker.md) and [Library import](docs/library-import.md). Installing from source? See [Install](docs/install.md).
 
 <br>
 
 ## 📸 A quick tour
 
-### Rip, verify, keep
+### 💿 Rip, verify, keep
 
 Scan the disc, see every track, and rip. Results are checked against AccurateRip, and each track reports how well it matched.
 
-<p align="center"><img src="Images/Screenshots/rip-done.png" alt="A finished rip with cover art and AccurateRip results for every track" width="900"></p>
+<p align="center"><img src="Images/Screenshots/rip-done.png" alt="A finished rip with AccurateRip results for every track" width="900"></p>
 
-Wrong or missing match? **Find…** searches MusicBrainz from inside the app. Browse releases, preview track lists, and pick the right edition.
+<table>
+<tr>
+<td width="50%"><img src="Images/Screenshots/musicbrainz-search.png" alt="Searching MusicBrainz for the right release"></td>
+<td width="50%"><img src="Images/Screenshots/rip-cover.png" alt="Uploading your own cover art before ripping"></td>
+</tr>
+<tr>
+<td align="center"><sub><b>Wrong match?</b> Search MusicBrainz from inside the app</sub></td>
+<td align="center"><sub><b>Your own cover:</b> saved, embedded, or both</sub></td>
+</tr>
+</table>
 
-<p align="center"><img src="Images/Screenshots/musicbrainz-search.png" alt="Searching MusicBrainz for the right release" width="900"></p>
-
-### Burn anything
+### 🔥 Burn anything
 
 Audio CDs from a hand-picked list, a folder or a playlist. **Show plan** tells you how many discs you need and how full each will be, before anything is written.
 
 <p align="center"><img src="Images/Screenshots/burn.png" alt="An audio CD from eight tracks, with the plan" width="900"></p>
 
-Turn a playlist into a **music DVD** that plays in any DVD player, one chapter per track.
+<table>
+<tr>
+<td width="50%"><img src="Images/Screenshots/burn-music-dvd.png" alt="An enhanced music DVD built from a playlist"></td>
+<td width="50%"><img src="Images/Screenshots/burn-data-dvd.png" alt="A data DVD with the audio converted to MP3"></td>
+</tr>
+<tr>
+<td align="center"><sub><b>Music DVD</b> that plays in any DVD player</sub></td>
+<td align="center"><sub><b>Data DVD</b>, converted to fit</sub></td>
+</tr>
+</table>
 
-<p align="center"><img src="Images/Screenshots/burn-music-dvd.png" alt="An enhanced music DVD built from a playlist" width="900"></p>
+More than one disc's worth? The plan counts the size *after* conversion and prompts you to swap discs.
 
-### Rusty Stick
+<p align="center"><img src="Images/Screenshots/burn-plan.png" alt="A folder that needs two CDs, with the fill of each" width="900"></p>
+
+### 📥 Library, tags and covers
+
+Every rip in one place, with cover art, AccurateRip status and one-click checksum verification. Play tracks right in the browser.
+
+<p align="center"><img src="Images/Screenshots/library.png" alt="Library grid of ripped albums" width="900"></p>
+
+<table>
+<tr>
+<td width="50%"><img src="Images/Screenshots/library-detail.png" alt="Album detail with cover, actions and players"></td>
+<td width="50%"><img src="Images/Screenshots/library-tags.png" alt="Inspecting and editing every tag of one track"></td>
+</tr>
+<tr>
+<td align="center"><sub><b>Album view:</b> play, verify, change the cover</sub></td>
+<td align="center"><sub><b>Tags:</b> every field, including MusicBrainz IDs</sub></td>
+</tr>
+<tr>
+<td width="50%"><img src="Images/Screenshots/library-album-tags.png" alt="Editing album-wide tags"></td>
+<td width="50%"><img src="Images/Screenshots/library-cover.png" alt="Replacing the cover art of a finished rip"></td>
+</tr>
+<tr>
+<td align="center"><sub><b>Album-wide edits</b> written to every track</sub></td>
+<td align="center"><sub><b>Forgot the cover?</b> Add it later, embedded and saved</sub></td>
+</tr>
+</table>
+
+### 🗂 Import into your library
+
+Move finished rips into your music library, named by **your own Picard naming script**. The plan shows every destination before a file moves.
+
+<p align="center"><img src="Images/Screenshots/import.png" alt="Choosing rips to import, with the import options" width="900"></p>
+
+Or hand them to **Lidarr**. Each rip carries its MusicBrainz IDs, so Lidarr is told exactly which album it is; artists it doesn't have are added unmonitored, and you see how it matched every file first.
+
+<p align="center"><img src="Images/Screenshots/import-lidarr.png" alt="The Lidarr plan: which artists exist, which will be added, and how files match" width="900"></p>
+
+<p align="center"><img src="Images/Screenshots/jobs.png" alt="Job history with the full log of an import" width="900"></p>
+
+### 🛠 Build a naming script
+
+No Picard script? Pick a preset and adjust: artist folders, sort names, year position, multi-disc folders, featured artists, Windows-safe names. Six kinds of made-up release show exactly how each choice files them.
+
+<p align="center"><img src="Images/Screenshots/settings-script-builder.png" alt="The naming script builder with presets, options and live examples" width="900"></p>
+
+<table>
+<tr>
+<td width="50%"><img src="Images/Screenshots/settings-library.png" alt="Library settings with the naming script and import defaults"></td>
+<td width="50%"><img src="Images/Screenshots/settings-lidarr.png" alt="Lidarr settings"></td>
+</tr>
+<tr>
+<td align="center"><sub><b>Music library:</b> paste any Picard script</sub></td>
+<td align="center"><sub><b>Lidarr:</b> address, key, profiles, path mapping</sub></td>
+</tr>
+</table>
+
+### 🔌 Rusty Stick
 
 Plug in a stick and RustyDisc **identifies** it: filesystem and what that means for you, partitions, how much music is already there, and whether it follows a layout it recognises.
 
 <p align="center"><img src="Images/Screenshots/stick-identify.png" alt="Identifying a USB stick" width="900"></p>
 
-**Inspect** it, from the root to single tracks, with tags and quality for every file.
+<table>
+<tr>
+<td width="50%"><img src="Images/Screenshots/stick-inspect.png" alt="Browsing the contents of a stick"></td>
+<td width="50%"><img src="Images/Screenshots/stick-format.png" alt="Reformatting a whole stick"></td>
+</tr>
+<tr>
+<td align="center"><sub><b>Inspect</b> from the root down to single tracks</sub></td>
+<td align="center"><sub><b>Reformat</b> the whole stick, partitions and all</sub></td>
+</tr>
+</table>
 
-<p align="center"><img src="Images/Screenshots/stick-inspect.png" alt="Browsing the contents of a stick" width="900"></p>
-
-Choose the layout and what to do about music that's already there: leave it, or **re-file it** to match. Duplicates are matched by artist, album and track, so a different folder or format still counts. Replace when the new file is higher quality, lower quality, newer, always, or keep both.
+Choose the layout and what to do about music that's already there: leave it, or **re-file it** to match. Duplicates are matched by artist, album and track, so a different folder or format still counts.
 
 <p align="center"><img src="Images/Screenshots/stick-organise.png" alt="Choosing a layout and how to handle existing music" width="900"></p>
 
@@ -167,49 +252,34 @@ The plan spells out every decision before a single byte is written, and how full
 
 <p align="center"><img src="Images/Screenshots/stick-plan.png" alt="A plan that replaces six low-quality files with FLAC and re-files the rest" width="900"></p>
 
-<table>
-<tr>
-<td width="50%"><img src="Images/Screenshots/stick-write.png" alt="A finished write, converted to MP3 and flushed"></td>
-<td width="50%"><img src="Images/Screenshots/stick-format.png" alt="Reformatting a whole stick"></td>
-</tr>
-<tr>
-<td align="center"><sub><b>Write</b> in sorted order, then flush and eject safely</sub></td>
-<td align="center"><sub><b>Reformat</b> the whole stick, partitions and all</sub></td>
-</tr>
-</table>
+<p align="center"><img src="Images/Screenshots/stick-write.png" alt="A finished write, converted to MP3 and flushed" width="900"></p>
 
-### Library, jobs and settings
+### ⚙️ Settings, security and tools
 
-Every rip in one place, with cover art, AccurateRip status and one-click checksum verification. Play tracks right in the browser.
+Cover art sources in the order you want, defaults for the Rip page, converted files kept for reuse or deleted right away, and an optional login for shared servers.
 
 <table>
 <tr>
-<td width="50%"><img src="Images/Screenshots/library.png" alt="Library grid of ripped albums"></td>
-<td width="50%"><img src="Images/Screenshots/library-detail.png" alt="Album detail with AccurateRip results and players"></td>
-</tr>
-</table>
-
-<table>
-<tr>
-<td width="50%"><img src="Images/Screenshots/jobs.png" alt="Job history with full logs"></td>
 <td width="50%"><img src="Images/Screenshots/settings.png" alt="Settings for cover art and defaults"></td>
+<td width="50%"><img src="Images/Screenshots/settings-convert.png" alt="How long converted files are kept"></td>
 </tr>
 <tr>
-<td align="center"><sub><b>Jobs</b> keep running when you close the tab</sub></td>
-<td align="center"><sub><b>Settings</b> for cover art sources and defaults</sub></td>
+<td align="center"><sub><b>Cover art</b> and rip defaults</sub></td>
+<td align="center"><sub><b>Converted files:</b> keep or delete</sub></td>
 </tr>
-</table>
-
-Sharing the server? Turn on the optional **login** in Settings → Security, or set it from the environment.
-
-<table>
 <tr>
+<td width="50%"><img src="Images/Screenshots/settings-security.png" alt="Turning on the login"></td>
 <td width="50%"><img src="Images/Screenshots/login.png" alt="The login page"></td>
-<td width="50%"><img src="Images/Screenshots/settings-security.png" alt="Turning on the login in Settings"></td>
+</tr>
+<tr>
+<td align="center"><sub><b>Optional login</b></sub></td>
+<td align="center"><sub>The login page</sub></td>
 </tr>
 </table>
 
-<sub>Screenshots use RustyDisc's built-in <code>--mock</code> mode, which simulates the drive and sticks. The cover art and albums are demo data.</sub>
+<p align="center"><img src="Images/Screenshots/tools.png" alt="Disc recovery, CD-RW blanking and dependency checks" width="900"></p>
+
+<sub>Screenshots use RustyDisc's built-in <code>--mock</code> mode, which simulates the drive and sticks, with a demo library. The cover art and albums are demo data.</sub>
 
 <br>
 
@@ -223,6 +293,8 @@ Sharing the server? Turn on the optional **login** in Settings → Security, or 
 | MusicBrainz tags + cover art | ✅ | CDDB | — | ✅ | ✅ |
 | AccurateRip verification | ✅ | — | — | — | ✅ |
 | Archive mode with checksums | ✅ | — | — | — | rip log |
+| Import into a library (Picard scripts, Lidarr) | ✅ | — | — | — | — |
+| Edit tags and covers after ripping | ✅ | ✅ | — | — | — |
 | Write music to USB sticks | ✅ | — | — | — | — |
 | Runs headless (no desktop) | ✅ | — | — | ✅ | ✅ |
 | Web UI, usable from another machine | ✅ | — | — | — | — |
@@ -238,7 +310,7 @@ The README stays short on purpose. The details live here:
 
 | | |
 |---|---|
-| 📥 [**Library import**](docs/library-import.md) | Move rips into your library with your own Picard naming script or through Lidarr, and the full MusicBrainz tags written on rip |
+| 📥 [**Library import**](docs/library-import.md) | Picard naming scripts and the built-in script builder, importing through Lidarr, editing tags and covers, and the full MusicBrainz tags written on rip |
 | 🖥️ [**Web UI & Docker**](docs/web-ui-and-docker.md) | Deployment, Proxmox, environment variables, the optional login |
 | 🔌 [**Rusty Stick**](docs/rusty-stick.md) | Layouts and tokens, conversion, conflicts, reformatting, hot-plug mounting, CLI |
 | 📀 [**Disc formats**](docs/disc-formats.md) | Red Book, Data, Blue Book, Data DVD and Music DVD explained |
