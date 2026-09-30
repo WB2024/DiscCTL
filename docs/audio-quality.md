@@ -34,6 +34,16 @@ RustyDisc's own numbers come from `ffprobe` and `ffmpeg` (EBU R128 loudness), th
 
 ## Dynamic range (DR)
 
+RustyDisc colour-codes the result and says what it means in plain English:
+
+| DR | Rating | Meaning |
+|---|---|---|
+| 14 and up | **Excellent** (green) | Very dynamic; quiet parts really quiet, loud parts hit hard |
+| 11–13 | **Good** (light green) | Natural and open, some compression |
+| 8–10 | **Average** (yellow) | Typical modern pop and rock |
+| 6–7 | **Poor** (orange) | Noticeably squashed, tiring over a whole album |
+| 5 and below | **Bad** (red) | A loudness-war master; look for another pressing |
+
 The [Dynamic Range Database](https://dr.loudness-war.info/) lists a "DR" number for albums: how far the peaks rise above the loud parts of the music. A high number (14 and up) is natural and dynamic; a low one (under 8) is a loudness-war master squashed to be as loud as possible. Different pressings of the same album often score very differently, so it's the number to check when choosing an edition.
 
 RustyDisc measures it itself, with the published DR method (3-second blocks per channel, the second-highest peak against the RMS of the loudest 20% of blocks, averaged over the channels; an album's DR is the average of its tracks'). A value can differ from a listed one by a point, because this is a reimplementation of the meter, not the meter itself.

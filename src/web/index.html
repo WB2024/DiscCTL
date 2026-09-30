@@ -725,6 +725,24 @@ async function ejectStick(btn) {
 }
 
 // ── Cover art note shown in the job panel ──────────────────────────────────
+// What a DR number means to a listener: a band, a colour, and a plain-English explanation.
+const DR_BANDS = [
+  { min: 14, label: "Excellent", color: "#3fb97a", text: "Very dynamic. Quiet parts are really quiet and loud parts hit hard. Audiophile-grade mastering; this is how the music was meant to breathe." },
+  { min: 11, label: "Good", color: "#8bc34a", text: "Natural and open. Some compression, but the music still has life and punch. A pleasure to listen to on decent speakers or headphones." },
+  { min: 8, label: "Average", color: "#e0b341", text: "Typical of modern pop and rock. Fine for everyday listening, but the loud and quiet parts are closer together than they could be." },
+  { min: 6, label: "Poor", color: "#e8743b", text: "Noticeably squashed. Loud all the time, with less punch and more listening fatigue over a whole album." },
+  { min: 0, label: "Bad", color: "#ef5b5b", text: "A loudness-war master. Compressed hard and sometimes clipped. If another pressing of this album exists, it is probably better." },
+];
+function drBand(dr) { return DR_BANDS.find(b => dr >= b.min) || DR_BANDS[DR_BANDS.length - 1]; }
+function drBadge(dr, big) { const b = drBand(dr); return `<span class="badge" style="background:${b.color};border-color:${b.color};color:#111;${big ? "font-size:15px;" : ""}" title="${esc(b.label)}">DR${dr}</span>`; }
+function drGauge(dr) {
+  const pos = Math.max(0, Math.min(100, (Math.min(dr, 18) / 18) * 100));
+  const seg = [["Bad", "#ef5b5b", 0, 6], ["Poor", "#e8743b", 6, 8], ["Average", "#e0b341", 8, 11], ["Good", "#8bc34a", 11, 14], ["Excellent", "#3fb97a", 14, 18]];
+  return `<div style="position:relative;margin:14px 0 4px"><div style="display:flex;height:10px;border-radius:5px;overflow:hidden">${seg.map(x => `<div style="flex:${x[3] - x[2]};background:${x[1]}" title="${x[0]}"></div>`).join("")}</div>
+    <div style="position:absolute;top:-5px;left:calc(${pos}% - 2px);width:4px;height:20px;background:var(--text);border-radius:2px;box-shadow:0 0 0 2px var(--panel)"></div>
+    <div style="display:flex;font-size:11px;color:var(--muted);margin-top:4px">${seg.map(x => `<div style="flex:${x[3] - x[2]};text-align:center">${x[0]}</div>`).join("")}</div></div>`;
+}
+function drSummary(dr) { const b = drBand(dr); return `<div class="row" style="gap:10px;align-items:center">${drBadge(dr, true)}<b style="color:${b.color}">${b.label}</b></div>${drGauge(dr)}<div style="margin-top:6px">${esc(b.text)}</div><div class="muted" style="font-size:12.5px;margin-top:4px">DR is the gap between a track's peaks and its typical loudness, in dB. Higher is more dynamic. It is a property of the mastering, so different pressings of one album can score very differently.</div>`; }
 function qualityNote(s) {
   const rate = s.avg_bitrate_kbps ? ` · average ${Math.round(s.avg_bitrate_kbps)} kbps${s.min_bitrate_kbps && s.max_bitrate_kbps && Math.round(s.min_bitrate_kbps) !== Math.round(s.max_bitrate_kbps) ? ` (${Math.round(s.min_bitrate_kbps)}–${Math.round(s.max_bitrate_kbps)})` : ""}` : "";
   const badge = s.cd_quality ? `<span class="badge ok">lossless · CD quality</span>` : s.lossless ? `<span class="badge ok">lossless</span>` : `<span class="badge">lossy</span>`;
@@ -804,7 +822,7 @@ function jobPanel(container, jobId, { onEnd } = {}) {
         if (ev.name === "accuraterip") q(".jp-result").innerHTML = arTable(ev.data);
         if (ev.name === "cover") q(".jp-cover").innerHTML = coverNote(ev.data);
         if (ev.name === "quality") q(".jp-quality").innerHTML = qualityNote(ev.data);
-        if (ev.name === "dynamic_range") q(".jp-quality").innerHTML += `<div class="notice" style="margin-top:8px"><b>Dynamic range</b> <span class="badge ${ev.data.album_dr >= 11 ? "ok" : ev.data.album_dr <= 7 ? "err" : ""}">DR${ev.data.album_dr}</span> ${esc(ev.data.verdict)}<div class="muted" style="font-size:12.5px;margin-top:4px">Open the album in the <a href="#library">Library</a> and use Dynamic range → Submit to Dynamic Range DB to share it.</div></div>`;
+        if (ev.name === "dynamic_range") q(".jp-quality").innerHTML += `<div class="notice" style="margin-top:8px"><b>Dynamic range</b>${drSummary(ev.data.album_dr)}<div class="muted" style="font-size:12.5px;margin-top:6px">Open the album in the <a href="#library">Library</a> and use Dynamic range → Submit to Dynamic Range DB to share it.</div></div>`;
         if (ev.name === "replaygain") q(".jp-quality").innerHTML += `<div class="notice" style="margin-top:8px"><b>ReplayGain</b> written to ${ev.data.files} file${ev.data.files === 1 ? "" : "s"} · album gain ${ev.data.album_gain_db >= 0 ? "+" : ""}${(+ev.data.album_gain_db).toFixed(2)} dB · loudness ${(+ev.data.album_lufs).toFixed(1)} LUFS</div>`;
         if (ev.name === "stick") q(".jp-stick").innerHTML = stickDone(ev.data);
         if (ev.name === "import") q(".jp-import").innerHTML = importDone(ev.data);
@@ -1622,13 +1640,11 @@ async function wireQuality(name) {
     const btn = $("#q-dr"), out = $("#q-drout"); btn.disabled = true; btn.textContent = "Measuring…";
     try {
       const r = await api(base + "/quality/dynamic-range", { body: {} });
-      const cls = r.album_dr >= 11 ? "ok" : r.album_dr <= 7 ? "err" : "";
-      out.innerHTML = `<div class="notice" style="margin-top:10px"><div class="row"><b class="grow">Dynamic range</b><span class="badge ${cls}" style="font-size:15px">DR${r.album_dr}</span></div>
-        <div style="margin-top:4px">${esc(r.verdict)}. The higher the number, the more natural the dynamics; heavily compressed masters score low.</div>
-        <table style="margin-top:8px"><thead><tr><th style="text-align:left">Track</th><th class="num">DR</th><th class="num">Peak</th><th class="num">RMS</th></tr></thead><tbody>${r.tracks.map(t => t.error ? `<tr><td>${esc(t.title)}</td><td colspan="3" class="ar-bad">${esc(t.error)}</td></tr>` : `<tr><td>${esc(t.title)}</td><td class="num"><b>DR${t.dr}</b></td><td class="num">${t.peak_db.toFixed(2)} dB</td><td class="num">${t.rms_db.toFixed(2)} dB</td></tr>`).join("")}</tbody></table>
+      out.innerHTML = `<div class="notice" style="margin-top:10px"><b>Dynamic range</b>${drSummary(r.album_dr)}
+        <table style="margin-top:8px"><thead><tr><th style="text-align:left">Track</th><th class="num">DR</th><th class="num">Peak</th><th class="num">RMS</th></tr></thead><tbody>${r.tracks.map(t => t.error ? `<tr><td>${esc(t.title)}</td><td colspan="3" class="ar-bad">${esc(t.error)}</td></tr>` : `<tr><td>${esc(t.title)}</td><td class="num">${drBadge(t.dr)}</td><td class="num">${t.peak_db.toFixed(2)} dB</td><td class="num">${t.rms_db.toFixed(2)} dB</td></tr>`).join("")}</tbody></table>
         <div class="row" style="margin-top:10px;gap:8px"><button class="btn small primary" id="dr-tags">Save DR as tags</button><button class="btn small" id="dr-log">Download DR log</button><button class="btn small" id="dr-submit" title="Opens the Dynamic Range DB upload form with this album filled in. Needs the userscript (Settings) in your browser.">Submit to Dynamic Range DB ↗</button>
           <a class="btn small" href="${esc(r.database_url)}" target="_blank" rel="noopener">Compare on the Dynamic Range DB ↗</a><span class="muted" id="dr-note"></span></div>
-        <div class="muted" style="margin-top:8px;font-size:12.5px">Measured with the published DR method (3-second blocks; loudest 20%); a value can differ from a listed one by a point. The database lists other pressings of ${esc(r.artist || "this artist")}, which is the way to find the least-compressed edition.</div></div>`;
+        <div class="muted" style="margin-top:8px;font-size:12.5px">Measured with the published DR method (3-second blocks, loudest 20%); a value can differ from a listed one by a point. The database lists other pressings of ${esc(r.artist || "this artist")}, which is the way to find the least-compressed edition.</div></div>`;
       $("#dr-log").onclick = () => { const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([r.log], { type: "text/plain" })); a.download = `dr-${(r.album || name).replace(/[^\w.-]+/g, "_")}.txt`; a.click(); };
       $("#dr-submit").onclick = () => {
         const enc = btoa(unescape(encodeURIComponent(JSON.stringify(r.submit))));
