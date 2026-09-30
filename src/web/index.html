@@ -123,6 +123,16 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .modal header { padding: 14px 18px; border-bottom: 1px solid var(--line); font-weight: 600; }
 .modal .body { padding: 8px 18px; overflow: auto; flex: 1; }
 .modal footer { padding: 12px 18px; border-top: 1px solid var(--line); display: flex; gap: 10px; justify-content: flex-end; align-items: center; }
+.modal.wide { width: min(1120px, 100%); height: min(780px, 92vh); }
+.modal header.row { display: flex; align-items: center; gap: 10px; }
+.ms-body { display: grid; grid-template-columns: 1.05fr 1fr; flex: 1; min-height: 0; }
+.ms-list { overflow: auto; border-right: 1px solid var(--line); }
+.ms-detail { overflow: auto; padding: 16px 18px; }
+.ms-item { display: flex; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--line); cursor: pointer; align-items: flex-start; }
+.ms-item:hover { background: var(--panel2); }
+.ms-item.sel { background: color-mix(in srgb, var(--accent) 14%, var(--panel2)); box-shadow: inset 3px 0 0 var(--accent); }
+.ms-item img, .ms-item .ph { width: 56px; height: 56px; border-radius: 6px; object-fit: cover; flex: none; background: var(--panel2); border: 1px solid var(--line); display: grid; place-items: center; color: var(--muted); }
+@media (max-width: 860px) { .ms-body { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; } .ms-list { border-right: 0; border-bottom: 1px solid var(--line); } }
 .crumbs { display: flex; gap: 4px; flex-wrap: wrap; padding: 8px 0; font-family: var(--mono); font-size: 12.5px; }
 .crumbs a { color: var(--accent2); cursor: pointer; }
 .brow { display: flex; align-items: center; gap: 10px; padding: 6px 4px; border-bottom: 1px solid var(--line); cursor: pointer; }
@@ -531,6 +541,7 @@ function renderDisc(info) {
       ${sessions}
     </div>
     <div id="mb-card"></div>`;
+  MB.cdtext = info.sessions.find(s => s.kind.type === "audio")?.cd_text || null;
   MB.tracks = audioTracks.length; MB.over = null; MB.error = ""; MB.auto = null;
   MB.discid = info.discid || null;
   if (info.discid) lookupMb(info.discid); else if (audioTracks.length) renderMb();
@@ -596,6 +607,7 @@ function renderMb() {
     <details ${open} style="margin-top:${r ? 14 : 12}px"><summary class="muted" style="cursor:pointer">${chosen ? "Change the MusicBrainz release" : r ? "Wrong release? Use a different one" : "Use a MusicBrainz release I've found"}</summary>
       <div class="row" style="margin-top:10px">
         <input type="text" id="mb-override-input" class="grow" placeholder="Release ID or URL, e.g. https://musicbrainz.org/release/bc8d517f-6ce0-4e45-b6d8-af0f29cdd1ea" value="${esc(MB.over?.input || "")}">
+        <button class="btn" id="mb-find">🔍 Find…</button>
         <button class="btn primary" id="mb-override-go">Use this release</button>
         ${chosen ? `<button class="btn" id="mb-override-clear">Clear</button>` : ""}
       </div>
@@ -603,9 +615,108 @@ function renderMb() {
       <div class="muted" style="margin-top:8px">Tags, cover art and the folder name will come from this release instead of the DiscID lookup.</div>
     </details></div>`;
   $("#mb-override-go").onclick = applyMbOverride;
+  $("#mb-find").onclick = openMbSearch;
   $("#mb-override-input").onkeydown = e => { if (e.key === "Enter") applyMbOverride(); };
   const clear = $("#mb-override-clear");
   if (clear) clear.onclick = () => { MB.over = null; MB.error = ""; renderMb(); };
+}
+
+// ── MusicBrainz release search ──────────────────────────────────────────────
+function openMbSearch() {
+  const bg = document.createElement("div"); bg.className = "modal-bg";
+  bg.innerHTML = `<div class="modal wide">
+    <header class="row"><span class="grow">Find a MusicBrainz release</span><button class="btn small" id="ms-close">✕</button></header>
+    <div style="padding:12px 18px;border-bottom:1px solid var(--line)">
+      <div class="row"><input type="text" id="ms-q" class="grow" placeholder="Album or artist — e.g. junior mafia conspiracy"><input type="text" id="ms-artist" placeholder="Artist (optional)" style="width:210px"><button class="btn primary" id="ms-go">Search</button></div>
+      <div class="row" style="margin-top:8px;gap:22px">
+        <label class="check"><input type="checkbox" id="ms-cd" checked><span>CDs only</span></label>
+        ${MB.tracks ? `<label class="check"><input type="checkbox" id="ms-tracks" checked><span>Only releases with ${MB.tracks} tracks (this disc)</span></label>` : ""}
+      </div></div>
+    <div class="ms-body"><div class="ms-list"><div class="muted" style="padding:18px">Search by album, artist, or both — every word must appear in the title or artist name.</div></div>
+      <div class="ms-detail"><div class="muted">Select a release to see its track list.</div></div></div>
+    <footer><span class="muted grow" id="ms-status"></span><button class="btn" id="ms-cancel">Cancel</button></footer></div>`;
+  document.body.append(bg);
+  const q = s => $(s, bg);
+  const close = () => { bg.remove(); document.removeEventListener("keydown", onKey); };
+  const onKey = e => { if (e.key === "Escape") close(); };
+  document.addEventListener("keydown", onKey);
+  bg.onclick = e => { if (e.target === bg) close(); };
+  q("#ms-close").onclick = q("#ms-cancel").onclick = close;
+
+  let offset = 0, selected = null;
+  const list = q(".ms-list");
+
+  const trackBadge = h => {
+    const counts = h.disc_track_counts;
+    if (!counts.length) return "";
+    if (MB.tracks && counts.includes(MB.tracks)) return `<span class="badge ok" title="Matches this disc's ${MB.tracks} tracks">✓ ${MB.tracks} tracks</span>`;
+    return `<span class="badge" title="This disc has ${MB.tracks || "?"} audio tracks">${counts.join(" + ")} tracks</span>`;
+  };
+  const itemHtml = h => `<div class="ms-item" data-id="${esc(h.mb_release_id)}">
+    <img loading="lazy" alt="" src="/api/cover?mbid=${encodeURIComponent(h.mb_release_id)}&size=250" onerror="this.outerHTML='<div class=&quot;ph&quot;>♪</div>'">
+    <div class="grow" style="min-width:0"><div><b>${esc(h.title)}</b>${h.disambiguation ? ` <span class="muted">(${esc(h.disambiguation)})</span>` : ""}</div>
+      <div>${esc(h.artist)}</div>
+      <div class="muted">${[h.date || h.year, h.country, h.format, h.label && (h.label + (h.catalog_number ? " " + h.catalog_number : ""))].filter(Boolean).map(esc).join(" · ")}</div></div>
+    ${trackBadge(h)}</div>`;
+
+  async function search(more) {
+    const text = q("#ms-q").value.trim(), artist = q("#ms-artist").value.trim();
+    if (!text && !artist) { q("#ms-status").textContent = "Type an album or artist first."; return; }
+    if (!more) { offset = 0; list.innerHTML = `<div class="muted" style="padding:18px">Searching MusicBrainz…</div>`; }
+    const go = q("#ms-go"); go.disabled = true;
+    const p = new URLSearchParams({ q: text, artist, offset, cd_only: q("#ms-cd").checked });
+    if (q("#ms-tracks")?.checked) p.set("tracks", MB.tracks);
+    try {
+      const r = await api("/api/musicbrainz/search?" + p);
+      if (!more) list.innerHTML = "";
+      list.querySelector(".ms-more")?.remove();
+      if (!r.releases.length && !more) {
+        list.innerHTML = `<div class="muted" style="padding:18px">No releases found. Try fewer words, untick “CDs only”${q("#ms-tracks") ? " or the track-count filter" : ""}.</div>`;
+      }
+      list.insertAdjacentHTML("beforeend", r.releases.map(itemHtml).join(""));
+      offset += r.releases.length;
+      q("#ms-status").textContent = r.count ? `${Math.min(offset, r.count)} of ${r.count} releases` : "";
+      if (offset < r.count) list.insertAdjacentHTML("beforeend", `<div class="ms-more" style="padding:12px;text-align:center"><button class="btn small">Load more</button></div>`);
+      $$(".ms-item", list).forEach(it => it.onclick = () => select(it.dataset.id, it));
+      list.querySelector(".ms-more button")?.addEventListener("click", () => search(true));
+    } catch (e) {
+      list.innerHTML = `<div class="notice err" style="margin:14px">${esc(e.message)}</div>`;
+    } finally { go.disabled = false; }
+  }
+
+  async function select(id, el) {
+    selected = id;
+    $$(".ms-item.sel", list).forEach(x => x.classList.remove("sel")); el?.classList.add("sel");
+    const box = q(".ms-detail");
+    box.innerHTML = `<div class="muted">Loading release…</div>`;
+    const p = new URLSearchParams({ release: id, tracks: MB.tracks });
+    if (MB.discid) p.set("discid", MB.discid);
+    try {
+      const r = await api("/api/musicbrainz?" + p);
+      if (selected !== id) return;
+      box.innerHTML = `<div class="mb">
+        <img class="cover" style="width:120px;height:120px" alt="" src="/api/cover?mbid=${encodeURIComponent(id)}&size=500" onerror="this.outerHTML='<div class=&quot;cover ph&quot; style=&quot;width:120px;height:120px&quot;>♪</div>'">
+        <div class="grow"><h1 style="margin-top:0">${esc(r.album)}</h1><div>${esc(r.album_artist)}${r.year ? ` <span class="muted">· ${esc(r.year)}</span>` : ""}</div>
+          <div class="muted" style="margin-top:4px">${r.tracks.length} tracks · <a href="https://musicbrainz.org/release/${encodeURIComponent(id)}" target="_blank" rel="noopener">view on musicbrainz.org ↗</a></div></div></div>
+        ${r.warning ? `<div class="notice warn" style="margin-top:12px">${esc(r.warning)}</div>` : ""}
+        <ol style="margin:14px 0 0;padding-left:26px">${r.tracks.map(t => `<li style="padding:2px 0">${esc(t.title)}${t.artist ? ` <span class="muted">— ${esc(t.artist)}</span>` : ""}</li>`).join("")}</ol>
+        <div class="row" style="margin-top:18px"><button class="btn primary" id="ms-use">Use this release</button></div>`;
+      q("#ms-use").onclick = () => { MB.over = { input: id, release: r }; MB.error = ""; close(); renderMb(); };
+    } catch (e) {
+      box.innerHTML = `<div class="notice err">${esc(e.message)}</div>`;
+    }
+  }
+
+  q("#ms-go").onclick = () => search(false);
+  [q("#ms-q"), q("#ms-artist")].forEach(i => i.onkeydown = e => { if (e.key === "Enter") search(false); });
+  q("#ms-cd").onchange = () => search(false);
+  q("#ms-tracks")?.addEventListener("change", () => search(false));
+
+  // Start from what the disc already tells us (CD-Text) or what's typed in the ID box.
+  const typed = $("#mb-override-input")?.value.trim();
+  if (MB.cdtext?.title || MB.cdtext?.artist) { q("#ms-q").value = MB.cdtext.title || ""; q("#ms-artist").value = MB.cdtext.artist || ""; search(false); }
+  else if (typed && !/^(https?:|[0-9a-f-]{36})/i.test(typed)) { q("#ms-q").value = typed; search(false); }
+  q("#ms-q").focus();
 }
 
 async function scan() {

@@ -174,6 +174,7 @@ pub async fn serve(cfg: Config, bind: SocketAddr) -> Result<(), Error> {
         .route("/api/status", get(status))
         .route("/api/info", get(info))
         .route("/api/musicbrainz", get(musicbrainz_lookup))
+        .route("/api/musicbrainz/search", get(musicbrainz_search))
         .route("/api/cover", get(cover))
         .route("/api/eject", post(eject))
         .route("/api/browse", get(browse))
@@ -318,9 +319,37 @@ async fn musicbrainz_lookup(State(st): S, Query(q): Query<MbQuery>) -> ApiResult
     Ok(Json(serde_json::to_value(release).map_err(Error::from)?))
 }
 
+#[derive(Deserialize, Default)]
+struct SearchParams {
+    q: Option<String>,
+    artist: Option<String>,
+    tracks: Option<usize>,
+    cd_only: Option<bool>,
+    offset: Option<usize>,
+}
+
+async fn musicbrainz_search(State(st): S, Query(p): Query<SearchParams>) -> ApiResult<Json<Value>> {
+    let query = musicbrainz::SearchQuery {
+        text: p.q.unwrap_or_default(),
+        artist: p.artist.unwrap_or_default(),
+        tracks: p.tracks.filter(|&n| n > 0),
+        cd_only: p.cd_only.unwrap_or(false),
+        offset: p.offset.unwrap_or(0),
+    };
+    if st.cfg.mock {
+        return Ok(Json(mock::search(&query)));
+    }
+    let results = tokio::task::spawn_blocking(move || musicbrainz::search_releases(&query, false))
+        .await
+        .map_err(|e| Error::backend(e.to_string()))??;
+    Ok(Json(serde_json::to_value(results).map_err(Error::from)?))
+}
+
 #[derive(Deserialize)]
 struct CoverQuery {
     mbid: String,
+    /// Thumbnail width: 250, 500 or 1200. Omit for the full-size image.
+    size: Option<u32>,
 }
 
 async fn cover(State(st): S, Query(q): Query<CoverQuery>) -> Response {
@@ -330,7 +359,7 @@ async fn cover(State(st): S, Query(q): Query<CoverQuery>) -> Response {
     if !q.mbid.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
         return StatusCode::NOT_FOUND.into_response();
     }
-    let art = tokio::task::spawn_blocking(move || musicbrainz::fetch_cover_art(&q.mbid, false))
+    let art = tokio::task::spawn_blocking(move || musicbrainz::fetch_cover_art_sized(&q.mbid, q.size.filter(|s| [250, 500, 1200].contains(s)), false))
         .await
         .ok()
         .flatten();

@@ -102,8 +102,17 @@ struct MbRecording {
 /// Tries full-size first, falls back to 500px thumbnail.
 /// Returns the raw image bytes and a file extension ("jpg" or "png").
 pub fn fetch_cover_art(mb_release_id: &str, debug: bool) -> Option<(Vec<u8>, &'static str)> {
+    fetch_cover_art_sized(mb_release_id, None, debug)
+}
+
+/// Like [`fetch_cover_art`], optionally asking the Cover Art Archive for a thumbnail
+/// (`Some(250)`, `Some(500)` or `Some(1200)` pixels wide).
+pub fn fetch_cover_art_sized(mb_release_id: &str, size: Option<u32>, debug: bool) -> Option<(Vec<u8>, &'static str)> {
     // CAA redirects to the actual image — ureq follows redirects automatically.
-    let url = format!("https://coverartarchive.org/release/{}/front", mb_release_id);
+    let url = match size {
+        Some(px) => format!("https://coverartarchive.org/release/{}/front-{}", mb_release_id, px),
+        None => format!("https://coverartarchive.org/release/{}/front", mb_release_id),
+    };
     if debug { eprintln!("Cover Art Archive: {}", url); }
 
     let resp = ureq::get(&url)
@@ -285,6 +294,200 @@ pub fn lookup_release(
     Ok((info, warning))
 }
 
+// ── Searching releases ───────────────────────────────────────────────────────
+
+/// What the user typed into a release search.
+#[derive(Debug, Clone, Default)]
+pub struct SearchQuery {
+    /// Free text: every word must appear in the release title or the artist name.
+    pub text: String,
+    /// Optional artist that must match as well.
+    pub artist: String,
+    /// Only releases with a medium of exactly this many tracks.
+    pub tracks: Option<usize>,
+    /// Only releases on CD.
+    pub cd_only: bool,
+    pub offset: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SearchHit {
+    pub mb_release_id: String,
+    pub title: String,
+    pub artist: String,
+    pub date: Option<String>,
+    pub year: Option<String>,
+    pub country: Option<String>,
+    pub status: Option<String>,
+    pub label: Option<String>,
+    pub catalog_number: Option<String>,
+    pub barcode: Option<String>,
+    pub disambiguation: Option<String>,
+    /// e.g. "CD" or "2×CD"
+    pub format: String,
+    /// Track count per disc, e.g. [12] or [17, 15]
+    pub disc_track_counts: Vec<usize>,
+    /// MusicBrainz relevance score, 0-100
+    pub score: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SearchResults {
+    pub count: usize,
+    pub offset: usize,
+    pub releases: Vec<SearchHit>,
+}
+
+#[derive(Deserialize)]
+struct MbSearchResponse {
+    #[serde(default)]
+    count: usize,
+    #[serde(default)]
+    offset: usize,
+    #[serde(default)]
+    releases: Vec<MbSearchRelease>,
+}
+
+#[derive(Deserialize)]
+struct MbSearchRelease {
+    id: String,
+    #[serde(default)]
+    score: Option<u32>,
+    title: String,
+    status: Option<String>,
+    date: Option<String>,
+    country: Option<String>,
+    barcode: Option<String>,
+    disambiguation: Option<String>,
+    #[serde(rename = "artist-credit", default)]
+    artist_credit: Vec<MbArtistCredit>,
+    #[serde(rename = "label-info", default)]
+    label_info: Vec<MbLabelInfo>,
+    #[serde(default)]
+    media: Vec<MbSearchMedia>,
+}
+
+#[derive(Deserialize)]
+struct MbLabelInfo {
+    #[serde(rename = "catalog-number")]
+    catalog_number: Option<String>,
+    label: Option<MbLabel>,
+}
+
+#[derive(Deserialize)]
+struct MbLabel {
+    name: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct MbSearchMedia {
+    format: Option<String>,
+    #[serde(rename = "track-count", default)]
+    track_count: usize,
+}
+
+/// Escape characters that mean something to the Lucene query parser.
+fn lucene_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if "+-&|!(){}[]^\"~*?:/".contains(c) {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
+}
+
+fn words(s: &str) -> Vec<String> {
+    s.split_whitespace()
+        .map(lucene_escape)
+        .filter(|w| !w.is_empty())
+        .collect()
+}
+
+/// Build the MusicBrainz search string. Every word must appear in the release title or the
+/// artist, so "junior mafia conspiracy" finds the album whichever field each word is in.
+pub fn build_search_query(q: &SearchQuery) -> Option<String> {
+    let mut parts: Vec<String> = words(&q.text)
+        .iter()
+        .map(|w| format!("(release:{w} OR artist:{w} OR artistname:{w})"))
+        .collect();
+    let artist = words(&q.artist);
+    if !artist.is_empty() {
+        parts.push(format!("artist:({})", artist.join(" AND ")));
+    }
+    if parts.is_empty() {
+        return None;
+    }
+    if let Some(n) = q.tracks {
+        parts.push(format!("tracksmedium:{n}"));
+    }
+    if q.cd_only {
+        parts.push("format:CD".to_string());
+    }
+    Some(parts.join(" AND "))
+}
+
+/// Search MusicBrainz for releases.
+pub fn search_releases(q: &SearchQuery, debug: bool) -> Result<SearchResults, Error> {
+    let Some(query) = build_search_query(q) else {
+        return Err(Error::validation("Type an album or artist to search for"));
+    };
+    if debug { eprintln!("MusicBrainz search: {}", query); }
+
+    let resp = ureq::get(&format!("{}/release", MB_API))
+        .set("User-Agent", USER_AGENT)
+        .query("query", &query)
+        .query("fmt", "json")
+        .query("limit", "20")
+        .query("offset", &q.offset.to_string())
+        .call();
+
+    let parsed: MbSearchResponse = match resp {
+        Ok(r) => r.into_json().map_err(|e| Error::backend(format!("MusicBrainz response parse error: {}", e)))?,
+        Err(ureq::Error::Status(503, _)) => {
+            return Err(Error::backend("MusicBrainz is rate limiting requests — wait a second and try again"));
+        }
+        Err(ureq::Error::Status(code, _)) => {
+            return Err(Error::backend(format!("MusicBrainz returned HTTP {}", code)));
+        }
+        Err(e) => return Err(Error::backend(format!("Could not reach MusicBrainz: {}", e))),
+    };
+
+    let releases = parsed.releases.iter().map(|r| {
+        let date = r.date.clone().filter(|d| !d.is_empty());
+        let year = date.as_deref().and_then(|d| d.split('-').next()).filter(|y| y.len() == 4).map(String::from);
+        let counts: Vec<usize> = r.media.iter().map(|m| m.track_count).collect();
+        let mut formats: Vec<&str> = r.media.iter().map(|m| m.format.as_deref().unwrap_or("?")).collect();
+        formats.dedup();
+        let format = match (r.media.len(), formats.as_slice()) {
+            (0, _) => String::new(),
+            (1, [f]) => (*f).to_string(),
+            (n, [f]) => format!("{n}×{f}"),
+            (n, _) => format!("{n} discs"),
+        };
+        let li = r.label_info.first();
+        SearchHit {
+            mb_release_id: r.id.clone(),
+            title: r.title.clone(),
+            artist: artist_name(&r.artist_credit),
+            date,
+            year,
+            country: r.country.clone().filter(|c| !c.is_empty()),
+            status: r.status.clone(),
+            label: li.and_then(|l| l.label.as_ref()).and_then(|l| l.name.clone()),
+            catalog_number: li.and_then(|l| l.catalog_number.clone()),
+            barcode: r.barcode.clone().filter(|b| !b.is_empty()),
+            disambiguation: r.disambiguation.clone().filter(|d| !d.is_empty()),
+            format,
+            disc_track_counts: counts,
+            score: r.score.unwrap_or(0),
+        }
+    }).collect();
+
+    Ok(SearchResults { count: parsed.count, offset: parsed.offset, releases })
+}
+
 // ── Response parsing helpers ──────────────────────────────────────────────────
 
 fn parse_release(r: &MbRelease, media: &[MbMedia], total_releases: usize) -> ReleaseInfo {
@@ -381,5 +584,33 @@ mod tests {
         println!("{} — {} ({:?}) {} tracks, warning {:?}", r.album, r.album_artist, r.year, r.tracks.len(), warning);
         assert!(!r.tracks.is_empty());
         assert_eq!(r.tracks[0].number, 1);
+    }
+
+    #[test]
+    fn builds_search_queries() {
+        let q = SearchQuery { text: "junior mafia".into(), ..Default::default() };
+        assert_eq!(
+            build_search_query(&q).unwrap(),
+            "(release:junior OR artist:junior OR artistname:junior) AND (release:mafia OR artist:mafia OR artistname:mafia)"
+        );
+        let q = SearchQuery { text: "".into(), artist: "The Notorious B.I.G.".into(), tracks: Some(12), cd_only: true, offset: 0 };
+        assert_eq!(build_search_query(&q).unwrap(), "artist:(The AND Notorious AND B.I.G.) AND tracksmedium:12 AND format:CD");
+        // Query syntax is escaped so user text can't change the search.
+        let q = SearchQuery { text: "a+b (c) \"d\" e:f".into(), ..Default::default() };
+        let built = build_search_query(&q).unwrap();
+        assert!(built.contains("release:a\\+b"));
+        assert!(built.contains("release:\\(c\\)"));
+        assert!(built.contains("release:e\\:f"));
+        assert!(build_search_query(&SearchQuery::default()).is_none());
+    }
+
+    /// Hits the real MusicBrainz API; run with `cargo test -- --ignored`.
+    #[test]
+    #[ignore]
+    fn live_search() {
+        let r = search_releases(&SearchQuery { text: "junior mafia conspiracy".into(), cd_only: true, ..Default::default() }, false).unwrap();
+        println!("{} results", r.count);
+        for h in r.releases.iter().take(5) { println!("{} — {} [{}] {:?} {:?}", h.title, h.artist, h.format, h.disc_track_counts, h.year); }
+        assert!(!r.releases.is_empty());
     }
 }

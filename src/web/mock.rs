@@ -231,3 +231,26 @@ pub async fn recover(job: Arc<Job>, blank: Option<String>) {
     job.push(Event::Log { msg: "Disc on /dev/sr0 is blank. No recovery needed.".into() });
     job.push(Event::Status { status: Status::Done });
 }
+
+/// Canned search results so the search dialog can be tried without network access.
+pub fn search(q: &crate::rip::musicbrainz::SearchQuery) -> Value {
+    let all = [
+        ("00000000-0000-4000-8000-000000000000", ALBUM, ARTIST, "1999-04-12", "GB", "Static Records", "SR001", "CD", vec![5usize], 96),
+        ("00000000-0000-4000-8000-000000000001", ALBUM, ARTIST, "1999-05-03", "US", "Nightline", "NL-4471", "CD", vec![5], 91),
+        ("00000000-0000-4000-8000-000000000002", "Neon Cathedral (Deluxe Edition)", ARTIST, "2009-10-26", "GB", "Static Records", "SR001X", "2×CD", vec![5, 9], 84),
+        ("00000000-0000-4000-8000-000000000003", "Neon Cathedral", ARTIST, "1999", "JP", "Tokyo Wax", "TW-1188", "CD", vec![6], 80),
+        ("00000000-0000-4000-8000-000000000004", "Midnight Ferry", "Velvet Harbour", "2007-03-19", "GB", "Harbour Recordings", "HR12", "CD", vec![6], 70),
+    ];
+    let needle = format!("{} {}", q.text, q.artist).to_lowercase();
+    let releases: Vec<Value> = all.iter()
+        .filter(|(_, title, artist, ..)| needle.split_whitespace().all(|w| title.to_lowercase().contains(w) || artist.to_lowercase().contains(w)))
+        .filter(|(_, _, _, _, _, _, _, _, counts, _)| q.tracks.map_or(true, |n| counts.contains(&n)))
+        .map(|(id, title, artist, date, country, label, cat, format, counts, score)| json!({
+            "mb_release_id": id, "title": title, "artist": artist, "date": date, "year": &date[..4],
+            "country": country, "status": "Official", "label": label, "catalog_number": cat, "barcode": null,
+            "disambiguation": if *id == "00000000-0000-4000-8000-000000000003" { json!("Japanese edition with bonus track") } else { Value::Null },
+            "format": format, "disc_track_counts": counts, "score": score,
+        }))
+        .collect();
+    json!({"count": releases.len(), "offset": 0, "releases": releases})
+}
