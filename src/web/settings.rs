@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::rip::cover::{self, CoverOptions, CoverSource};
 
-pub const FORMATS: &[&str] = &["flac", "wav", "alac", "aiff", "ogg", "mp3", "opus"];
+pub const FORMATS: &[&str] = &["flac", "wav", "alac", "aiff", "ogg", "mp3", "opus", "aac"];
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
@@ -20,6 +20,10 @@ pub struct Settings {
     pub rip_archive: bool,
     pub rip_skip_musicbrainz: bool,
     pub rip_skip_accuraterip: bool,
+    /// Quality choice for the default format (empty = the best).
+    pub rip_quality: String,
+    /// Add ReplayGain tags after ripping.
+    pub rip_replaygain: bool,
 
     // Cover art
     /// Enabled sources, best first: "fanart" and/or "caa".
@@ -91,6 +95,8 @@ impl Default for Settings {
             rip_archive: false,
             rip_skip_musicbrainz: false,
             rip_skip_accuraterip: false,
+            rip_quality: String::new(),
+            rip_replaygain: false,
             cover_sources: vec!["caa".into()],
             cover_save_file: true,
             cover_embed: true,
@@ -128,6 +134,13 @@ impl Settings {
     pub fn validate(mut self) -> Result<Settings, String> {
         if !FORMATS.contains(&self.rip_format.as_str()) {
             return Err(format!("Unknown audio format '{}'", self.rip_format));
+        }
+        self.rip_quality = self.rip_quality.trim().to_string();
+        if !self.rip_quality.is_empty() {
+            let fmt: crate::rip::encoder::AudioFormat = self.rip_format.parse().map_err(|e: String| e)?;
+            if !crate::rip::encoder::quality_choices(&fmt).iter().any(|c| c.id == self.rip_quality) {
+                self.rip_quality.clear();
+            }
         }
         let mut seen: Vec<CoverSource> = Vec::new();
         for s in &self.cover_sources {

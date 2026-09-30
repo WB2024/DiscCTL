@@ -10,6 +10,7 @@ mod cache;
 mod import;
 mod jobs;
 mod library_edit;
+mod quality;
 mod mock;
 mod settings;
 mod stick;
@@ -241,6 +242,10 @@ pub async fn serve(cfg: Config, bind: SocketAddr) -> Result<(), Error> {
         .route("/api/browse", get(browse))
         .route("/api/library", get(library))
         .route("/api/library/{name}", get(library_entry))
+        .route("/api/library/{name}/quality", get(quality::facts))
+        .route("/api/library/{name}/quality/integrity", post(quality::integrity))
+        .route("/api/library/{name}/quality/loudness", post(quality::loudness))
+        .route("/api/library/{name}/spectrogram", get(quality::spectrogram))
         .route("/api/library/{name}/tags", get(library_edit::tags).put(library_edit::save_tags))
         .route("/api/library/{name}/cover", post(library_edit::set_cover).layer(axum::extract::DefaultBodyLimit::max(library_edit::MAX_IMAGE)))
         .route("/api/cover/upload", post(library_edit::upload_cover).layer(axum::extract::DefaultBodyLimit::max(library_edit::MAX_IMAGE)))
@@ -304,6 +309,13 @@ async fn status(State(st): S) -> Json<Value> {
     .map(|(n, why)| json!({"name": n, "purpose": why, "found": find_in_path(n)}))
     .collect();
 
+    let quality_map: std::collections::BTreeMap<String, Vec<Value>> = ["flac", "wav", "alac", "aiff", "ogg", "mp3", "opus", "aac"]
+        .iter()
+        .map(|f| {
+            let fmt: AudioFormat = f.parse().expect("known format");
+            (f.to_string(), rip::encoder::quality_choices(&fmt).iter().map(|c| json!({"id": c.id, "label": c.label, "note": c.note})).collect())
+        })
+        .collect();
     Json(json!({
         "version": env!("CARGO_PKG_VERSION"),
         "mock": st.cfg.mock,
@@ -311,7 +323,8 @@ async fn status(State(st): S) -> Json<Value> {
         "devices": devices,
         "rips_dir": path_str(&st.cfg.rips_dir),
         "media_dir": path_str(&st.cfg.media_dir),
-        "formats": ["flac", "wav", "alac", "aiff", "ogg", "mp3", "opus"],
+        "formats": ["flac", "wav", "alac", "aiff", "ogg", "mp3", "opus", "aac"],
+        "quality_choices": quality_map,
         "media_presets": crate::planner::discs::PRESETS.iter().map(|p| json!({"id": p.id, "label": p.label, "mb": p.mb, "media": p.media})).collect::<Vec<_>>(),
         "deps": deps,
         "busy_job": st.jobs.busy().map(|j| j.summary()),
@@ -522,6 +535,8 @@ struct SettingsUpdate {
     rip_archive: bool,
     rip_skip_musicbrainz: bool,
     rip_skip_accuraterip: bool,
+    rip_quality: Option<String>,
+    rip_replaygain: Option<bool>,
     cover_sources: Vec<String>,
     cover_save_file: bool,
     cover_embed: bool,
@@ -561,6 +576,8 @@ async fn put_settings(State(st): S, Json(u): Json<SettingsUpdate>) -> ApiResult<
         rip_archive: u.rip_archive,
         rip_skip_musicbrainz: u.rip_skip_musicbrainz,
         rip_skip_accuraterip: u.rip_skip_accuraterip,
+        rip_quality: u.rip_quality.unwrap_or(current.rip_quality.clone()),
+        rip_replaygain: u.rip_replaygain.unwrap_or(current.rip_replaygain),
         cover_sources: u.cover_sources,
         cover_save_file: u.cover_save_file,
         cover_embed: u.cover_embed,
@@ -1145,11 +1162,14 @@ struct RipReq {
     folder: Option<String>,
     /// A picture uploaded with /api/cover/upload, to use as the cover.
     cover_upload: Option<String>,
+    /// Encoder quality for the format (empty = the best).
+    quality: Option<String>,
+    replaygain: bool,
 }
 
 impl Default for RipReq {
     fn default() -> Self {
-        RipReq { device: None, format: None, archive: false, no_musicbrainz: false, no_accuraterip: false, debug: false, mb_release: None, folder: None, cover_upload: None }
+        RipReq { device: None, format: None, archive: false, no_musicbrainz: false, no_accuraterip: false, debug: false, mb_release: None, folder: None, cover_upload: None, quality: None, replaygain: false }
     }
 }
 
@@ -1198,6 +1218,15 @@ async fn start_rip(State(st): S, Json(req): Json<RipReq>) -> ApiResult<Json<Valu
     if let Some(p) = &cover_file {
         args.extend(["--cover-file".into(), path_str(p)]);
     }
+    let quality = req.quality.as_deref().map(str::trim).filter(|q| !q.is_empty()).map(String::from);
+    if let Some(q) = &quality {
+        let fmt: AudioFormat = format.parse().map_err(ApiError::bad)?;
+        if !rip::encoder::quality_choices(&fmt).iter().any(|c| c.id == q) {
+            return Err(ApiError::bad(format!("'{q}' isn't a quality choice for {fmt}")));
+        }
+        args.extend(["--quality".into(), q.clone()]);
+    }
+    if req.replaygain { args.push("--replaygain".into()); }
     let mut envs: Vec<(String, String)> = Vec::new();
     if let Some(key) = &cover_opts.fanart_key {
         envs.push(("RUSTYDISC_FANART_KEY".into(), key.clone()));
@@ -1210,7 +1239,7 @@ async fn start_rip(State(st): S, Json(req): Json<RipReq>) -> ApiResult<Json<Valu
 
     let job = start_job(&st, "rip", &format!("Rip {device} → {}", format.to_uppercase()), true)?;
     if st.cfg.mock {
-        tokio::spawn(mock::rip(job.clone(), st.cfg.rips_dir.clone(), folder, req.archive, format, skip_mb, req.no_accuraterip, mb_release.is_some(), cover_opts, cover_file));
+        tokio::spawn(mock::rip(job.clone(), st.cfg.rips_dir.clone(), folder, req.archive, format, skip_mb, req.no_accuraterip, mb_release.is_some(), cover_opts, cover_file, quality.clone(), req.replaygain));
     } else {
         spawn_cli_env(&st, job.clone(), args, None, envs);
     }

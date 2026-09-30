@@ -223,6 +223,11 @@ pre.json { background: var(--bg); border: 1px solid var(--line); border-radius: 
             <label class="field" id="fmt-wrap">Audio format
               <select id="rip-format"></select>
             </label>
+            <label class="field" id="quality-wrap">Quality
+              <select id="rip-quality"></select>
+              <small id="rip-quality-note">Lossless formats keep every bit of the disc's audio. Lossy ones let you trade size for quality.</small>
+            </label>
+            <label class="check"><input type="checkbox" id="rip-replaygain"><span>Add ReplayGain tags<small>measures loudness so players can level tracks and albums without changing the audio</small></span></label>
             <label class="check"><input type="checkbox" id="rip-archive"><span>Archive mode<small>audio/ + metadata/ folders with disc.json, cdtext.json, musicbrainz.json and SHA-256 checksums</small></span></label>
             <label class="check"><input type="checkbox" id="rip-nomb"><span>Skip MusicBrainz lookup<small>for offline use or discs that aren't in the database</small></span></label>
             <label class="check"><input type="checkbox" id="rip-noar"><span>Skip AccurateRip check<small>don't compare the rip with the AccurateRip database</small></span></label>
@@ -548,8 +553,12 @@ pre.json { background: var(--bg); border: 1px solid var(--line); border-radius: 
         <h2>Rip defaults</h2>
         <div class="muted" style="margin-bottom:12px">These pre-fill the options on the Rip page. You can still change them for each rip.</div>
         <div class="grid2">
-          <label class="field">Audio format<select id="set-format"></select></label>
           <div style="display:flex;flex-direction:column;gap:12px">
+            <label class="field">Audio format<select id="set-format"></select></label>
+            <label class="field">Quality<select id="set-quality"></select></label>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:12px">
+            <label class="check"><input type="checkbox" id="set-replaygain"><span>Add ReplayGain tags</span></label>
             <label class="check"><input type="checkbox" id="set-archive"><span>Archive mode</span></label>
             <label class="check"><input type="checkbox" id="set-nomb"><span>Skip the MusicBrainz lookup</span></label>
             <label class="check"><input type="checkbox" id="set-noar"><span>Skip the AccurateRip check</span></label>
@@ -704,6 +713,12 @@ async function ejectStick(btn) {
 }
 
 // ── Cover art note shown in the job panel ──────────────────────────────────
+function qualityNote(s) {
+  const rate = s.avg_bitrate_kbps ? ` · average ${Math.round(s.avg_bitrate_kbps)} kbps${s.min_bitrate_kbps && s.max_bitrate_kbps && Math.round(s.min_bitrate_kbps) !== Math.round(s.max_bitrate_kbps) ? ` (${Math.round(s.min_bitrate_kbps)}–${Math.round(s.max_bitrate_kbps)})` : ""}` : "";
+  const badge = s.cd_quality ? `<span class="badge ok">lossless · CD quality</span>` : s.lossless ? `<span class="badge ok">lossless</span>` : `<span class="badge">lossy</span>`;
+  return `<div class="notice" style="margin-top:8px"><b>Quality</b> ${badge} ${esc(s.description)}${rate}${s.notes?.length ? `<div class="muted" style="margin-top:4px">${s.notes.map(esc).join(" ")}</div>` : ""}</div>`;
+}
+
 function coverNote(c) {
   if (!c) return "";
   const root = (STATUS.rips_dir || "").replace(/\/$/, "");
@@ -740,6 +755,7 @@ function jobPanel(container, jobId, { onEnd } = {}) {
       <div class="stepline jp-step muted"></div>
       <div class="notice warn jp-input hidden" style="margin-top:10px"><div class="row"><span class="grow jp-input-msg"></span><button class="btn primary small jp-continue">Continue</button></div></div>
       <div class="jp-cover"></div>
+      <div class="jp-quality"></div>
       <div class="jp-stick"></div>
       <div class="jp-import"></div>
       <div class="jp-result"></div>
@@ -775,6 +791,8 @@ function jobPanel(container, jobId, { onEnd } = {}) {
       case "result":
         if (ev.name === "accuraterip") q(".jp-result").innerHTML = arTable(ev.data);
         if (ev.name === "cover") q(".jp-cover").innerHTML = coverNote(ev.data);
+        if (ev.name === "quality") q(".jp-quality").innerHTML = qualityNote(ev.data);
+        if (ev.name === "replaygain") q(".jp-quality").innerHTML += `<div class="notice" style="margin-top:8px"><b>ReplayGain</b> written to ${ev.data.files} file${ev.data.files === 1 ? "" : "s"} · album gain ${ev.data.album_gain_db >= 0 ? "+" : ""}${(+ev.data.album_gain_db).toFixed(2)} dB · loudness ${(+ev.data.album_lufs).toFixed(1)} LUFS</div>`;
         if (ev.name === "stick") q(".jp-stick").innerHTML = stickDone(ev.data);
         if (ev.name === "import") q(".jp-import").innerHTML = importDone(ev.data);
         break;
@@ -1137,7 +1155,7 @@ async function startRip() {
   const folder = $('input[name=dest]:checked').value === "custom" ? $("#rip-folder").value.trim() : "";
   if ($('input[name=dest]:checked').value === "custom" && !folder) return toast("Enter a folder name or choose auto-naming", "err");
   const body = {
-    device: selectedDevice(), format: $("#rip-format").value, archive: $("#rip-archive").checked,
+    device: selectedDevice(), format: $("#rip-format").value, quality: $("#rip-quality").value || null, replaygain: $("#rip-replaygain").checked, archive: $("#rip-archive").checked,
     no_musicbrainz: $("#rip-nomb").checked, mb_release: MB.over ? MB.over.input : null, no_accuraterip: $("#rip-noar").checked, debug: $("#rip-debug").checked, folder: folder || null,
     cover_upload: RIPCOVER.token,
   };
@@ -1533,6 +1551,9 @@ async function openRip(name) {
         <div id="verify-job"></div>
         ${d.accuraterip_report ? arTable(d.accuraterip_report) : ""}
       </div>
+      ${audio.length ? `<div class="card" id="lib-quality"><div class="row"><h2 class="grow" style="margin:0">Audio quality</h2>
+          <button class="btn small" id="q-integrity">Test the audio</button><button class="btn small" id="q-loud">Measure loudness</button></div>
+        <div id="q-body" class="muted" style="margin-top:10px">Reading the files…</div><div id="q-extra"></div><div id="q-loudness"></div></div>` : ""}
       ${audio.length ? `<div class="card"><h2>Audio</h2><table><tbody>${audio.map((f, i) => `
         <tr><td style="width:28px" class="muted">${i + 1}</td><td>${esc(titleFor(f, i) || f.path.split("/").pop())}<div class="muted mono">${esc(f.path)}</div></td>
         <td class="num muted" style="width:80px">${fmtBytes(f.size)}</td>
@@ -1543,6 +1564,7 @@ async function openRip(name) {
         <tr><td><a href="${url(f.path)}" target="_blank" style="color:var(--accent2)">${esc(f.path)}</a></td><td class="num muted">${fmtBytes(f.size)}</td></tr>`).join("")}</tbody></table></div>` : ""}`;
     $("#back").onclick = loadLibrary;
     wireRipEditing(name, d);
+    if (audio.length) wireQuality(name);
     $("#verify").onclick = async () => {
       try {
         const job = await api("/api/jobs/verify", { body: { name } });
@@ -1550,6 +1572,61 @@ async function openRip(name) {
       } catch (e) { toast(e.message, "err"); }
     };
   } catch (e) { box.innerHTML = `<div class="notice err">${esc(e.message)}</div>`; }
+}
+
+// ── Library: audio quality ──────────────────────────────────────────────────
+const kbps = v => v == null ? "–" : Math.round(v) + " kbps";
+async function wireQuality(name) {
+  const body = $("#q-body"), extra = $("#q-extra"), loudOut = $("#q-loudness"), base = "/api/library/" + encodeURIComponent(name);
+  try {
+    const r = await api(base + "/quality"), s = r.summary;
+    const badge = s.cd_quality ? `<span class="badge ok">lossless · CD quality</span>` : s.lossless ? `<span class="badge ok">lossless</span>` : `<span class="badge">lossy</span>`;
+    const uniform = s.uniform ? esc(s.description) : `<i>mixed formats</i>`;
+    body.innerHTML = `<div style="font-size:16px;color:var(--text)"><b>${uniform}</b> ${badge}</div>
+      <div style="margin-top:4px">${s.files} file${s.files === 1 ? "" : "s"} · ${fmtBytes(s.total_bytes)} · average ${kbps(s.avg_bitrate_kbps)}${s.min_bitrate_kbps != null && Math.round(s.min_bitrate_kbps) !== Math.round(s.max_bitrate_kbps) ? ` (${Math.round(s.min_bitrate_kbps)}–${Math.round(s.max_bitrate_kbps)})` : ""}</div>
+      ${s.notes.length ? `<div style="margin-top:4px">${s.notes.map(esc).join(" ")}</div>` : ""}
+      <details style="margin-top:8px"><summary style="cursor:pointer">Every file</summary><table style="margin-top:6px"><tbody>${r.files.map(f => f.error ? `<tr><td class="mono">${esc(f.path)}</td><td class="ar-bad">${esc(f.error)}</td></tr>` : `<tr><td class="mono" style="word-break:break-all">${esc(f.path.split("/").pop())}</td><td>${esc(f.describe)}</td><td class="num">${kbps(f.facts.bitrate_kbps)}</td><td class="num">${fmtBytes(f.facts.size)}</td><td style="width:1%"><button class="btn small q-spec" data-path="${esc(f.path)}">Spectrogram</button></td></tr>`).join("")}</tbody></table></details>`;
+    $$(".q-spec", body).forEach(b => b.onclick = () => showSpectrogram(name, b.dataset.path));
+  } catch (e) { body.innerHTML = `<span class="ar-bad">${esc(e.message)}</span>`; }
+
+  $("#q-integrity").onclick = async () => {
+    const btn = $("#q-integrity"); btn.disabled = true; btn.textContent = "Testing…";
+    try {
+      const r = await api(base + "/quality/integrity", { body: {} });
+      extra.innerHTML = r.failed ? `<div class="notice err" style="margin-top:10px"><b>${r.failed} file${r.failed === 1 ? "" : "s"} did not decode cleanly</b>${r.results.filter(x => !x.ok).map(x => `<div class="mono">${esc(x.path)} — ${esc(x.error)}</div>`).join("")}</div>`
+        : `<div class="notice" style="margin-top:10px"><span class="ar-ok">✔</span> All ${r.results.length} file${r.results.length === 1 ? "" : "s"} decode cleanly, start to finish.</div>`;
+    } catch (e) { toast(e.message, "err", 8000); }
+    btn.disabled = false; btn.textContent = "Test the audio";
+  };
+  $("#q-loud").onclick = async () => {
+    const btn = $("#q-loud"); btn.disabled = true; btn.textContent = "Measuring…";
+    try {
+      const r = await api(base + "/quality/loudness", { body: {} });
+      const a = r.album;
+      loudOut.innerHTML = `<div class="notice" style="margin-top:10px"><b>Loudness</b> — album ${a.lufs.toFixed(1)} LUFS · range ${a.lra?.toFixed(1) ?? "–"} LU · true peak ${a.true_peak_db?.toFixed(1) ?? "–"} dBFS · ReplayGain ${a.gain_db >= 0 ? "+" : ""}${a.gain_db.toFixed(2)} dB
+        <table style="margin-top:8px"><thead><tr><th style="text-align:left">Track</th><th class="num">LUFS</th><th class="num">Range</th><th class="num">True peak</th><th class="num">Gain</th></tr></thead><tbody>${r.tracks.map(t => t.error ? `<tr><td>${esc(t.path)}</td><td colspan="4" class="ar-bad">${esc(t.error)}</td></tr>` : `<tr><td class="mono" style="word-break:break-all">${esc(t.path.split("/").pop())}</td><td class="num">${t.lufs.toFixed(1)}</td><td class="num">${t.lra?.toFixed(1) ?? "–"} LU</td><td class="num ${t.clips ? "ar-bad" : ""}">${t.true_peak_db?.toFixed(1)} dBFS${t.clips ? " ⚠ clips" : ""}</td><td class="num">${t.gain_db >= 0 ? "+" : ""}${t.gain_db.toFixed(2)} dB</td></tr>`).join("")}</tbody></table>
+        <div class="row" style="margin-top:10px"><button class="btn small primary" id="q-rg">Write ReplayGain tags to the files</button><span class="muted" id="q-rg-note"></span></div></div>`;
+      $("#q-rg").onclick = async () => {
+        $("#q-rg").disabled = true;
+        try { const w = await api(base + "/quality/loudness", { body: { write_replaygain: true } }); $("#q-rg-note").textContent = `Written to ${w.written} file${w.written === 1 ? "" : "s"}.`; toast("ReplayGain tags written", "ok", 3000); }
+        catch (e) { toast(e.message, "err", 8000); $("#q-rg").disabled = false; }
+      };
+    } catch (e) { toast(e.message, "err", 8000); }
+    btn.disabled = false; btn.textContent = "Measure loudness";
+  };
+}
+
+function showSpectrogram(name, path) {
+  const bg = document.createElement("div"); bg.className = "modal-bg";
+  bg.innerHTML = `<div class="modal wide" style="height:auto"><header class="row"><span class="grow">Spectrogram — ${esc(path.split("/").pop())}</span><button class="btn small close">Close</button></header>
+    <div class="body" style="text-align:center"><div class="muted sp-wait" style="padding:30px">Drawing…</div><img class="hidden" style="max-width:100%;border-radius:6px" alt="Spectrogram"></div>
+    <footer><span class="muted grow">Frequency runs up the side, time along the bottom. Real CD audio fills the picture up to 20 kHz and beyond; a sharp ceiling around 16 kHz means the audio was once a lossy MP3 or similar.</span></footer></div>`;
+  document.body.append(bg);
+  const close = () => bg.remove(); $(".close", bg).onclick = close; bg.onclick = e => { if (e.target === bg) close(); };
+  const img = $("img", bg);
+  img.onload = () => { $(".sp-wait", bg).remove(); img.classList.remove("hidden"); };
+  img.onerror = () => { $(".sp-wait", bg).innerHTML = `<span class="ar-bad">Couldn't draw the spectrogram.</span>`; };
+  img.src = `/api/library/${encodeURIComponent(name)}/spectrogram?file=${encodeURIComponent(path)}`;
 }
 
 // ── Library: change the cover, inspect and edit tags ────────────────────────
@@ -2239,9 +2316,22 @@ function importDone(d) {
 // ── Settings ────────────────────────────────────────────────────────────────
 let SET = null, SETINFO = null, SRC_ORDER = [];
 
+const FORMAT_LABEL = { flac: "FLAC (lossless)", wav: "WAV (lossless, uncompressed)", alac: "ALAC (lossless, Apple)", aiff: "AIFF (lossless, uncompressed)", ogg: "OGG Vorbis", mp3: "MP3", opus: "Opus", aac: "AAC" };
+const formatOptions = () => STATUS.formats.map(f => `<option value="${f}">${FORMAT_LABEL[f] || f.toUpperCase()}</option>`).join("");
+// The quality choices for a format; the first is the best. Formats with a single choice have nothing to pick.
+function fillQuality(sel, format, current) {
+  const list = STATUS.quality_choices?.[format] || [];
+  sel.innerHTML = list.map((c, i) => `<option value="${esc(c.id)}" title="${esc(c.note)}">${esc(c.label)}${i === 0 && list.length > 1 ? " — best" : ""}</option>`).join("");
+  sel.disabled = list.length <= 1;
+  sel.value = list.some(c => c.id === current) ? current : (list[0]?.id ?? "");
+  sel.title = list.find(c => c.id === sel.value)?.note || "";
+}
+
 function applyRipDefaults() {
   if (!SET) return;
   $("#rip-format").value = SET.rip_format;
+  fillQuality($("#rip-quality"), SET.rip_format, SET.rip_quality);
+  $("#rip-replaygain").checked = !!SET.rip_replaygain;
   $("#rip-archive").checked = SET.rip_archive;
   $("#rip-nomb").checked = SET.rip_skip_musicbrainz;
   $("#rip-noar").checked = SET.rip_skip_accuraterip;
@@ -2259,8 +2349,11 @@ async function loadSettings(quiet) {
 
 function renderSettings() {
   $("#cfg-file").textContent = SETINFO.config_file;
-  $("#set-format").innerHTML = STATUS.formats.map(f => `<option value="${f}">${f.toUpperCase()}${f === "flac" ? " (lossless)" : ""}</option>`).join("");
+  $("#set-format").innerHTML = formatOptions();
   $("#set-format").value = SET.rip_format;
+  fillQuality($("#set-quality"), SET.rip_format, SET.rip_quality);
+  $("#set-format").onchange = () => fillQuality($("#set-quality"), $("#set-format").value, "");
+  $("#set-replaygain").checked = !!SET.rip_replaygain;
   $("#set-archive").checked = SET.rip_archive;
   $("#set-nomb").checked = SET.rip_skip_musicbrainz;
   $("#set-noar").checked = SET.rip_skip_accuraterip;
@@ -2492,7 +2585,7 @@ async function loadCacheUsage() {
 
 async function saveSettings(extra = {}) {
   const body = {
-    rip_format: $("#set-format").value, rip_archive: $("#set-archive").checked,
+    rip_format: $("#set-format").value, rip_quality: $("#set-quality").value, rip_replaygain: $("#set-replaygain").checked, rip_archive: $("#set-archive").checked,
     rip_skip_musicbrainz: $("#set-nomb").checked, rip_skip_accuraterip: $("#set-noar").checked,
     cover_sources: enabledSources(), cover_save_file: $("#cover-save").checked, cover_embed: $("#cover-embed").checked,
     stick_extra_folders: $("#set-stick-folders").value.split("\n").map(l => l.trim()).filter(Boolean),
@@ -2553,7 +2646,9 @@ async function init() {
   $("#mockflag").classList.toggle("hidden", !STATUS.mock);
   $("#scenario-wrap").classList.toggle("hidden", !STATUS.mock);
   $("#rips-dir").textContent = STATUS.rips_dir;
-  $("#rip-format").innerHTML = STATUS.formats.map(f => `<option value="${f}">${f.toUpperCase()}${f === "flac" ? " (lossless)" : ""}</option>`).join("");
+  $("#rip-format").innerHTML = formatOptions();
+  $("#rip-format").onchange = () => fillQuality($("#rip-quality"), $("#rip-format").value, "");
+  $("#rip-quality").onchange = () => { $("#rip-quality").title = STATUS.quality_choices?.[$("#rip-format").value]?.find(c => c.id === $("#rip-quality").value)?.note || ""; $("#rip-quality-note").textContent = $("#rip-quality").title || ""; };
   await loadSettings(true);
   initRipCover();
   fillDevices();

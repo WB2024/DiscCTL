@@ -131,7 +131,10 @@ rustydisc rip [OPTIONS]
 | `--device <dev>` | Drive to rip from (default: `/dev/sr0`) |
 | `--dir <base-dir>` | **Recommended.** Base directory — a subfolder named `Artist - Album (Year)` is auto-created from metadata |
 | `--output <dir>` | Explicit output path — use this exact directory name |
-| `--format <fmt>` | Audio format: `wav`, `flac`, `alac`, `aiff`, `ogg`, `mp3`, `opus` (default: `flac`) |
+| `--format <fmt>` | Audio format: `wav`, `flac`, `alac`, `aiff`, `ogg`, `mp3`, `opus`, `aac` (default: `flac`) |
+| `--quality <q>` | Encoder quality, best by default: FLAC `0`–`12` (level), MP3 `v0`/`v2`/`cbr320`/`cbr192`/`cbr128`, AAC and Opus a bitrate in kbps, OGG `4`–`10`. See [Audio quality](audio-quality.md) |
+| `--replaygain` | Measure loudness after ripping and write ReplayGain 2.0 tags |
+| `--cover-file <file>` | Use this JPEG or PNG as the cover instead of looking one up |
 | `--archive` | Archive mode: store in `audio/` + `metadata/` subdirs; add `musicbrainz.json` + `checksums.json` |
 | `--mb-release <id\|url>` | Use this MusicBrainz release for tags, cover art and folder name instead of the DiscID lookup — see [Choosing the MusicBrainz release](#choosing-the-musicbrainz-release) |
 | `--no-musicbrainz` | Skip MusicBrainz lookup (for offline use or discs not in the database) |

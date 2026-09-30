@@ -7,7 +7,7 @@
 **Rip, burn and archive CDs and DVDs — and fill USB sticks — from your browser.**<br>
 Built in Rust for Linux. Runs headless in Docker, so the drive can live in a server and you drive it from anywhere.
 
-[![Version](https://img.shields.io/badge/version-0.15-e8743b?style=flat-square)](https://github.com/WB2024/DiscCTL)
+[![Version](https://img.shields.io/badge/version-1.0-e8743b?style=flat-square)](https://github.com/WB2024/DiscCTL)
 [![Docker pulls](https://img.shields.io/docker/pulls/wb20244/rustydisc?style=flat-square&logo=docker&logoColor=white&color=2496ED)](https://hub.docker.com/r/wb20244/rustydisc)
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange?style=flat-square&logo=rust)](docs/install.md)
 [![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](#license)
@@ -41,7 +41,8 @@ Built in Rust for Linux. Runs headless in Docker, so the drive can live in a ser
 
 ### 💿 Rip
 - Secure extraction with error correction
-- **FLAC, ALAC, WAV, AIFF, MP3, Opus, OGG**
+- **FLAC, ALAC, WAV, AIFF, MP3, AAC, Opus, OGG**, each with quality choices (best by default)
+- **Quality report:** bit depth, sample rate and bitrate after ripping, plus an integrity test, **loudness / ReplayGain** and **spectrograms** that expose fake lossless
 - **Every MusicBrainz tag** on every file: IDs, sort names, disc, label, ISRCs, credits
 - MusicBrainz **search** when the match is wrong
 - Cover art from Cover Art Archive and/or fanart.tv, or **upload your own**
@@ -71,7 +72,7 @@ Built in Rust for Linux. Runs headless in Docker, so the drive can live in a ser
 - **Import** rips: move, copy or hard link, with conflict rules by quality, date or name
 - **Lidarr** import: matched by MusicBrainz ID, artists and albums added unmonitored
 - **Edit tags** per track or album-wide, and **add or change cover art**, right in the Library
-- Browse, play, download and **verify** every rip
+- Browse, play, download and **verify** every rip, and check its **audio quality**
 
 </td>
 <td width="50%" valign="top">
@@ -149,6 +150,23 @@ Scan the disc, see every track, and rip. Results are checked against AccurateRip
 <tr>
 <td align="center"><sub><b>Wrong match?</b> Search MusicBrainz from inside the app</sub></td>
 <td align="center"><sub><b>Your own cover:</b> saved, embedded, or both</sub></td>
+</tr>
+</table>
+
+### 🎚 Audiophile tools
+
+Pick the quality when you rip (the best is the default), and see exactly what you got: **bit depth, sample rate and bitrate** for every file, an integrity test that decodes each track, and **loudness with ReplayGain** you can write to the files. [More →](docs/audio-quality.md)
+
+<p align="center"><img src="Images/Screenshots/library-quality.png" alt="The audio quality card: format, bit depth, bitrate, integrity test and loudness" width="900"></p>
+
+<table>
+<tr>
+<td width="50%"><img src="Images/Screenshots/library-spectrogram.png" alt="A spectrogram of a genuine CD rip, filled to 22 kHz"></td>
+<td width="50%"><img src="Images/Screenshots/library-spectrogram-lossy.png" alt="A spectrogram of a lossless file that started as a 128 kbps MP3, with a hard ceiling at 16 kHz"></td>
+</tr>
+<tr>
+<td align="center"><sub><b>Genuine CD audio:</b> full spectrum</sub></td>
+<td align="center"><sub><b>"Lossless" from an MP3:</b> the 16 kHz ceiling gives it away</sub></td>
 </tr>
 </table>
 
@@ -256,28 +274,34 @@ The plan spells out every decision before a single byte is written, and how full
 
 ### ⚙️ Settings, security and tools
 
-Cover art sources in the order you want, defaults for the Rip page, converted files kept for reuse or deleted right away, and an optional login for shared servers.
+Cover art sources in the order you want, rip defaults (format, quality, ReplayGain), converted files kept for reuse or deleted right away, and an optional login for shared servers.
 
 <table>
 <tr>
 <td width="50%"><img src="Images/Screenshots/settings.png" alt="Settings for cover art and defaults"></td>
+<td width="50%"><img src="Images/Screenshots/settings-rip-defaults.png" alt="Rip defaults: format, quality and ReplayGain"></td>
+</tr>
+<tr>
+<td align="center"><sub><b>Cover art</b> sources and order</sub></td>
+<td align="center"><sub><b>Rip defaults:</b> format, quality, ReplayGain</sub></td>
+</tr>
+<tr>
 <td width="50%"><img src="Images/Screenshots/settings-convert.png" alt="How long converted files are kept"></td>
-</tr>
-<tr>
-<td align="center"><sub><b>Cover art</b> and rip defaults</sub></td>
-<td align="center"><sub><b>Converted files:</b> keep or delete</sub></td>
-</tr>
-<tr>
 <td width="50%"><img src="Images/Screenshots/settings-security.png" alt="Turning on the login"></td>
-<td width="50%"><img src="Images/Screenshots/login.png" alt="The login page"></td>
 </tr>
 <tr>
-<td align="center"><sub><b>Optional login</b></sub></td>
+<td align="center"><sub><b>Converted files:</b> keep or delete</sub></td>
+<td align="center"><sub><b>Optional login</b> for shared servers</sub></td>
+</tr>
+<tr>
+<td width="50%"><img src="Images/Screenshots/login.png" alt="The login page"></td>
+<td width="50%"><img src="Images/Screenshots/tools.png" alt="Disc recovery, CD-RW blanking and dependency checks"></td>
+</tr>
+<tr>
 <td align="center"><sub>The login page</sub></td>
+<td align="center"><sub><b>Tools:</b> recovery, blanking, dependency check</sub></td>
 </tr>
 </table>
-
-<p align="center"><img src="Images/Screenshots/tools.png" alt="Disc recovery, CD-RW blanking and dependency checks" width="900"></p>
 
 <sub>Screenshots use RustyDisc's built-in <code>--mock</code> mode, which simulates the drive and sticks, with a demo library. The cover art and albums are demo data.</sub>
 
@@ -293,6 +317,7 @@ Cover art sources in the order you want, defaults for the Rip page, converted fi
 | MusicBrainz tags + cover art | ✅ | CDDB | — | ✅ | ✅ |
 | AccurateRip verification | ✅ | — | — | — | ✅ |
 | Archive mode with checksums | ✅ | — | — | — | rip log |
+| Quality choices, ReplayGain, spectrograms | ✅ | — | — | ✅ | — |
 | Import into a library (Picard scripts, Lidarr) | ✅ | — | — | — | — |
 | Edit tags and covers after ripping | ✅ | ✅ | — | — | — |
 | Write music to USB sticks | ✅ | — | — | — | — |
@@ -311,6 +336,7 @@ The README stays short on purpose. The details live here:
 | | |
 |---|---|
 | 📥 [**Library import**](docs/library-import.md) | Picard naming scripts and the built-in script builder, importing through Lidarr, editing tags and covers, and the full MusicBrainz tags written on rip |
+| 🎚 [**Audio quality**](docs/audio-quality.md) | Encoder quality choices, the quality report, integrity test, loudness and ReplayGain, spectrograms |
 | 🖥️ [**Web UI & Docker**](docs/web-ui-and-docker.md) | Deployment, Proxmox, environment variables, the optional login |
 | 🔌 [**Rusty Stick**](docs/rusty-stick.md) | Layouts and tokens, conversion, conflicts, reformatting, hot-plug mounting, CLI |
 | 📀 [**Disc formats**](docs/disc-formats.md) | Red Book, Data, Blue Book, Data DVD and Music DVD explained |

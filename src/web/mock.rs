@@ -119,7 +119,7 @@ fn cancelled(job: &Job) {
     job.push(Event::Status { status: Status::Cancelled });
 }
 
-pub async fn rip(job: Arc<Job>, rips_dir: PathBuf, folder: Option<String>, archive: bool, format: String, no_mb: bool, no_ar: bool, mb_chosen: bool, cover: crate::rip::cover::CoverOptions, cover_file: Option<PathBuf>) {
+pub async fn rip(job: Arc<Job>, rips_dir: PathBuf, folder: Option<String>, archive: bool, format: String, no_mb: bool, no_ar: bool, mb_chosen: bool, cover: crate::rip::cover::CoverOptions, cover_file: Option<PathBuf>, quality: Option<String>, replaygain: bool) {
     job.push(Event::Step { msg: "Analysing disc...".into() });
     job.push(Event::Progress { pct: 0.0 });
     if work(&job, 700).await { return cancelled(&job); }
@@ -175,6 +175,29 @@ pub async fn rip(job: Arc<Job>, rips_dir: PathBuf, folder: Option<String>, archi
         // Placeholder bytes (not real audio) so the library and verify have something to work with.
         let _ = std::fs::write(audio_dir.join(&file), format!("mock audio data for {title}\n").repeat(2000));
         job.push(Event::Progress { pct: 85.0 + (i + 1) as f32 / TRACKS.len() as f32 * 12.0 });
+    }
+
+    // What the real rip reports after encoding: the format, bit depth and bitrate of the result.
+    {
+        let (desc, lossless, avg): (String, bool, f64) = match format.as_str() {
+            "flac" => ("FLAC · 16-bit · 44.1 kHz · stereo".into(), true, 912.0),
+            "alac" => ("ALAC · 16-bit · 44.1 kHz · stereo".into(), true, 940.0),
+            "wav" | "aiff" => ("PCM · 16-bit · 44.1 kHz · stereo".into(), true, 1411.0),
+            "mp3" => ("MP3 · 44.1 kHz · stereo".into(), false, match quality.as_deref() { Some("cbr320") => 320.0, Some("cbr192") => 192.0, Some("cbr128") => 128.0, Some("v2") => 190.0, _ => 245.0 }),
+            other => (format!("{} · 44.1 kHz · stereo", other.to_uppercase()), false, quality.as_deref().and_then(|q| q.parse::<f64>().ok()).unwrap_or(256.0)),
+        };
+        let cd = lossless;
+        job.push(Event::Step { msg: format!("Quality: {desc} — average {avg:.0} kbps{}", if cd { " (lossless, CD quality)" } else { "" }) });
+        job.push(Event::Result { name: "quality".into(), data: json!({
+            "files": TRACKS.len(), "description": desc, "uniform": true, "lossless": lossless, "cd_quality": cd,
+            "avg_bitrate_kbps": avg, "min_bitrate_kbps": avg - 12.0, "max_bitrate_kbps": avg + 9.0, "total_bytes": 0, "notes": [],
+        }) });
+        if replaygain {
+            job.push(Event::Step { msg: "Measuring loudness for ReplayGain...".into() });
+            if work(&job, 700).await { return cancelled(&job); }
+            job.push(Event::Step { msg: "ReplayGain written to 5 file(s): album gain -6.40 dB, album peak 0.978".into() });
+            job.push(Event::Result { name: "replaygain".into(), data: json!({"type": "replaygain", "files": TRACKS.len(), "album_gain_db": -6.4, "album_lufs": -11.6, "album_peak": 0.978}) });
+        }
     }
 
     let mut ar_report = None;

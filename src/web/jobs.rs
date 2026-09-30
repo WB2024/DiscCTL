@@ -350,6 +350,14 @@ fn handle_stdout_line(job: &Job, line: &str) {
                 job.push(Event::Result { name: "stick".into(), data: v.clone() });
                 return;
             }
+            Some("quality") => {
+                job.push(Event::Result { name: "quality".into(), data: v.get("summary").cloned().unwrap_or(serde_json::Value::Null) });
+                return;
+            }
+            Some("replaygain") => {
+                job.push(Event::Result { name: "replaygain".into(), data: v.clone() });
+                return;
+            }
             Some("import_done") => {
                 job.push(Event::Result { name: "import".into(), data: v.clone() });
                 return;

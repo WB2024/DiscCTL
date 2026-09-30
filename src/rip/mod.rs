@@ -34,6 +34,10 @@ pub struct RipOptions {
     pub no_accuraterip: bool,
     /// A picture the user supplied: used instead of looking one up.
     pub cover_file: Option<String>,
+    /// Quality choice for the format (see `encoder::quality_choices`); None = the best.
+    pub quality: Option<String>,
+    /// Measure loudness after ripping and write ReplayGain tags.
+    pub replaygain: bool,
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
@@ -328,6 +332,7 @@ fn rip_redbook(
     let ext   = opts.format.extension();
     let total = wav_tracks.len();
 
+    let mut outputs: Vec<String> = Vec::new();
     for (i, (track_num, wav_path)) in wav_tracks.iter().enumerate() {
         let track_info = session.tracks.iter().find(|t| t.number == *track_num);
         let mb_track   = mb.as_ref().and_then(|r| r.tracks.iter().find(|t| t.number == *track_num));
@@ -364,12 +369,14 @@ fn rip_redbook(
             mb_artist_id:    mb_track.and_then(|t| t.mb_artist_id.clone()).or_else(|| mb_artist_id_alb.clone()),
         };
 
-        encoder::encode(wav_path, &out_path, &opts.format, &tags, cover_art, opts.debug)?;
+        encoder::encode(wav_path, &out_path, &opts.format, &tags, cover_art, opts.quality.as_deref(), opts.debug)?;
 
         tagging::apply(&out_path, &tags, mb.as_ref(), mb_track, opts.debug);
+        outputs.push(out_path.clone());
     }
 
     let _ = std::fs::remove_dir_all(&wav_dir);
+    post_rip(opts, &outputs);
 
     // Metadata — only written in archive mode.
     if opts.archive {
@@ -462,6 +469,7 @@ fn rip_bluebook(
         let ext   = opts.format.extension();
         let total = wav_tracks.len();
 
+        let mut outputs: Vec<String> = Vec::new();
         for (i, (track_num, wav_path)) in wav_tracks.iter().enumerate() {
             let track_info = session.tracks.iter().find(|t| t.number == *track_num);
             let mb_track   = mb.as_ref().and_then(|r| r.tracks.iter().find(|t| t.number == *track_num));
@@ -497,12 +505,14 @@ fn rip_bluebook(
                 mb_artist_id:    mb_track.and_then(|t| t.mb_artist_id.clone()).or_else(|| mb_artist_id_alb.clone()),
             };
 
-            encoder::encode(wav_path, &out_path, &opts.format, &tags, cover_art, opts.debug)?;
+            encoder::encode(wav_path, &out_path, &opts.format, &tags, cover_art, opts.quality.as_deref(), opts.debug)?;
 
             tagging::apply(&out_path, &tags, mb.as_ref(), mb_track, opts.debug);
+        outputs.push(out_path.clone());
         }
 
         let _ = std::fs::remove_dir_all(&wav_dir);
+        post_rip(opts, &outputs);
     }
 
     if opts.progress_json { emit_step("Extracting data session..."); emit_progress(91.0); }
@@ -602,4 +612,45 @@ pub fn check_dependencies(format: &AudioFormat) -> Vec<String> {
 
 fn musicbrainz_details(r: &mut ReleaseInfo, discid: Option<&str>, debug: bool) {
     mb_enrich::enrich(r, discid, debug);
+}
+
+/// Look at what was written: the format, bit depth and bitrate (so a rip can be checked at a
+/// glance), and optionally measure loudness and add ReplayGain tags.
+fn post_rip(opts: &RipOptions, outputs: &[String]) {
+    use crate::library::audioinfo;
+    let say = |m: &str| if opts.progress_json { emit_step(m) } else { eprintln!("{m}") };
+    let facts: Vec<audioinfo::AudioFacts> = outputs.iter().filter_map(|p| audioinfo::facts(Path::new(p)).ok()).collect();
+    if facts.is_empty() {
+        return;
+    }
+    let s = audioinfo::summarize(&facts);
+    let rate = s.avg_bitrate_kbps.map(|b| format!(" — average {:.0} kbps", b)).unwrap_or_default();
+    let kind = if s.cd_quality { " (lossless, CD quality)" } else if s.lossless { " (lossless)" } else { "" };
+    say(&format!("Quality: {}{}{}", s.description, rate, kind));
+    if opts.progress_json {
+        println!("{}", serde_json::json!({"type": "quality", "summary": s}));
+    }
+
+    if opts.replaygain {
+        say("Measuring loudness for ReplayGain...");
+        let paths: Vec<&Path> = outputs.iter().map(|p| Path::new(p.as_str())).collect();
+        let tracks: Vec<Option<audioinfo::Loudness>> = paths.iter().map(|p| audioinfo::loudness(p).ok()).collect();
+        match audioinfo::album_loudness(&paths) {
+            Ok(album) => {
+                let mut ok = 0;
+                for (p, t) in paths.iter().zip(&tracks) {
+                    if let Some(t) = t {
+                        if audioinfo::write_replaygain(p, t, &album).is_ok() {
+                            ok += 1;
+                        }
+                    }
+                }
+                say(&format!("ReplayGain written to {ok} file(s): album gain {:+.2} dB, album peak {:.3}", album.gain_db().unwrap_or(0.0), album.peak_linear().unwrap_or(0.0)));
+                if opts.progress_json {
+                    println!("{}", serde_json::json!({"type": "replaygain", "files": ok, "album_gain_db": album.gain_db(), "album_lufs": album.lufs, "album_peak": album.peak_linear()}));
+                }
+            }
+            Err(e) => say(&format!("ReplayGain skipped: {e}")),
+        }
+    }
 }

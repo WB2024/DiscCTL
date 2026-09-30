@@ -46,6 +46,14 @@ pub struct RipArgs {
     #[arg(long, env = "RUSTYDISC_FANART_KEY", hide_env_values = true, value_name = "KEY")]
     pub fanart_key: Option<String>,
 
+    /// Encoder quality, e.g. flac: 0-12, mp3: v0/v2/cbr320, opus/aac: kbps, ogg: 0-10 (default: the best)
+    #[arg(long)]
+    pub quality: Option<String>,
+
+    /// Measure loudness after ripping and write ReplayGain tags
+    #[arg(long)]
+    pub replaygain: bool,
+
     /// Use this picture (JPEG or PNG) as the cover instead of looking one up
     #[arg(long, value_name = "FILE")]
     pub cover_file: Option<String>,
@@ -108,6 +116,8 @@ pub fn run(args: RipArgs) -> Result<(), Error> {
         },
         no_accuraterip: args.no_accuraterip,
         cover_file:     args.cover_file,
+        quality:        args.quality.filter(|q| !q.trim().is_empty()),
+        replaygain:     args.replaygain,
     };
 
     rip::rip(&opts)?;
