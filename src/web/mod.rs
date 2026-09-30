@@ -42,6 +42,7 @@ use crate::{
 use jobs::{Event, Jobs};
 
 const INDEX_HTML: &str = include_str!("index.html");
+const DR_USERSCRIPT: &str = include_str!("../../userscripts/dynamic-range-db.user.js");
 
 pub struct Config {
     pub exe: PathBuf,
@@ -223,6 +224,7 @@ pub async fn serve(cfg: Config, bind: SocketAddr) -> Result<(), Error> {
         .route("/api/logout", post(auth::logout))
         .route("/api/auth/status", get(auth::status))
         .route("/api/auth/config", post(auth::configure))
+        .route("/userscripts/dynamic-range-db.user.js", get(|| async { ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8")], DR_USERSCRIPT) }))
         .route("/api/info", get(info))
         .route("/api/musicbrainz", get(musicbrainz_lookup))
         .route("/api/musicbrainz/search", get(musicbrainz_search))

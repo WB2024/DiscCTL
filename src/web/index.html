@@ -568,6 +568,16 @@ pre.json { background: var(--bg); border: 1px solid var(--line); border-radius: 
         </div>
       </div>
 
+      <div class="card" id="userscript-card">
+        <h2>Dynamic Range DB userscript</h2>
+        <p class="muted" style="margin-top:0">A userscript for Tampermonkey, Violentmonkey or Greasemonkey. On MusicBrainz release pages it shows what the <a href="https://dr.loudness-war.info/" target="_blank" rel="noopener">Dynamic Range DB</a> holds for that release, matched by barcode and catalogue number where it can, with a link to submit it if it's missing. On the database it adds MusicBrainz links, and it fills in the upload form for you, log attached, when you use "Submit to Dynamic Range DB" in the Library.</p>
+        <div class="row" style="gap:8px;flex-wrap:wrap">
+          <a class="btn primary" id="us-install" href="/userscripts/dynamic-range-db.user.js">Install from this RustyDisc</a>
+          <a class="btn" href="https://raw.githubusercontent.com/WB2024/DiscCTL/main/userscripts/dynamic-range-db.user.js" target="_blank" rel="noopener">Install from GitHub (auto-updates)</a>
+        </div>
+        <div class="muted" style="margin-top:8px;font-size:12.5px">Your userscript manager offers to install it when you open either link. The script only talks to musicbrainz.org and dr.loudness-war.info, and never submits anything on its own.</div>
+      </div>
+
       <div class="card" id="lidarr-card">
         <h2>Lidarr</h2>
         <p class="muted" style="margin-top:0">Import can hand a rip to Lidarr instead. The rip already carries its MusicBrainz IDs, so Lidarr is told exactly which album it is; the artist and album are added (unmonitored, nothing gets searched or downloaded) if Lidarr doesn't have them.</p>
@@ -794,7 +804,7 @@ function jobPanel(container, jobId, { onEnd } = {}) {
         if (ev.name === "accuraterip") q(".jp-result").innerHTML = arTable(ev.data);
         if (ev.name === "cover") q(".jp-cover").innerHTML = coverNote(ev.data);
         if (ev.name === "quality") q(".jp-quality").innerHTML = qualityNote(ev.data);
-        if (ev.name === "dynamic_range") q(".jp-quality").innerHTML += `<div class="notice" style="margin-top:8px"><b>Dynamic range</b> <span class="badge ${ev.data.album_dr >= 11 ? "ok" : ev.data.album_dr <= 7 ? "err" : ""}">DR${ev.data.album_dr}</span> ${esc(ev.data.verdict)}</div>`;
+        if (ev.name === "dynamic_range") q(".jp-quality").innerHTML += `<div class="notice" style="margin-top:8px"><b>Dynamic range</b> <span class="badge ${ev.data.album_dr >= 11 ? "ok" : ev.data.album_dr <= 7 ? "err" : ""}">DR${ev.data.album_dr}</span> ${esc(ev.data.verdict)}<div class="muted" style="font-size:12.5px;margin-top:4px">Open the album in the <a href="#library">Library</a> and use Dynamic range → Submit to Dynamic Range DB to share it.</div></div>`;
         if (ev.name === "replaygain") q(".jp-quality").innerHTML += `<div class="notice" style="margin-top:8px"><b>ReplayGain</b> written to ${ev.data.files} file${ev.data.files === 1 ? "" : "s"} · album gain ${ev.data.album_gain_db >= 0 ? "+" : ""}${(+ev.data.album_gain_db).toFixed(2)} dB · loudness ${(+ev.data.album_lufs).toFixed(1)} LUFS</div>`;
         if (ev.name === "stick") q(".jp-stick").innerHTML = stickDone(ev.data);
         if (ev.name === "import") q(".jp-import").innerHTML = importDone(ev.data);
@@ -1616,10 +1626,15 @@ async function wireQuality(name) {
       out.innerHTML = `<div class="notice" style="margin-top:10px"><div class="row"><b class="grow">Dynamic range</b><span class="badge ${cls}" style="font-size:15px">DR${r.album_dr}</span></div>
         <div style="margin-top:4px">${esc(r.verdict)}. The higher the number, the more natural the dynamics; heavily compressed masters score low.</div>
         <table style="margin-top:8px"><thead><tr><th style="text-align:left">Track</th><th class="num">DR</th><th class="num">Peak</th><th class="num">RMS</th></tr></thead><tbody>${r.tracks.map(t => t.error ? `<tr><td>${esc(t.title)}</td><td colspan="3" class="ar-bad">${esc(t.error)}</td></tr>` : `<tr><td>${esc(t.title)}</td><td class="num"><b>DR${t.dr}</b></td><td class="num">${t.peak_db.toFixed(2)} dB</td><td class="num">${t.rms_db.toFixed(2)} dB</td></tr>`).join("")}</tbody></table>
-        <div class="row" style="margin-top:10px;gap:8px"><button class="btn small primary" id="dr-tags">Save DR as tags</button><button class="btn small" id="dr-log">Download DR log</button>
+        <div class="row" style="margin-top:10px;gap:8px"><button class="btn small primary" id="dr-tags">Save DR as tags</button><button class="btn small" id="dr-log">Download DR log</button><button class="btn small" id="dr-submit" title="Opens the Dynamic Range DB upload form with this album filled in. Needs the userscript (Settings) in your browser.">Submit to Dynamic Range DB ↗</button>
           <a class="btn small" href="${esc(r.database_url)}" target="_blank" rel="noopener">Compare on the Dynamic Range DB ↗</a><span class="muted" id="dr-note"></span></div>
         <div class="muted" style="margin-top:8px;font-size:12.5px">Measured with the published DR method (3-second blocks; loudest 20%); a value can differ from a listed one by a point. The database lists other pressings of ${esc(r.artist || "this artist")}, which is the way to find the least-compressed edition.</div></div>`;
       $("#dr-log").onclick = () => { const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([r.log], { type: "text/plain" })); a.download = `dr-${(r.album || name).replace(/[^\w.-]+/g, "_")}.txt`; a.click(); };
+      $("#dr-submit").onclick = () => {
+        const enc = btoa(unescape(encodeURIComponent(JSON.stringify(r.submit))));
+        window.open("https://dr.loudness-war.info/album/add#rdb=" + encodeURIComponent(enc), "_blank", "noopener");
+        $("#dr-note").textContent = "The upload form opens pre-filled if the RustyDisc userscript is installed (Settings).";
+      };
       $("#dr-tags").onclick = async () => {
         $("#dr-tags").disabled = true;
         try { const w = await api(base + "/quality/dynamic-range", { body: { write_tags: true } }); $("#dr-note").textContent = `Saved to ${w.written} file${w.written === 1 ? "" : "s"}.`; }

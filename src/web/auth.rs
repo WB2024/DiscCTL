@@ -132,7 +132,7 @@ fn cookie_value(headers: &HeaderMap) -> Option<String> {
 }
 
 fn is_public(path: &str) -> bool {
-    matches!(path, "/api/login" | "/api/auth/status")
+    matches!(path, "/api/login" | "/api/auth/status" | "/userscripts/dynamic-range-db.user.js")
 }
 
 /// Everything needs a session once a login is set, except the login itself.

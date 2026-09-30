@@ -42,3 +42,11 @@ RustyDisc measures it itself, with the published DR method (3-second blocks per 
 - **When ripping:** tick **Measure dynamic range (DR)** (or make it a default in Settings) and the job reports the album's DR and writes the tags. On the command line: `rustydisc rip --dynamic-range`.
 
 The database has no public API or export, so RustyDisc links to it instead of reading it.
+
+### Userscript for the Dynamic Range DB
+
+`userscripts/dynamic-range-db.user.js` works with Tampermonkey, Violentmonkey or Greasemonkey. Install it from **Settings → Dynamic Range DB userscript** (served by your RustyDisc), or from [GitHub](https://raw.githubusercontent.com/WB2024/DiscCTL/main/userscripts/dynamic-range-db.user.js) for automatic updates.
+
+- **On MusicBrainz release pages** a panel lists what the Dynamic Range DB holds for that release, with DR, min/max, codec and source. Entries with the same barcode or catalogue number are marked, since pressings differ a lot. If there's no entry it links to the upload form, pre-filled from MusicBrainz.
+- **On the Dynamic Range DB** every album gets a MusicBrainz search link, and album pages link to a search by barcode or catalogue number.
+- **Submitting:** in the Library, **Dynamic range → Submit to Dynamic Range DB** opens the upload form with artist, album, year, codec, source, label, catalogue number, barcode and MusicBrainz link filled in and the DR log attached as `dr.txt`. You check it and press submit yourself; nothing is sent automatically. RustyDisc's DR can differ by a point from the original meter, so only submit values you trust.

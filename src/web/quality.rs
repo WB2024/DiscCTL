@@ -220,6 +220,18 @@ pub async fn dynamic_range(State(st): S, UrlPath(name): UrlPath<String>, Json(re
             "tracks": json_rows, "album_dr": album_dr, "verdict": dynrange::verdict(album_dr), "written": written,
             "log": dynrange::log_text(&artist, &album, &rows, facts_first.as_ref()),
             "database_url": dynrange::database_url(&artist), "artist": artist, "album": album,
+            "submit": {
+                "artist": artist, "album": album,
+                "year": first.vars.get("originalyear").or_else(|| first.vars.get("date")).map(|d| d.chars().take(4).collect::<String>()).unwrap_or_default(),
+                "codec": if facts_first.as_ref().map(|f| f.lossless).unwrap_or(false) { "lossless" } else { "lossy" },
+                "source": "cdda",
+                "label": first.vars.get("label").cloned().unwrap_or_default(),
+                "catalogNumber": first.vars.get("catalognumber").cloned().unwrap_or_default(),
+                "barCode": first.vars.get("barcode").cloned().unwrap_or_default(),
+                "country": first.vars.get("releasecountry").cloned().unwrap_or_default(),
+                "link": first.vars.get("musicbrainz_albumid").map(|id| format!("https://musicbrainz.org/release/{id}")).unwrap_or_default(),
+                "log": dynrange::log_text(&artist, &album, &rows, facts_first.as_ref()),
+            },
         }))
     })
     .await
