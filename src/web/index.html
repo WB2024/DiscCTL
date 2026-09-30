@@ -182,7 +182,7 @@ pre.json { background: var(--bg); border: 1px solid var(--line); border-radius: 
       <button data-page="tools">🧰 Tools</button>
       <button data-page="settings">🎛️ Settings</button>
     </nav>
-    <div class="side-foot"><span id="ver"></span><br><span id="mockflag" class="badge warn hidden">MOCK MODE</span></div>
+    <div class="side-foot"><span id="ver"></span><br><span id="mockflag" class="badge warn hidden">MOCK MODE</span><br><button class="btn small hidden" id="logout" style="margin-top:8px">Log out</button></div>
   </aside>
 
   <main>
@@ -497,6 +497,19 @@ pre.json { background: var(--bg); border: 1px solid var(--line); border-radius: 
         </div>
       </div>
 
+      <div class="card" id="security-card">
+        <h2>Security</h2>
+        <p class="muted" id="auth-blurb">Anyone who can reach this page can use it. Set a login to require a user name and password.</p>
+        <div id="auth-env" class="muted hidden">The login is set by the <code>RUSTYDISC_AUTH_USER</code> / <code>RUSTYDISC_AUTH_PASSWORD</code> environment variables; change it there.</div>
+        <div id="auth-form">
+          <div class="row">
+            <label>User name <input id="auth-user" autocomplete="off" style="width:200px"></label>
+            <label>Password <input id="auth-pass" type="password" autocomplete="new-password" style="width:220px"></label>
+          </div>
+          <div class="row"><button class="btn primary" id="auth-save">Turn on login</button><button class="btn hidden" id="auth-off">Turn off login</button><span class="muted" id="auth-status"></span></div>
+        </div>
+      </div>
+
       <div class="row"><button class="btn primary" id="settings-save">Save settings</button><span class="muted" id="settings-status"></span></div>
     </section>
   </main>
@@ -528,6 +541,7 @@ async function api(path, opts = {}) {
   try { res = await fetch(path, init); } catch (e) { throw new Error("Cannot reach the RustyDisc server"); }
   const text = await res.text();
   let data = null; try { data = text ? JSON.parse(text) : null; } catch {}
+  if (res.status === 401 && data?.error === "AUTH_REQUIRED") { location.reload(); throw new Error("Log in first"); }
   if (!res.ok) { const e = new Error(data?.message || text || res.statusText); e.code = data?.error; e.status = res.status; throw e; }
   return data;
 }
@@ -1717,6 +1731,19 @@ async function testFanart() {
 }
 
 // ── Wire up ─────────────────────────────────────────────────────────────────
+let AUTH = { enabled: false };
+async function loadAuth() {
+  try { AUTH = await api("/api/auth/status"); } catch { return; }
+  $("#logout").classList.toggle("hidden", !AUTH.enabled);
+  $("#auth-env").classList.toggle("hidden", !AUTH.from_environment);
+  $("#auth-form").classList.toggle("hidden", AUTH.from_environment);
+  $("#auth-off").classList.toggle("hidden", !AUTH.enabled);
+  $("#auth-save").textContent = AUTH.enabled ? "Update login" : "Turn on login";
+  $("#auth-pass").placeholder = AUTH.enabled ? "leave blank to keep" : "at least 8 characters";
+  $("#auth-blurb").textContent = AUTH.enabled ? `A login is required (user “${AUTH.user}”). Changing the password logs out other browsers.` : "Anyone who can reach this page can use it. Set a login to require a user name and password.";
+  if (AUTH.enabled && !$("#auth-user").value) $("#auth-user").value = AUTH.user;
+}
+
 async function init() {
   try { STATUS = await api("/api/status"); }
   catch (e) { document.body.innerHTML = `<div style="padding:40px">${esc(e.message)}</div>`; return; }
@@ -1727,6 +1754,22 @@ async function init() {
   $("#rip-format").innerHTML = STATUS.formats.map(f => `<option value="${f}">${f.toUpperCase()}${f === "flac" ? " (lossless)" : ""}</option>`).join("");
   await loadSettings(true);
   fillDevices();
+  await loadAuth();
+  $("#logout").onclick = async () => { await api("/api/logout", { method: "POST", body: {} }).catch(() => {}); location.reload(); };
+  $("#auth-save").onclick = async () => {
+    const st = $("#auth-status"); st.textContent = "";
+    try {
+      const body = { enabled: true, username: $("#auth-user").value, password: $("#auth-pass").value };
+      await api("/api/auth/config", { body }); $("#auth-pass").value = "";
+      toast(AUTH.enabled ? "Login updated" : "Login turned on");
+      await loadAuth();
+    } catch (e) { st.textContent = e.message; }
+  };
+  $("#auth-off").onclick = async () => {
+    if (!confirmBox("Turn off the login? Anyone who can reach this page will be able to use it.")) return;
+    try { await api("/api/auth/config", { body: { enabled: false } }); toast("Login turned off"); await loadAuth(); }
+    catch (e) { $("#auth-status").textContent = e.message; }
+  };
 
   $("#scan").onclick = scan;
   $("#eject").onclick = () => api("/api/eject", { body: { device: selectedDevice() } }).then(() => { toast("Tray ejected", "ok"); CURRENT_DISC = null; $("#disc-result").innerHTML = ""; $("#rip-card").classList.add("hidden"); }).catch(e => toast(e.message, "err"));

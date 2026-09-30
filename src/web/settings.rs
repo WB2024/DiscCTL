@@ -37,6 +37,11 @@ pub struct Settings {
     pub stick_extra_folders: Vec<String>,
     /// Default folder layout: a preset id.
     pub stick_preset: String,
+
+    // Optional login
+    pub auth_user: String,
+    /// Argon2 hash. Never sent to the browser.
+    pub auth_password_hash: String,
 }
 
 impl Default for Settings {
@@ -52,6 +57,8 @@ impl Default for Settings {
             fanart_api_key: String::new(),
             stick_extra_folders: Vec::new(),
             stick_preset: "artist-album".into(),
+            auth_user: String::new(),
+            auth_password_hash: String::new(),
         }
     }
 }
@@ -105,6 +112,8 @@ impl Settings {
         let mut v = serde_json::to_value(self).unwrap_or_default();
         if let Some(o) = v.as_object_mut() {
             o.remove("fanart_api_key");
+            o.remove("auth_password_hash");
+            o.remove("auth_user");
             let key = &self.fanart_api_key;
             o.insert("fanart_api_key_set".into(), serde_json::json!(!key.is_empty()));
             let hint = if key.len() > 4 { format!("••••{}", &key[key.len() - 4..]) } else if key.is_empty() { String::new() } else { "••••".into() };

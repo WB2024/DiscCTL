@@ -1,6 +1,6 @@
 [package]
 name = "rustydisc"
-version = "0.8.0"
+version = "0.9.0"
 edition = "2024"
 
 [[bin]]
@@ -24,9 +24,11 @@ axum = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "sync", "io-util", "time", "fs", "signal"] }
 tower-http = { version = "0.6", features = ["fs"] }
 futures-util = "0.3"
+argon2 = { version = "0.5", features = ["std"] }
 
 [dev-dependencies]
 serde_json = "1"
+tower = { version = "0.5", features = ["util"] }
 
 [features]
 hardware_tests = []

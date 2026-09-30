@@ -312,13 +312,16 @@ pub fn list_unmounted() -> Vec<Unmounted> {
         for p in parts {
             let mounted = p["mountpoint"].as_str().is_some_and(|m| !m.is_empty());
             let fs = p["fstype"].as_str().unwrap_or("").to_string();
-            if mounted || !is_storage_fs(&fs) {
+            let size_bytes = p["size"].as_u64().or_else(|| p["size"].as_str().and_then(|s| s.parse().ok())).unwrap_or(0);
+            // Inside a container there's no udev, so the file system often isn't reported (empty):
+            // still offer the partition and let `mount` find out. Skip empty card-reader slots.
+            if mounted || size_bytes == 0 || (!fs.is_empty() && !is_storage_fs(&fs)) {
                 continue;
             }
             found.push(Unmounted {
                 device: p["path"].as_str().unwrap_or("").to_string(),
                 label: p["label"].as_str().unwrap_or("").to_string(),
-                size_bytes: p["size"].as_u64().or_else(|| p["size"].as_str().and_then(|s| s.parse().ok())).unwrap_or(0),
+                size_bytes,
                 fs_type: fs,
                 model: model.clone(),
             });

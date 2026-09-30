@@ -29,6 +29,14 @@ pub struct ServeArgs {
     #[arg(long, env = "RUSTYDISC_STICK_DIRS", value_delimiter = ':')]
     pub stick_dir: Vec<String>,
 
+    /// Require a login (set together with --auth-password). Otherwise the login can be set in Settings.
+    #[arg(long, env = "RUSTYDISC_AUTH_USER")]
+    pub auth_user: Option<String>,
+
+    /// Password for --auth-user
+    #[arg(long, env = "RUSTYDISC_AUTH_PASSWORD", hide_env_values = true)]
+    pub auth_password: Option<String>,
+
     /// Simulate the drive (fake disc, fake rips/burns) — for trying the UI without hardware
     #[arg(long, env = "RUSTYDISC_MOCK", value_parser = clap::builder::BoolishValueParser::new())]
     pub mock: bool,
@@ -43,6 +51,10 @@ pub fn run(args: ServeArgs) -> Result<(), Error> {
         config_dir: std::path::PathBuf::from(args.config_dir),
         stick_dirs: args.stick_dir.iter().filter(|s| !s.trim().is_empty()).map(std::path::PathBuf::from).collect(),
         mock: args.mock,
+        auth: match (args.auth_user, args.auth_password) {
+            (None, None) => None,
+            (u, p) => Some((u.unwrap_or_default(), p.unwrap_or_default())),
+        },
     };
     std::fs::create_dir_all(&cfg.media_dir)?;
 

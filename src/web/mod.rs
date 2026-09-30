@@ -5,6 +5,7 @@
 //! `rustydisc` CLI as a child process with `--progress-json` and is followed by the
 //! browser over Server-Sent Events.
 
+mod auth;
 mod jobs;
 mod mock;
 mod settings;
@@ -50,12 +51,15 @@ pub struct Config {
     /// Extra folders Rusty Stick may write to (besides detected USB sticks).
     pub stick_dirs: Vec<PathBuf>,
     pub mock: bool,
+    /// Login from the command line / environment: (user, password).
+    pub auth: Option<(String, String)>,
 }
 
 struct AppState {
     cfg: Config,
     jobs: Jobs,
     settings: settings::Store,
+    auth: auth::Auth,
     cover_cache: std::sync::Mutex<std::collections::HashMap<String, Option<Arc<Cover>>>>,
     /// The last scan of a stick job's sources (tags take a while to read).
     stick_scan: std::sync::Mutex<Option<(String, std::time::Instant, Arc<crate::stick::scan::Scan>)>>,
@@ -184,11 +188,17 @@ pub async fn serve(cfg: Config, bind: SocketAddr) -> Result<(), Error> {
     let rips_dir = cfg.rips_dir.clone();
     let media_dir = cfg.media_dir.clone();
     let settings = settings::Store::load(&cfg.config_dir);
-    let state = Arc::new(AppState { cfg, jobs: Jobs::default(), settings, cover_cache: Default::default(), stick_scan: Default::default() });
+    let (env_user, env_pass) = cfg.auth.clone().unzip();
+    let auth = auth::Auth::new(env_user, env_pass).map_err(Error::validation)?;
+    let state = Arc::new(AppState { cfg, jobs: Jobs::default(), settings, auth, cover_cache: Default::default(), stick_scan: Default::default() });
 
     let app = Router::new()
         .route("/", get(|| async { Html(INDEX_HTML) }))
         .route("/api/status", get(status))
+        .route("/api/login", post(auth::login))
+        .route("/api/logout", post(auth::logout))
+        .route("/api/auth/status", get(auth::status))
+        .route("/api/auth/config", post(auth::configure))
         .route("/api/info", get(info))
         .route("/api/musicbrainz", get(musicbrainz_lookup))
         .route("/api/musicbrainz/search", get(musicbrainz_search))
@@ -220,13 +230,14 @@ pub async fn serve(cfg: Config, bind: SocketAddr) -> Result<(), Error> {
         .route("/api/jobs/{id}/continue", post(continue_job))
         .nest_service("/files/rips", ServeDir::new(rips_dir))
         .nest_service("/files/media", ServeDir::new(media_dir))
+        .layer(axum::middleware::from_fn_with_state(state.clone(), auth::guard))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(bind)
         .await
         .map_err(|e| Error::backend(format!("Cannot bind {bind}: {e}")))?;
     eprintln!("RustyDisc web UI listening on http://{bind}");
-    axum::serve(listener, app)
+    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
         .with_graceful_shutdown(async {
             let _ = tokio::signal::ctrl_c().await;
         })
@@ -505,6 +516,8 @@ async fn put_settings(State(st): S, Json(u): Json<SettingsUpdate>) -> ApiResult<
         fanart_api_key: u.fanart_api_key.unwrap_or(current.fanart_api_key),
         stick_extra_folders: u.stick_extra_folders,
         stick_preset: u.stick_preset,
+        auth_user: current.auth_user,
+        auth_password_hash: current.auth_password_hash,
     }
     .validate()
     .map_err(ApiError::bad)?;

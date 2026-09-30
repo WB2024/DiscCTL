@@ -275,7 +275,7 @@ The image bundles everything RustyDisc needs (`cdparanoia`, `cdrdao`, `xorriso`,
 
 **On Proxmox:** Docker usually runs inside a VM or LXC, so pass the drive into that guest first. For a VM, use SATA or USB passthrough; for an LXC, allow and bind the `/dev/sr0` and `/dev/sg*` device nodes.
 
-**Security:** the UI has no login. Keep it on a trusted network, or put it behind a reverse proxy that adds authentication.
+**Security (optional login):** by default the UI has no login, so keep it on a trusted network. To require one, either open **Settings → Security** and choose a user name and password (at least 8 characters), or set `RUSTYDISC_AUTH_USER` and `RUSTYDISC_AUTH_PASSWORD` (`--auth-user` / `--auth-password`) which take priority and can't be changed from the UI. With a login on, every page, API call, file download and live-progress stream needs a session cookie; passwords are stored only as Argon2 hashes in `/config/settings.json` (mode 600), sessions last a week and end on log-out or a password change, and 8 wrong attempts from one address lock it out for 5 minutes. It is plain HTTP, so on an untrusted network put a TLS reverse proxy in front.
 
 ---
 
@@ -339,7 +339,7 @@ The stick has to be **mounted** where RustyDisc runs.
 - **Docker on a headless server:** either
   - mount the stick on the host and share a folder with the container: add `- /mnt/usb:/usb:rslave` to the volumes and set `RUSTYDISC_STICK_DIRS: /usb` (sticks mounted inside `/usb` are listed; you can also list folders under **Settings → Rusty Stick**), or
   - let RustyDisc mount sticks itself, hot-plug style, by giving the container `cap_add: [SYS_ADMIN, MKNOD]` and `device_cgroup_rules: ["b 8:* rwm"]`. Unmounted sticks then get a **Mount** button.
-  See the commented lines in `docker-compose.yml`. These capabilities are powerful, so use them only on a network you trust (the web UI has no login).
+  See the commented lines in `docker-compose.yml`. These capabilities are powerful, so use them only on a network you trust, and consider turning on the login (**Settings → Security**).
 - **Anywhere else** (a network share, an SD card reader, a folder you just want to fill): list its absolute path under **Settings → Rusty Stick**.
 
 Notes: this has been tested against folders and simulated sticks, not yet against a range of real USB sticks. FAT32 sticks work but are the fussiest (4 GB file limit, slow with many tiny files); exFAT and ext4 are better for big libraries.

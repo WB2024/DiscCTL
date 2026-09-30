@@ -19,6 +19,8 @@ services:
       - ./config:/config   # settings (cover art sources, fanart.tv key, defaults)
     environment:
       RUSTYDISC_DEVICE: /dev/sr0
+      # RUSTYDISC_AUTH_USER: me            # optional login (or set it in Settings → Security)
+      # RUSTYDISC_AUTH_PASSWORD: change-me
       # RUSTYDISC_MOCK: "1"   # simulate a drive, for trying the UI without hardware
       # Rusty Stick (USB sticks): let sticks mounted on the host show up, e.g. /mnt/usb/STICK1
       # RUSTYDISC_STICK_DIRS: /usb
