@@ -1,0 +1,21 @@
+services:
+  rustydisc:
+    build: .
+    container_name: rustydisc
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    # Pass the optical drive through. If your drive is not /dev/sr0, change both sides
+    # here and RUSTYDISC_DEVICE below. Burning also needs the matching SCSI-generic node
+    # (find it with: ls -l /sys/class/block/sr0/device/scsi_generic).
+    devices:
+      - /dev/sr0:/dev/sr0
+      - /dev/sg0:/dev/sg0
+    cap_add:
+      - SYS_RAWIO          # needed by cdrecord/cdrdao/cdparanoia for raw SCSI commands
+    volumes:
+      - ./rips:/rips       # ripped albums land here (point at your music share)
+      - ./media:/media:ro  # source files for burning
+    environment:
+      RUSTYDISC_DEVICE: /dev/sr0
+      # RUSTYDISC_MOCK: "1"   # simulate a drive, for trying the UI without hardware

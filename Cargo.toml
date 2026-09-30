@@ -8,7 +8,7 @@ name = "rustydisc"
 path = "src/main.rs"
 
 [dependencies]
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
@@ -20,6 +20,10 @@ sha1 = "0.10"
 hex = "0.4"
 base64 = "0.22"
 ureq = { version = "2", features = ["json"] }
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "sync", "io-util", "time", "fs", "signal"] }
+tower-http = { version = "0.6", features = ["fs"] }
+futures-util = "0.3"
 
 [dev-dependencies]
 serde_json = "1"

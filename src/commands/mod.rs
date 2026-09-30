@@ -5,3 +5,4 @@ pub mod recover;
 pub mod rip;
 pub mod validate;
 pub mod verify;
+pub mod serve;

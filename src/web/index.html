@@ -1,0 +1,851 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RustyDisc</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='14' fill='%23e8743b'/%3E%3Ccircle cx='16' cy='16' r='5' fill='%23111'/%3E%3Ccircle cx='16' cy='16' r='2' fill='%23e8743b'/%3E%3C/svg%3E">
+<style>
+:root {
+  --bg: #0f1115; --panel: #171a21; --panel2: #1d212b; --line: #2a2f3b;
+  --text: #e6e8ee; --muted: #8b93a5; --accent: #e8743b; --accent2: #ff9b63;
+  --ok: #3fb97a; --warn: #e0b341; --err: #ef5b5b; --info: #5b9bef;
+  --radius: 10px; --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: light) {
+  :root { --bg: #f4f5f8; --panel: #ffffff; --panel2: #f0f2f6; --line: #dcdfe7;
+    --text: #1b1e27; --muted: #667085; --accent: #d9581e; --accent2: #b8460f; }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+button, input, select, textarea { font: inherit; color: inherit; }
+h1 { font-size: 20px; margin: 0 0 4px; }
+h2 { font-size: 15px; margin: 0 0 12px; }
+.muted { color: var(--muted); }
+.mono { font-family: var(--mono); font-size: 12.5px; }
+.hidden { display: none !important; }
+
+#app { display: grid; grid-template-columns: 210px 1fr; min-height: 100%; }
+aside { background: var(--panel); border-right: 1px solid var(--line); padding: 16px 12px;
+  display: flex; flex-direction: column; gap: 4px; position: sticky; top: 0; height: 100vh; }
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 17px; padding: 4px 8px 16px; }
+.brand svg { width: 26px; height: 26px; }
+nav button { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; background: none;
+  border: 0; padding: 9px 10px; border-radius: 8px; color: var(--muted); cursor: pointer; }
+nav button:hover { background: var(--panel2); color: var(--text); }
+nav button.active { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent2); font-weight: 600; }
+nav .count { margin-left: auto; background: var(--accent); color: #fff; border-radius: 10px; padding: 0 7px; font-size: 11px; }
+.side-foot { margin-top: auto; padding: 8px; font-size: 12px; color: var(--muted); }
+main { padding: 22px 28px 60px; max-width: 1100px; width: 100%; }
+.page { display: none; } .page.active { display: block; }
+.page-head { margin-bottom: 18px; }
+
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; margin-bottom: 16px; }
+.row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.grow { flex: 1; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 860px) { #app { grid-template-columns: 1fr; } aside { position: static; height: auto; flex-direction: row; flex-wrap: wrap; }
+  .side-foot, .brand { display: none; } nav { display: flex; flex-wrap: wrap; } .grid2 { grid-template-columns: 1fr; } main { padding: 16px; } }
+
+.btn { background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 7px 14px; cursor: pointer; }
+.btn:hover:not(:disabled) { border-color: var(--muted); }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+.btn.primary:hover:not(:disabled) { background: var(--accent2); border-color: var(--accent2); }
+.btn.danger { border-color: color-mix(in srgb, var(--err) 60%, var(--line)); color: var(--err); }
+.btn.small { padding: 3px 9px; font-size: 12.5px; }
+input[type=text], input[type=search], select, textarea { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; min-width: 0; }
+input:focus, select:focus, textarea:focus { outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent); outline-offset: 0; }
+textarea { width: 100%; font-family: var(--mono); font-size: 12.5px; resize: vertical; }
+label.field { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--muted); }
+label.check { display: flex; gap: 8px; align-items: flex-start; cursor: pointer; }
+label.check small { display: block; color: var(--muted); }
+input[type=checkbox], input[type=radio] { accent-color: var(--accent); margin-top: 3px; }
+
+.badge { display: inline-block; padding: 1px 9px; border-radius: 10px; font-size: 12px; font-weight: 600; background: var(--panel2); border: 1px solid var(--line); }
+.badge.ok, .badge.done { color: var(--ok); } .badge.err, .badge.failed { color: var(--err); }
+.badge.running { color: var(--info); } .badge.awaiting_input { color: var(--warn); } .badge.cancelled { color: var(--muted); }
+.badge.accent { color: var(--accent2); }
+
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+th { font-weight: 600; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+tr:last-child td { border-bottom: 0; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+.notice { padding: 10px 14px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel2); }
+.notice.err { border-color: color-mix(in srgb, var(--err) 55%, var(--line)); color: var(--err); }
+.notice.warn { border-color: color-mix(in srgb, var(--warn) 55%, var(--line)); }
+
+.disc-head { display: flex; gap: 16px; align-items: center; }
+.disc-art { width: 92px; height: 92px; border-radius: 50%; flex: none;
+  background: conic-gradient(from 20deg, #333, #777, #333, #999, #333, #777, #333);
+  display: grid; place-items: center; box-shadow: 0 0 0 3px var(--line); }
+.disc-art::after { content: ""; width: 24px; height: 24px; border-radius: 50%; background: var(--panel); box-shadow: 0 0 0 5px rgba(255,255,255,.12); }
+.disc-art.spin { animation: spin 2.2s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.session { border: 1px solid var(--line); border-radius: 8px; margin-top: 12px; overflow: hidden; }
+.session-h { background: var(--panel2); padding: 7px 12px; display: flex; gap: 10px; align-items: center; }
+
+.mb { display: flex; gap: 16px; }
+.cover { width: 140px; height: 140px; border-radius: 8px; object-fit: cover; background: var(--panel2); flex: none; border: 1px solid var(--line); }
+.cover.ph { display: grid; place-items: center; color: var(--muted); font-size: 34px; }
+
+.bar { height: 10px; background: var(--panel2); border-radius: 6px; overflow: hidden; border: 1px solid var(--line); }
+.bar > i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--accent), var(--accent2)); transition: width .25s; }
+.bar.done > i { background: var(--ok); } .bar.failed > i { background: var(--err); }
+.log { background: #0a0c10; color: #cbd2e0; border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px;
+  max-height: 260px; overflow: auto; font: 12px/1.5 var(--mono); white-space: pre-wrap; word-break: break-word; margin: 10px 0 0; }
+.log .step { color: #ff9b63; }
+.jobpanel .head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.jobpanel .stepline { margin: 8px 0 0; min-height: 20px; }
+
+.tabs { display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap; }
+.tabs button { background: var(--panel2); border: 1px solid var(--line); padding: 7px 14px; border-radius: 8px; cursor: pointer; color: var(--muted); }
+.tabs button.active { color: var(--text); border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, var(--panel2)); }
+
+.filelist { border: 1px solid var(--line); border-radius: 8px; }
+.filelist .item { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--line); }
+.filelist .item:last-child { border-bottom: 0; }
+.filelist .empty { padding: 14px; color: var(--muted); text-align: center; }
+
+.lib-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 16px; }
+.lib-card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; cursor: pointer; transition: transform .1s, border-color .1s; }
+.lib-card:hover { transform: translateY(-2px); border-color: var(--accent); }
+.lib-card .art { width: 100%; aspect-ratio: 1; object-fit: cover; display: grid; place-items: center; background: var(--panel2); font-size: 44px; color: var(--muted); }
+.lib-card .meta { padding: 10px 12px; }
+.lib-card .t { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: grid; place-items: center; z-index: 50; padding: 16px; }
+.modal { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; width: min(680px, 100%); max-height: 86vh; display: flex; flex-direction: column; }
+.modal header { padding: 14px 18px; border-bottom: 1px solid var(--line); font-weight: 600; }
+.modal .body { padding: 8px 18px; overflow: auto; flex: 1; }
+.modal footer { padding: 12px 18px; border-top: 1px solid var(--line); display: flex; gap: 10px; justify-content: flex-end; align-items: center; }
+.crumbs { display: flex; gap: 4px; flex-wrap: wrap; padding: 8px 0; font-family: var(--mono); font-size: 12.5px; }
+.crumbs a { color: var(--accent2); cursor: pointer; }
+.brow { display: flex; align-items: center; gap: 10px; padding: 6px 4px; border-bottom: 1px solid var(--line); cursor: pointer; }
+.brow:hover { background: var(--panel2); }
+
+#banner { position: sticky; top: 0; z-index: 20; margin: -22px -28px 18px; padding: 10px 28px; background: var(--panel);
+  border-bottom: 1px solid var(--accent); display: flex; gap: 14px; align-items: center; cursor: pointer; }
+#banner .bar { width: 180px; }
+#toasts { position: fixed; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 8px; z-index: 100; max-width: 420px; }
+.toast { background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--info); border-radius: 8px; padding: 10px 14px; box-shadow: 0 6px 24px rgba(0,0,0,.35); }
+.toast.err { border-left-color: var(--err); } .toast.ok { border-left-color: var(--ok); }
+audio { width: 100%; height: 34px; }
+a { color: var(--accent2); }
+pre.json { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 12px; overflow: auto; max-height: 340px; font: 12px/1.5 var(--mono); }
+</style>
+</head>
+<body>
+<div id="app">
+  <aside>
+    <div class="brand">
+      <svg viewBox="0 0 32 32"><circle cx="16" cy="16" r="14" fill="#e8743b"/><circle cx="16" cy="16" r="10" fill="none" stroke="#fff" stroke-opacity=".25" stroke-width="1"/><circle cx="16" cy="16" r="5" fill="#111"/><circle cx="16" cy="16" r="2" fill="#e8743b"/></svg>
+      RustyDisc
+    </div>
+    <nav id="nav">
+      <button data-page="disc">💿 Disc &amp; Rip</button>
+      <button data-page="burn">🔥 Burn</button>
+      <button data-page="library">📚 Library</button>
+      <button data-page="jobs">⚙️ Jobs <span class="count hidden" id="jobcount"></span></button>
+      <button data-page="tools">🧰 Tools</button>
+    </nav>
+    <div class="side-foot"><span id="ver"></span><br><span id="mockflag" class="badge warn hidden">MOCK MODE</span></div>
+  </aside>
+
+  <main>
+    <div id="banner" class="hidden">
+      <b id="bn-title"></b>
+      <div class="bar"><i id="bn-bar"></i></div>
+      <span class="muted grow" id="bn-step"></span>
+      <span class="muted">View →</span>
+    </div>
+
+    <!-- ── Disc & Rip ─────────────────────────────── -->
+    <section class="page" id="page-disc">
+      <div class="page-head"><h1>Disc &amp; Rip</h1><div class="muted">Inspect the disc in the drive and rip it to files.</div></div>
+
+      <div class="card">
+        <div class="row">
+          <label class="field grow" style="max-width:260px">Drive
+            <select id="device"></select>
+          </label>
+          <input type="text" id="device-custom" placeholder="/dev/sr1" class="hidden" style="align-self:flex-end">
+          <label class="field hidden" id="scenario-wrap">Mock disc
+            <select id="scenario"><option value="redbook">Audio CD</option><option value="bluebook">Enhanced CD (Blue Book)</option><option value="data">Data CD</option><option value="none">No disc</option></select>
+          </label>
+          <div class="row" style="align-self:flex-end">
+            <button class="btn primary" id="scan">Scan disc</button>
+            <button class="btn" id="eject">⏏ Eject</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="disc-result"></div>
+
+      <div class="card hidden" id="rip-card">
+        <h2>Rip options</h2>
+        <div class="grid2">
+          <div style="display:flex;flex-direction:column;gap:12px">
+            <label class="field" id="fmt-wrap">Audio format
+              <select id="rip-format"></select>
+            </label>
+            <label class="check"><input type="checkbox" id="rip-archive"><span>Archive mode<small>audio/ + metadata/ folders with disc.json, cdtext.json, musicbrainz.json and SHA-256 checksums</small></span></label>
+            <label class="check"><input type="checkbox" id="rip-nomb"><span>Skip MusicBrainz lookup<small>for offline use or discs that aren't in the database</small></span></label>
+            <label class="check"><input type="checkbox" id="rip-debug"><span>Debug output</span></label>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:10px">
+            <div class="muted">Destination — inside <span class="mono" id="rips-dir"></span></div>
+            <label class="check"><input type="radio" name="dest" value="auto" checked><span>Auto-name from metadata<small>creates <span class="mono">Artist - Album (Year)/</span></small></span></label>
+            <label class="check"><input type="radio" name="dest" value="custom"><span>Custom folder name</span></label>
+            <input type="text" id="rip-folder" placeholder="Artist - Album (Year)" disabled>
+          </div>
+        </div>
+        <div class="row" style="margin-top:16px">
+          <button class="btn primary" id="rip-start">Start rip</button>
+          <span class="muted" id="rip-hint"></span>
+        </div>
+        <div id="rip-job"></div>
+      </div>
+    </section>
+
+    <!-- ── Burn ───────────────────────────────────── -->
+    <section class="page" id="page-burn">
+      <div class="page-head"><h1>Burn</h1><div class="muted">Author Audio CDs, Data CDs and Enhanced (Blue Book) CDs from files on the server.</div></div>
+
+      <div class="tabs" id="burn-tabs">
+        <button data-fmt="redbook" class="active">🎵 Audio CD</button>
+        <button data-fmt="datacd">💾 Data CD</button>
+        <button data-fmt="bluebook">✨ Enhanced CD</button>
+        <button data-fmt="graph">{ } Disc graph JSON</button>
+      </div>
+
+      <div class="card" id="burn-sources">
+        <div id="burn-audio-block">
+          <div class="row" style="margin-bottom:8px">
+            <h2 style="margin:0" id="audio-title">Audio tracks</h2>
+            <span class="muted" id="audio-summary"></span>
+            <span class="grow"></span>
+            <button class="btn small" id="add-audio">+ Add files…</button>
+            <button class="btn small" id="add-playlist">Use playlist (.m3u)…</button>
+          </div>
+          <div class="filelist" id="audio-list"></div>
+          <div class="muted" id="playlist-note" style="margin-top:6px"></div>
+        </div>
+        <div id="burn-data-block" style="margin-top:16px">
+          <div class="row" style="margin-bottom:8px">
+            <h2 style="margin:0" id="data-title">Data folder</h2>
+            <span class="grow"></span>
+            <button class="btn small" id="pick-data">Choose folder…</button>
+          </div>
+          <div class="filelist" id="data-list"></div>
+        </div>
+        <div id="burn-graph-block" class="hidden">
+          <h2>Disc graph</h2>
+          <textarea id="graph-text" rows="16" spellcheck="false"></textarea>
+          <div class="row" style="margin-top:8px">
+            <button class="btn small" id="graph-example">Load example</button>
+            <button class="btn small" id="graph-validate">Validate</button>
+            <span class="muted">Paths inside the graph are resolved on the server.</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Options</h2>
+        <div class="grid2">
+          <div style="display:flex;flex-direction:column;gap:12px">
+            <label class="field" id="label-wrap">Disc label<input type="text" id="burn-label" placeholder="Untitled"></label>
+            <label class="field" id="transcode-wrap">Transcode audio first
+              <select id="burn-transcode">
+                <option value="">No — burn as-is</option><option value="flac">FLAC</option>
+                <option value="mp3:320">MP3 320k</option><option value="mp3:256">MP3 256k</option><option value="mp3:192">MP3 192k</option>
+                <option value="aac:320">AAC 320k</option><option value="aac:256">AAC 256k</option><option value="opus:192">Opus 192k</option>
+              </select>
+            </label>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:12px">
+            <label class="check" id="cdtext-wrap"><input type="checkbox" id="burn-cdtext"><span>Write CD-Text<small>title and artist read from the audio files' tags</small></span></label>
+            <label class="check"><input type="checkbox" id="burn-dry"><span>Dry run<small>plan and validate without touching the drive</small></span></label>
+            <label class="check"><input type="checkbox" id="burn-debug"><span>Debug output</span></label>
+          </div>
+        </div>
+        <div class="row" style="margin-top:16px">
+          <button class="btn" id="burn-plan">Show plan</button>
+          <button class="btn primary" id="burn-start">🔥 Burn disc</button>
+          <span class="muted" id="burn-hint"></span>
+        </div>
+        <div id="burn-plan-out"></div>
+        <div id="burn-job"></div>
+      </div>
+    </section>
+
+    <!-- ── Library ────────────────────────────────── -->
+    <section class="page" id="page-library">
+      <div class="page-head row">
+        <div class="grow"><h1>Library</h1><div class="muted">Rips in <span class="mono" id="lib-dir"></span></div></div>
+        <button class="btn" id="lib-refresh">↻ Refresh</button>
+      </div>
+      <div id="lib-list"></div>
+      <div id="lib-detail" class="hidden"></div>
+    </section>
+
+    <!-- ── Jobs ───────────────────────────────────── -->
+    <section class="page" id="page-jobs">
+      <div class="page-head"><h1>Jobs</h1><div class="muted">History since the server started.</div></div>
+      <div class="grid2" style="grid-template-columns: 1fr 1.4fr; align-items:start">
+        <div class="card" style="padding:0" id="jobs-list"></div>
+        <div id="jobs-detail"></div>
+      </div>
+    </section>
+
+    <!-- ── Tools ──────────────────────────────────── -->
+    <section class="page" id="page-tools">
+      <div class="page-head"><h1>Tools</h1><div class="muted">Drive maintenance and system checks.</div></div>
+      <div class="card">
+        <h2>Disc recovery</h2>
+        <p class="muted" style="margin-top:0">Report the state of the blank/burned disc and finish an interrupted session, or erase a CD-RW.</p>
+        <div class="row">
+          <button class="btn" id="recover-check">Check / recover disc</button>
+          <span class="grow"></span>
+          <select id="blank-mode"><option value="fast">Fast blank (lead-in only)</option><option value="all">Full blank</option></select>
+          <button class="btn danger" id="recover-blank">Blank CD-RW…</button>
+        </div>
+        <div id="tools-job"></div>
+      </div>
+      <div class="card"><h2>Required tools</h2><div id="deps"></div></div>
+      <div class="card"><h2>Server</h2><div id="sysinfo" class="mono"></div></div>
+    </section>
+  </main>
+</div>
+<div id="toasts"></div>
+
+<script>
+"use strict";
+// ── Utilities ───────────────────────────────────────────────────────────────
+const $ = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const fmtDur = s => { if (s == null) return "—"; s = Math.round(s); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
+const fmtBytes = n => { if (!n) return "0 B"; const u = ["B", "KB", "MB", "GB", "TB"]; const i = Math.min(4, Math.floor(Math.log(n) / Math.log(1024))); return `${(n / 1024 ** i).toFixed(i ? 1 : 0)} ${u[i]}`; };
+const fmtTime = t => t ? new Date(t * 1000).toLocaleString() : "";
+const store = { get: (k, d) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } };
+const encPath = p => p.split("/").map(encodeURIComponent).join("/");
+
+function toast(msg, kind = "info", ms = 5000) {
+  const t = document.createElement("div");
+  t.className = "toast " + kind; t.textContent = msg;
+  $("#toasts").append(t); setTimeout(() => t.remove(), ms);
+}
+
+async function api(path, opts = {}) {
+  const init = { method: opts.method || "GET", headers: {} };
+  if (opts.body !== undefined) { init.method = opts.method || "POST"; init.headers["content-type"] = "application/json"; init.body = JSON.stringify(opts.body); }
+  let res;
+  try { res = await fetch(path, init); } catch (e) { throw new Error("Cannot reach the RustyDisc server"); }
+  const text = await res.text();
+  let data = null; try { data = text ? JSON.parse(text) : null; } catch {}
+  if (!res.ok) { const e = new Error(data?.message || text || res.statusText); e.code = data?.error; e.status = res.status; throw e; }
+  return data;
+}
+
+const confirmBox = (msg) => window.confirm(msg);
+
+// ── Global state / navigation ───────────────────────────────────────────────
+let STATUS = null;
+const pages = ["disc", "burn", "library", "jobs", "tools"];
+
+function showPage(name) {
+  if (!pages.includes(name)) name = "disc";
+  $$(".page").forEach(p => p.classList.toggle("active", p.id === "page-" + name));
+  $$("#nav button").forEach(b => b.classList.toggle("active", b.dataset.page === name));
+  history.replaceState(null, "", "#" + name);
+  if (name === "library") loadLibrary();
+  if (name === "jobs") loadJobs();
+  if (name === "tools") renderTools();
+}
+window.addEventListener("hashchange", () => showPage(location.hash.slice(1)));
+$("#nav").addEventListener("click", e => { const b = e.target.closest("button"); if (b) showPage(b.dataset.page); });
+
+// ── Job panel (SSE follower) ────────────────────────────────────────────────
+function jobPanel(container, jobId, { onEnd } = {}) {
+  container.__panel?.close();
+  container.innerHTML = `
+    <div class="jobpanel" style="margin-top:16px">
+      <div class="head"><b class="jp-title"></b><span class="badge jp-status running">running</span><span class="grow"></span>
+        <button class="btn small danger jp-cancel">Cancel</button></div>
+      <div class="bar"><i class="jp-bar"></i></div>
+      <div class="stepline jp-step muted"></div>
+      <div class="notice warn jp-input hidden" style="margin-top:10px"><div class="row"><span class="grow jp-input-msg"></span><button class="btn primary small jp-continue">Continue</button></div></div>
+      <div class="notice err jp-error hidden" style="margin-top:10px"></div>
+      <pre class="log jp-log"></pre>
+    </div>`;
+  const q = s => $(s, container);
+  const log = q(".jp-log"), bar = q(".jp-bar");
+  let es = null, count = 0, ended = false, lines = 0, fails = 0;
+
+  const addLog = (text, cls) => {
+    const atEnd = log.scrollTop + log.clientHeight >= log.scrollHeight - 30;
+    const span = document.createElement("div"); span.textContent = text; if (cls) span.className = cls;
+    log.append(span);
+    if (++lines > 800) { log.firstChild.remove(); lines--; }
+    if (atEnd) log.scrollTop = log.scrollHeight;
+  };
+  const setStatus = st => {
+    const b = q(".jp-status"); b.className = "badge jp-status " + st; b.textContent = st.replace("_", " ");
+    const terminal = ["done", "failed", "cancelled"].includes(st);
+    q(".jp-cancel").classList.toggle("hidden", terminal);
+    bar.parentElement.className = "bar " + (st === "done" ? "done" : st === "failed" ? "failed" : "");
+    if (st !== "awaiting_input") q(".jp-input").classList.add("hidden");
+    if (st === "done") bar.style.width = "100%";
+  };
+  const handle = ev => {
+    switch (ev.type) {
+      case "progress": bar.style.width = ev.pct + "%"; break;
+      case "step": q(".jp-step").textContent = ev.msg; addLog("▸ " + ev.msg, "step"); break;
+      case "log": addLog(ev.msg); break;
+      case "input": q(".jp-input-msg").textContent = ev.msg; q(".jp-input").classList.remove("hidden"); break;
+      case "status": setStatus(ev.status); break;
+      case "error": { const e = q(".jp-error"); e.classList.remove("hidden"); e.innerHTML = `<b>${esc(ev.error)}</b> — ${esc(ev.message).replace(/\n/g, "<br>")}${ev.recoverable ? "" : ""}`; break; }
+    }
+  };
+  const open = () => {
+    es = new EventSource(`/api/jobs/${jobId}/events?from=${count}`);
+    es.onmessage = m => { count++; fails = 0; handle(JSON.parse(m.data)); };
+    es.addEventListener("end", () => { ended = true; es.close(); refreshJobs(); onEnd?.(); });
+    es.onerror = () => {
+      es.close(); if (ended) return;
+      if (++fails > 6) { ended = true; addLog("⚠ Lost connection to the server (job may no longer exist).", "step"); return; }
+      setTimeout(open, 1500);
+    };
+  };
+  api(`/api/jobs/${jobId}`).then(d => { q(".jp-title").textContent = d.job.title; }).catch(() => {});
+  q(".jp-cancel").onclick = () => api(`/api/jobs/${jobId}/cancel`, { method: "POST" }).catch(e => toast(e.message, "err"));
+  q(".jp-continue").onclick = () => api(`/api/jobs/${jobId}/continue`, { method: "POST" }).catch(e => toast(e.message, "err"));
+  open();
+  container.__panel = { close() { ended = true; es?.close(); } };
+  return container.__panel;
+}
+
+// Global active-job banner (also picks up jobs started from other browsers).
+let lastJobs = [];
+async function refreshJobs() {
+  try { lastJobs = await api("/api/jobs"); } catch { return; }
+  const active = lastJobs.filter(j => !["done", "failed", "cancelled"].includes(j.status));
+  const cnt = $("#jobcount"); cnt.textContent = active.length; cnt.classList.toggle("hidden", !active.length);
+  const drive = active.find(j => j.exclusive) || active[0];
+  const bn = $("#banner");
+  bn.classList.toggle("hidden", !drive);
+  $(".disc-art")?.classList.toggle("spin", !!drive?.exclusive);
+  if (drive) {
+    $("#bn-title").textContent = drive.title;
+    $("#bn-bar").style.width = drive.pct + "%";
+    $("#bn-step").textContent = drive.status === "awaiting_input" ? "⏸ Waiting for you…" : drive.step;
+  }
+  if ($("#page-jobs").classList.contains("active")) renderJobsList();
+}
+$("#banner").onclick = () => { const j = lastJobs.find(j => !["done", "failed", "cancelled"].includes(j.status)); showPage("jobs"); if (j) openJob(j.id); };
+setInterval(refreshJobs, 2000);
+
+// ── Disc & Rip page ─────────────────────────────────────────────────────────
+let CURRENT_DISC = null;
+
+function selectedDevice() {
+  const v = $("#device").value;
+  return v === "__custom" ? ($("#device-custom").value.trim() || STATUS.default_device) : v;
+}
+
+function fillDevices() {
+  const sel = $("#device");
+  const saved = store.get("device", STATUS.default_device);
+  sel.innerHTML = STATUS.devices.map(d => `<option>${esc(d)}</option>`).join("") + `<option value="__custom">Other…</option>`;
+  sel.value = STATUS.devices.includes(saved) ? saved : STATUS.default_device;
+  sel.onchange = () => { $("#device-custom").classList.toggle("hidden", sel.value !== "__custom"); if (sel.value !== "__custom") store.set("device", sel.value); };
+}
+
+function trackRows(session) {
+  return session.tracks.map(t => `<tr>
+    <td>${t.number}</td>
+    <td>${t.kind === "audio" ? "🎵 Audio" : "💾 Data"}</td>
+    <td data-tn="${t.number}">${esc(t.cd_text?.title || "")}${t.cd_text?.artist ? ` <span class="muted">— ${esc(t.cd_text.artist)}</span>` : ""}</td>
+    <td class="num">${fmtDur(t.duration_secs)}</td>
+    <td class="num mono muted">${t.lba_start}–${t.lba_end}</td></tr>`).join("");
+}
+
+function renderDisc(info) {
+  const names = { redbook: "Red Book Audio CD", datacd: "Data CD", bluebook: "Enhanced CD (Blue Book)", unknown: "Unknown disc" };
+  const audioTracks = info.sessions.flatMap(s => s.tracks).filter(t => t.kind === "audio");
+  const totalSecs = audioTracks.reduce((a, t) => a + (t.duration_secs || 0), 0);
+  const sessions = info.sessions.map(s => {
+    const isData = s.kind.type === "data";
+    const head = isData
+      ? `💾 Data session${s.kind.volume_label ? ` — <b>${esc(s.kind.volume_label)}</b>` : ""} <span class="muted">${esc(s.kind.filesystem)} · ${s.kind.size_mb.toFixed(1)} MB</span>`
+      : `🎵 Audio session${s.cd_text?.title ? ` — <b>${esc(s.cd_text.title)}</b>` : ""}${s.cd_text?.artist ? ` <span class="muted">by ${esc(s.cd_text.artist)}</span>` : ""}`;
+    return `<div class="session"><div class="session-h"><span>Session ${s.index}</span><span class="grow">${head}</span></div>
+      <table><thead><tr><th>#</th><th>Type</th><th>Title</th><th class="num">Length</th><th class="num">Sectors</th></tr></thead><tbody>${trackRows(s)}</tbody></table></div>`;
+  }).join("");
+  $("#disc-result").innerHTML = `
+    <div class="card">
+      <div class="disc-head">
+        <div class="disc-art"></div>
+        <div class="grow">
+          <h1>${esc(names[info.format] || info.format)}</h1>
+          <div class="muted">${info.sessions.length} session${info.sessions.length === 1 ? "" : "s"}
+            ${audioTracks.length ? ` · ${audioTracks.length} audio tracks · ${fmtDur(totalSecs)}` : ""}
+            · ${info.is_writable ? "writable" : "read-only / not blank"}</div>
+          ${info.discid ? `<div class="mono muted" style="margin-top:4px">MusicBrainz DiscID: ${esc(info.discid)}</div>` : ""}
+        </div>
+      </div>
+      ${sessions}
+    </div>
+    <div id="mb-card"></div>`;
+  if (info.discid) lookupMb(info.discid);
+}
+
+async function lookupMb(discid) {
+  const card = $("#mb-card");
+  if ($("#rip-nomb").checked) { card.innerHTML = ""; return; }
+  card.innerHTML = `<div class="card muted">Looking up metadata on MusicBrainz…</div>`;
+  try {
+    const r = await api("/api/musicbrainz?discid=" + encodeURIComponent(discid));
+    if (!r) { card.innerHTML = `<div class="card"><b>Not found on MusicBrainz</b><div class="muted">Tags will come from CD-Text or default to track numbers.</div></div>`; return; }
+    r.tracks.forEach(t => { const c = $(`td[data-tn="${t.number}"]`); if (c && !c.textContent.trim()) c.textContent = t.title; });
+    card.innerHTML = `<div class="card"><div class="mb">
+      <img class="cover" alt="" src="/api/cover?mbid=${encodeURIComponent(r.mb_release_id)}" onerror="this.outerHTML='<div class=&quot;cover ph&quot;>♪</div>'">
+      <div class="grow">
+        <div class="muted">MusicBrainz match${r.total_releases > 1 ? ` <span class="badge">${r.total_releases} releases share this DiscID</span>` : ""}</div>
+        <h1>${esc(r.album)}</h1>
+        <div>${esc(r.album_artist)}${r.year ? ` <span class="muted">· ${esc(r.year)}</span>` : ""}</div>
+        <ol style="margin:10px 0 0;padding-left:22px;columns:2;column-gap:28px">${r.tracks.map(t => `<li>${esc(t.title)}</li>`).join("")}</ol>
+        <div class="muted" style="margin-top:8px">Rips will be saved to <span class="mono">${esc(r.album_artist)} - ${esc(r.album)}${r.year ? ` (${esc(r.year)})` : ""}/</span></div>
+      </div></div></div>`;
+  } catch (e) {
+    card.innerHTML = `<div class="card muted">MusicBrainz lookup failed: ${esc(e.message)}</div>`;
+  }
+}
+
+async function scan() {
+  const btn = $("#scan"); btn.disabled = true; btn.textContent = "Scanning…";
+  $("#disc-result").innerHTML = `<div class="card muted">Reading the disc table of contents…</div>`;
+  CURRENT_DISC = null; $("#rip-card").classList.add("hidden");
+  try {
+    const q = new URLSearchParams({ device: selectedDevice() });
+    if (STATUS.mock) q.set("scenario", $("#scenario").value);
+    const info = await api("/api/info?" + q);
+    CURRENT_DISC = info;
+    if (info.format === "unknown" || !info.sessions.length) {
+      $("#disc-result").innerHTML = `<div class="notice warn">No readable disc was found in ${esc(info.device)}. Insert a disc and scan again.</div>`;
+    } else {
+      renderDisc(info);
+      $("#rip-card").classList.remove("hidden");
+      const hasAudio = info.sessions.some(s => s.kind.type === "audio");
+      $("#fmt-wrap").classList.toggle("hidden", !hasAudio);
+      $("#rip-hint").textContent = info.format === "bluebook" ? "Audio and data sessions will be extracted separately." :
+        info.format === "datacd" ? "The filesystem will be extracted as a folder tree." : "";
+    }
+  } catch (e) {
+    $("#disc-result").innerHTML = `<div class="notice err"><b>${esc(e.code || "Error")}</b> — ${esc(e.message)}</div>`;
+  } finally { btn.disabled = false; btn.textContent = "Scan disc"; }
+}
+
+async function startRip() {
+  const folder = $('input[name=dest]:checked').value === "custom" ? $("#rip-folder").value.trim() : "";
+  if ($('input[name=dest]:checked').value === "custom" && !folder) return toast("Enter a folder name or choose auto-naming", "err");
+  const body = {
+    device: selectedDevice(), format: $("#rip-format").value, archive: $("#rip-archive").checked,
+    no_musicbrainz: $("#rip-nomb").checked, debug: $("#rip-debug").checked, folder: folder || null,
+  };
+  try {
+    const job = await api("/api/jobs/rip", { body });
+    jobPanel($("#rip-job"), job.id, { onEnd: () => { toast("Rip finished — see Library", "ok"); } });
+    refreshJobs();
+  } catch (e) { toast(e.message, "err", 8000); }
+}
+
+// ── File picker modal ───────────────────────────────────────────────────────
+// mode: "files" (multi-select audio), "folder", "playlist"
+function pickPath({ mode, title }) {
+  return new Promise(resolve => {
+    let cwd = "", chosen = new Set();
+    const bg = document.createElement("div"); bg.className = "modal-bg";
+    bg.innerHTML = `<div class="modal"><header>${esc(title)}</header><div class="body"><div class="crumbs"></div><div class="list"></div></div>
+      <footer><span class="muted grow sel"></span><button class="btn add-all hidden">Add all audio here</button><button class="btn cancel">Cancel</button><button class="btn primary ok">Select</button></footer></div>`;
+    document.body.append(bg);
+    const done = v => { bg.remove(); resolve(v); };
+    const audioRe = /\.(flac|wav|alac|aiff?|ogg|mp3|opus|m4a)$/i;
+    let entries = [];
+    const join = n => cwd ? cwd + "/" + n : n;
+
+    async function load(p) {
+      try {
+        const d = await api("/api/browse?root=media&path=" + encodeURIComponent(p));
+        cwd = d.path; entries = d.entries;
+      } catch (e) { toast(e.message, "err"); return; }
+      const parts = cwd ? cwd.split("/") : [];
+      $(".crumbs", bg).innerHTML = `<a data-p="">media</a>` + parts.map((s, i) => ` / <a data-p="${esc(parts.slice(0, i + 1).join("/"))}">${esc(s)}</a>`).join("");
+      $$(".crumbs a", bg).forEach(a => a.onclick = () => load(a.dataset.p));
+      const list = $(".list", bg);
+      list.innerHTML = "";
+      if (!entries.length) list.innerHTML = `<div class="muted" style="padding:16px">This folder is empty. Mount or copy your files into <span class="mono">${esc(STATUS.media_dir)}</span> on the server.</div>`;
+      entries.forEach(e => {
+        const full = join(e.name);
+        const selectable = mode === "files" ? (!e.is_dir && audioRe.test(e.name)) : mode === "playlist" ? (!e.is_dir && /\.m3u8?$/i.test(e.name)) : false;
+        const row = document.createElement("div"); row.className = "brow";
+        row.innerHTML = `${mode === "files" && selectable ? `<input type="checkbox" ${chosen.has(full) ? "checked" : ""}>` : ""}<span>${e.is_dir ? "📁" : selectable ? "🎵" : "📄"}</span><span class="grow">${esc(e.name)}</span><span class="muted">${e.is_dir ? "" : fmtBytes(e.size)}</span>`;
+        row.style.opacity = (e.is_dir || selectable) ? 1 : .45;
+        row.onclick = ev => {
+          if (e.is_dir) return load(full);
+          if (!selectable) return;
+          if (mode === "files") { chosen.has(full) ? chosen.delete(full) : chosen.add(full); const cb = $("input", row); cb.checked = chosen.has(full); if (ev.target !== cb) { } upd(); }
+          else done([full]);
+        };
+        list.append(row);
+      });
+      $(".add-all", bg).classList.toggle("hidden", !(mode === "files" && entries.some(e => !e.is_dir && audioRe.test(e.name))));
+      upd();
+    }
+    function upd() {
+      $(".sel", bg).textContent = mode === "files" ? `${chosen.size} selected` : mode === "folder" ? `Current: /${cwd}` : "";
+      $(".ok", bg).classList.toggle("hidden", mode === "playlist");
+      $(".ok", bg).textContent = mode === "folder" ? "Use this folder" : "Add selected";
+    }
+    $(".cancel", bg).onclick = () => done(null);
+    bg.onclick = e => { if (e.target === bg) done(null); };
+    $(".add-all", bg).onclick = () => done(entries.filter(e => !e.is_dir && audioRe.test(e.name)).map(e => join(e.name)));
+    $(".ok", bg).onclick = () => done(mode === "folder" ? [cwd] : [...chosen]);
+    load("");
+  });
+}
+
+// ── Burn page ───────────────────────────────────────────────────────────────
+const burn = { fmt: "redbook", audio: [], playlist: null, data: null };
+
+function renderBurn() {
+  const f = burn.fmt, isGraph = f === "graph";
+  $$("#burn-tabs button").forEach(b => b.classList.toggle("active", b.dataset.fmt === f));
+  $("#burn-audio-block").classList.toggle("hidden", isGraph || f === "datacd");
+  $("#burn-data-block").classList.toggle("hidden", isGraph || f === "redbook");
+  $("#burn-graph-block").classList.toggle("hidden", !isGraph);
+  $("#label-wrap").classList.toggle("hidden", isGraph);
+  $("#transcode-wrap").classList.toggle("hidden", isGraph);
+  $("#cdtext-wrap").classList.toggle("hidden", isGraph || f === "datacd");
+  $("#audio-title").textContent = f === "bluebook" ? "Session 1 — Audio tracks" : "Audio tracks";
+  $("#data-title").textContent = f === "bluebook" ? "Session 2 — Data folder" : "Data folder";
+
+  const list = $("#audio-list");
+  if (burn.playlist) {
+    list.innerHTML = `<div class="item">📃 <span class="grow">${esc(burn.playlist)}</span><button class="btn small" id="clear-pl">Remove</button></div>`;
+    $("#clear-pl").onclick = () => { burn.playlist = null; renderBurn(); };
+    $("#playlist-note").textContent = "Track order comes from the playlist.";
+  } else {
+    $("#playlist-note").textContent = "";
+    list.innerHTML = burn.audio.length ? "" : `<div class="empty">No tracks yet — add files from the server's media folder.</div>`;
+    burn.audio.forEach((p, i) => {
+      const it = document.createElement("div"); it.className = "item";
+      it.innerHTML = `<span class="muted" style="width:26px;text-align:right">${i + 1}</span><span class="grow">${esc(p)}</span>
+        <button class="btn small" data-a="up" ${i ? "" : "disabled"}>↑</button><button class="btn small" data-a="down" ${i < burn.audio.length - 1 ? "" : "disabled"}>↓</button><button class="btn small" data-a="rm">✕</button>`;
+      it.onclick = e => {
+        const a = e.target.dataset?.a; if (!a) return;
+        if (a === "rm") burn.audio.splice(i, 1);
+        else { const j = a === "up" ? i - 1 : i + 1; [burn.audio[i], burn.audio[j]] = [burn.audio[j], burn.audio[i]]; }
+        renderBurn();
+      };
+      list.append(it);
+    });
+  }
+  $("#audio-summary").textContent = burn.playlist ? "" : burn.audio.length ? `${burn.audio.length} track${burn.audio.length === 1 ? "" : "s"}` : "";
+  $("#data-list").innerHTML = burn.data === null ? `<div class="empty">No folder chosen.</div>`
+    : `<div class="item">📁 <span class="grow">/${esc(burn.data)}</span><button class="btn small" id="clear-data">Remove</button></div>`;
+  $("#clear-data") && ($("#clear-data").onclick = () => { burn.data = null; renderBurn(); });
+}
+
+function burnBody() {
+  const f = burn.fmt;
+  if (f === "graph") {
+    let graph;
+    try { graph = JSON.parse($("#graph-text").value); } catch (e) { throw new Error("Disc graph is not valid JSON: " + e.message); }
+    return { graph, dry_run: $("#burn-dry").checked, debug: $("#burn-debug").checked, device: selectedDevice() };
+  }
+  if (f !== "datacd" && !burn.playlist && !burn.audio.length) throw new Error("Add at least one audio track or a playlist");
+  if (f !== "redbook" && burn.data === null) throw new Error("Choose a data folder");
+  return {
+    format: f, audio: f === "datacd" ? [] : (burn.playlist ? [] : burn.audio), playlist: f === "datacd" ? null : burn.playlist,
+    data: f === "redbook" ? null : burn.data, label: $("#burn-label").value.trim() || null,
+    cd_text: $("#burn-cdtext").checked && f !== "datacd", transcode: $("#burn-transcode").value || null,
+    dry_run: $("#burn-dry").checked, debug: $("#burn-debug").checked, device: selectedDevice(),
+  };
+}
+
+async function burnPlan() {
+  const out = $("#burn-plan-out");
+  try {
+    const body = burnBody();
+    const plan = await api("/api/plan", { body });
+    out.innerHTML = `<h2 style="margin-top:16px">Execution plan</h2><pre class="json">${esc(JSON.stringify(plan, null, 2))}</pre>`;
+  } catch (e) { out.innerHTML = `<div class="notice err" style="margin-top:16px"><b>${esc(e.code || "Error")}</b> — ${esc(e.message)}</div>`; }
+}
+
+async function burnStart() {
+  try {
+    const body = burnBody();
+    if (!body.dry_run && !confirmBox(`Burn to ${body.device}? This writes to the disc in the drive and can't be undone.`)) return;
+    const job = await api("/api/jobs/burn", { body });
+    jobPanel($("#burn-job"), job.id, { onEnd: () => toast("Burn job finished", "ok") });
+    refreshJobs();
+  } catch (e) { toast(e.message, "err", 8000); }
+}
+
+const GRAPH_EXAMPLE = {
+  format: "bluebook", label: "MY_ENHANCED_CD",
+  sessions: [
+    { type: "audio", tracks: ["/media/album/01.flac", "/media/album/02.flac"], cd_text: { title: "My Album", artist: "Me" } },
+    { type: "data", source_dir: "/media/album/bonus", filesystem: "iso9660", joliet: true, rock_ridge: false },
+  ],
+};
+
+// ── Library ─────────────────────────────────────────────────────────────────
+async function loadLibrary() {
+  $("#lib-detail").classList.add("hidden"); $("#lib-list").classList.remove("hidden");
+  const box = $("#lib-list");
+  try {
+    const d = await api("/api/library");
+    $("#lib-dir").textContent = d.path;
+    if (!d.entries.length) { box.innerHTML = `<div class="card muted" style="text-align:center;padding:40px">No rips yet. Rip a disc and it will show up here.</div>`; return; }
+    box.innerHTML = `<div class="lib-grid">${d.entries.map(e => `
+      <div class="lib-card" data-name="${esc(e.name)}">
+        ${e.cover ? `<img class="art" loading="lazy" src="/files/rips/${encPath(e.name + "/" + e.cover)}" alt="">` : `<div class="art">♪</div>`}
+        <div class="meta"><div class="t" title="${esc(e.name)}">${esc(e.album || e.name)}</div>
+          <div class="muted" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(e.artist || "")}${e.year ? " · " + esc(e.year) : ""}</div>
+          <div style="margin-top:6px;display:flex;gap:4px;flex-wrap:wrap">
+            ${e.audio_files ? `<span class="badge">${e.audio_files} tracks</span>` : ""}${e.has_data ? `<span class="badge">data</span>` : ""}
+            ${e.archive ? `<span class="badge accent">archive</span>` : ""}<span class="badge">${fmtBytes(e.total_bytes)}</span></div></div></div>`).join("")}</div>`;
+    $$(".lib-card", box).forEach(c => c.onclick = () => openRip(c.dataset.name));
+  } catch (e) { box.innerHTML = `<div class="notice err">${esc(e.message)}</div>`; }
+}
+
+async function openRip(name) {
+  const box = $("#lib-detail");
+  $("#lib-list").classList.add("hidden"); box.classList.remove("hidden");
+  box.innerHTML = `<div class="muted">Loading…</div>`;
+  try {
+    const d = await api("/api/library/" + encodeURIComponent(name));
+    const mb = d.musicbrainz;
+    const url = p => `/files/rips/${encPath(name + "/" + p)}`;
+    const audio = d.files.filter(f => f.audio), other = d.files.filter(f => !f.audio);
+    const titleFor = (f, i) => mb?.tracks?.find(t => t.number === i + 1)?.title;
+    box.innerHTML = `
+      <div class="row" style="margin-bottom:12px"><button class="btn" id="back">← Library</button></div>
+      <div class="card"><div class="mb">
+        ${d.cover ? `<img class="cover" src="${url(d.cover)}" alt="">` : `<div class="cover ph">♪</div>`}
+        <div class="grow">
+          <h1>${esc(d.album || d.name)}</h1>
+          <div>${esc(d.artist || "")}${d.year ? ` <span class="muted">· ${esc(d.year)}</span>` : ""}</div>
+          <div class="muted mono" style="margin:6px 0">${esc(d.name)}</div>
+          <div class="row"><span class="badge">${d.audio_files} audio files</span><span class="badge">${fmtBytes(d.total_bytes)}</span>
+            ${d.archive ? `<span class="badge accent">archive</span>` : ""}${d.has_data ? `<span class="badge">data session</span>` : ""}</div>
+          <div class="row" style="margin-top:12px">
+            <button class="btn primary" id="verify" ${d.archive ? "" : "disabled title='Only archive-mode rips have checksums'"}>Verify checksums</button>
+          </div>
+        </div></div>
+        <div id="verify-job"></div>
+      </div>
+      ${audio.length ? `<div class="card"><h2>Audio</h2><table><tbody>${audio.map((f, i) => `
+        <tr><td style="width:28px" class="muted">${i + 1}</td><td>${esc(titleFor(f, i) || f.path.split("/").pop())}<div class="muted mono">${esc(f.path)}</div></td>
+        <td class="num muted" style="width:80px">${fmtBytes(f.size)}</td>
+        <td style="width:40%"><audio controls preload="none" src="${url(f.path)}"></audio></td>
+        <td style="width:40px"><a href="${url(f.path)}" download title="Download">⬇</a></td></tr>`).join("")}</tbody></table></div>` : ""}
+      ${other.length ? `<div class="card"><h2>Other files</h2><table><tbody>${other.map(f => `
+        <tr><td><a href="${url(f.path)}" target="_blank" style="color:var(--accent2)">${esc(f.path)}</a></td><td class="num muted">${fmtBytes(f.size)}</td></tr>`).join("")}</tbody></table></div>` : ""}`;
+    $("#back").onclick = loadLibrary;
+    $("#verify").onclick = async () => {
+      try {
+        const job = await api("/api/jobs/verify", { body: { name } });
+        jobPanel($("#verify-job"), job.id, { onEnd: refreshJobs });
+      } catch (e) { toast(e.message, "err"); }
+    };
+  } catch (e) { box.innerHTML = `<div class="notice err">${esc(e.message)}</div>`; }
+}
+
+// ── Jobs page ───────────────────────────────────────────────────────────────
+let selectedJob = null;
+async function loadJobs() { await refreshJobs(); renderJobsList(); }
+function renderJobsList() {
+  const box = $("#jobs-list");
+  if (!lastJobs.length) { box.innerHTML = `<div class="muted" style="padding:24px;text-align:center">No jobs yet.</div>`; return; }
+  box.innerHTML = lastJobs.map(j => `<div class="brow" data-id="${j.id}" style="padding:10px 14px;${j.id === selectedJob ? "background:var(--panel2)" : ""}">
+    <div class="grow"><div><b>#${j.id}</b> ${esc(j.title)}</div><div class="muted">${fmtTime(j.started)}</div></div>
+    <span class="badge ${j.status}">${j.status.replace("_", " ")}</span></div>`).join("");
+  $$(".brow", box).forEach(r => r.onclick = () => openJob(+r.dataset.id));
+}
+function openJob(id) {
+  selectedJob = id; renderJobsList();
+  const box = $("#jobs-detail"); box.innerHTML = `<div class="card"><div id="jd"></div></div>`;
+  jobPanel($("#jd"), id, {});
+}
+
+// ── Tools ───────────────────────────────────────────────────────────────────
+function renderTools() {
+  $("#deps").innerHTML = `<table><tbody>${STATUS.deps.map(d => `<tr><td class="mono">${esc(d.name)}</td><td class="muted">${esc(d.purpose)}</td>
+    <td class="num"><span class="badge ${d.found ? "ok" : "err"}">${d.found ? "found" : "missing"}</span></td></tr>`).join("")}</tbody></table>`;
+  $("#sysinfo").innerHTML = `version ${esc(STATUS.version)}<br>rips  → ${esc(STATUS.rips_dir)}<br>media → ${esc(STATUS.media_dir)}<br>drive → ${esc(STATUS.default_device)}${STATUS.mock ? "<br>MOCK MODE: drive is simulated" : ""}`;
+}
+async function runRecover(blank) {
+  try {
+    const job = await api("/api/jobs/recover", { body: { device: selectedDevice(), blank } });
+    jobPanel($("#tools-job"), job.id, {});
+    refreshJobs();
+  } catch (e) { toast(e.message, "err", 8000); }
+}
+
+// ── Wire up ─────────────────────────────────────────────────────────────────
+async function init() {
+  try { STATUS = await api("/api/status"); }
+  catch (e) { document.body.innerHTML = `<div style="padding:40px">${esc(e.message)}</div>`; return; }
+  $("#ver").textContent = "v" + STATUS.version;
+  $("#mockflag").classList.toggle("hidden", !STATUS.mock);
+  $("#scenario-wrap").classList.toggle("hidden", !STATUS.mock);
+  $("#rips-dir").textContent = STATUS.rips_dir;
+  $("#rip-format").innerHTML = STATUS.formats.map(f => `<option value="${f}">${f.toUpperCase()}${f === "flac" ? " (lossless)" : ""}</option>`).join("");
+  $("#rip-format").value = store.get("rip-format", "flac");
+  $("#rip-format").onchange = e => store.set("rip-format", e.target.value);
+  $("#rip-archive").checked = store.get("rip-archive", "") === "1";
+  $("#rip-archive").onchange = e => store.set("rip-archive", e.target.checked ? "1" : "");
+  fillDevices();
+
+  $("#scan").onclick = scan;
+  $("#eject").onclick = () => api("/api/eject", { body: { device: selectedDevice() } }).then(() => { toast("Tray ejected", "ok"); CURRENT_DISC = null; $("#disc-result").innerHTML = ""; $("#rip-card").classList.add("hidden"); }).catch(e => toast(e.message, "err"));
+  $$("input[name=dest]").forEach(r => r.onchange = () => { $("#rip-folder").disabled = $('input[name=dest]:checked').value !== "custom"; });
+  $("#rip-start").onclick = startRip;
+
+  $("#burn-tabs").onclick = e => { const b = e.target.closest("button"); if (!b) return; burn.fmt = b.dataset.fmt; if (burn.fmt === "graph" && !$("#graph-text").value) $("#graph-text").value = JSON.stringify(GRAPH_EXAMPLE, null, 2); renderBurn(); };
+  $("#add-audio").onclick = async () => { const r = await pickPath({ mode: "files", title: "Add audio files" }); if (r) { r.forEach(p => burn.audio.includes(p) || burn.audio.push(p)); burn.playlist = null; renderBurn(); } };
+  $("#add-playlist").onclick = async () => { const r = await pickPath({ mode: "playlist", title: "Choose a playlist" }); if (r?.[0]) { burn.playlist = r[0]; burn.audio = []; renderBurn(); } };
+  $("#pick-data").onclick = async () => { const r = await pickPath({ mode: "folder", title: "Choose the data folder" }); if (r) { burn.data = r[0]; renderBurn(); } };
+  $("#graph-example").onclick = () => { $("#graph-text").value = JSON.stringify(GRAPH_EXAMPLE, null, 2); };
+  $("#graph-validate").onclick = async () => {
+    try { const graph = JSON.parse($("#graph-text").value); await api("/api/validate", { body: { graph } }); toast("Disc graph is valid", "ok"); }
+    catch (e) { toast(e.message, "err", 8000); }
+  };
+  $("#burn-plan").onclick = burnPlan;
+  $("#burn-start").onclick = burnStart;
+  renderBurn();
+
+  $("#lib-refresh").onclick = loadLibrary;
+  $("#recover-check").onclick = () => runRecover(null);
+  $("#recover-blank").onclick = () => { if (confirmBox("Erase the CD-RW in the drive? All data on it will be lost.")) runRecover($("#blank-mode").value); };
+
+  // Pick up a rip/burn already in progress (e.g. page reload or another browser).
+  await refreshJobs();
+  const running = lastJobs.find(j => !["done", "failed", "cancelled"].includes(j.status));
+  if (running?.kind === "rip") jobPanel($("#rip-job"), running.id, {}), $("#rip-card").classList.remove("hidden");
+  if (running?.kind === "burn") jobPanel($("#burn-job"), running.id, {});
+
+  showPage(location.hash.slice(1) || "disc");
+}
+init();
+</script>
+</body>
+</html>

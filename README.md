@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <em>A blazing-fast optical disc toolkit for Linux — burn, rip, archive, and verify<br>Red Book audio CDs, Data CDs, and Blue Book/CD Extra enhanced discs.</em>
+  <em>An optical disc toolkit for Linux — burn, rip, archive, and verify<br>Audio CDs, Data CDs, and Blue Book / CD Extra enhanced discs.<br>Use it from the command line, or from a web UI on a headless server.</em>
 </p>
 
 <p align="center">
@@ -12,12 +12,51 @@
   <img alt="License" src="https://img.shields.io/badge/license-MIT-blue">
 </p>
 
+<p align="center">
+  <img src="Images/Screenshots/disc-scan.png" alt="RustyDisc web UI showing a scanned Audio CD with a MusicBrainz match" width="900">
+</p>
+
+<p align="center"><sub>Screenshots in this README use RustyDisc's built-in <code>--mock</code> mode, which simulates a drive so the UI can be shown without hardware.</sub></p>
+
+---
+
+## Why RustyDisc?
+
+Most Linux disc software is either a desktop GUI you have to sit in front of (K3b, Brasero), or a set of single-purpose command-line tools you have to stitch together yourself (`cdparanoia` + `cdrdao` + `xorriso` + `ffmpeg` + a tagger). RustyDisc puts one consistent interface over the tools that already do the hard work:
+
+- **One tool for both directions.** Rip *and* burn, audio *and* data, including Blue Book / CD Extra enhanced discs. It handles the multi-session rules (audio first, data appended, then finalise) for you.
+- **Runs where the drive is.** `rustydisc serve` gives you a web UI, so a headless box or Proxmox host with a drive in it can be driven from any browser on your network. There is a Docker image and a compose file.
+- **Safe by design.** Every burn is compiled into a plan and validated **before** the drive is touched, so mistakes fail early rather than after wasting a disc. `--dry-run` and *Show plan* let you see exactly what will happen.
+- **Rips you can trust later.** Automatic MusicBrainz tags, embedded cover art, and an **archive mode** that stores the disc's structure, CD-Text, metadata and SHA-256 checksums so a rip can be re-verified years from now.
+- **Scriptable.** Errors are structured JSON with a machine-readable code, and long jobs emit newline-delimited JSON progress. Automation and frontends can build on it without scraping text.
+
+### How it compares
+
+| | **RustyDisc** | K3b | Brasero | abcde | whipper |
+|---|:---:|:---:|:---:|:---:|:---:|
+| Rip audio CDs (paranoia error correction) | ✅ | ✅ | — | ✅ | ✅ |
+| Burn audio CDs | ✅ | ✅ | ✅ | — | — |
+| Burn data CDs | ✅ | ✅ | ✅ | — | — |
+| Blue Book / CD Extra (audio + data sessions) | ✅ | mixed-mode | — | — | — |
+| Rip data sessions and enhanced discs | ✅ | ISO image | ISO image | — | — |
+| MusicBrainz tags + cover art | ✅ | CDDB | — | ✅ | ✅ |
+| Archive mode with checksums | ✅ | — | — | — | rip log |
+| Web UI, usable from another machine | ✅ | — | — | — | — |
+| Runs headless / in Docker | ✅ | — | — | ✅ | ✅ |
+| Structured JSON errors and progress | ✅ | — | — | — | — |
+| Dry-run / plan before writing | ✅ | — | — | — | — |
+| AccurateRip verification | **not yet** | — | — | — | ✅ |
+| Desktop GUI | — (web) | ✅ | ✅ | — | — |
+
+<sub>Based on my understanding of each project's documented behaviour; corrections are welcome as issues or PRs. RustyDisc is not a replacement for everything: if AccurateRip confirmation is a hard requirement, use whipper (or EAC on Windows) for that step. RustyDisc is Linux-only and, like the tools above, relies on external programs (`cdparanoia`, `cdrdao`, `xorriso`, `ffmpeg`) that the Docker image bundles for you.</sub>
+
 ---
 
 ## Contents
 
 - [Overview](#overview)
 - [Features](#features)
+- [Web UI & Docker](#web-ui--docker)
 - [System Requirements](#system-requirements)
 - [Installation](#installation)
 - [Quick Start](#quick-start)
@@ -101,8 +140,8 @@ Physical Disc
   Cover Art Archive       ← downloads front cover image; saved as cover.jpg/png
         │
         ▼
-  Secure Rip Engine       ← cdparanoia (EAC-grade: multiple reads, jitter correction,
-        │                    C2 error pointer support, paranoia retry logic)
+  Secure Rip Engine       ← cdparanoia (paranoia mode: overlapping reads, jitter correction,
+        │                    paranoia retry logic)
         ▼
    Audio Encoders         ← ffmpeg → WAV / FLAC / ALAC / AIFF / OGG / MP3 / Opus
    Data Extractor         ← xorriso → directory tree or ISO image
@@ -129,7 +168,7 @@ Format constraints are enforced **before** any hardware is touched, so you get a
 - **Dry run mode** — `--dry-run` prints the full execution plan as JSON without touching hardware
 
 ### Ripping
-- **Secure audio extraction** — cdparanoia backend: multiple reads per sector, jitter correction, C2 error pointer support, paranoia retry logic — equivalent to EAC quality
+- **Secure audio extraction** — cdparanoia backend: overlapping reads, jitter correction and paranoia retry logic for accurate extraction from marginal discs
 - **Seven audio output formats** — WAV, FLAC (level 8 compression), ALAC, AIFF, OGG Vorbis, MP3 (VBR best), Opus (320 kbps)
 - **Automatic disc detection** — `rustydisc info` and `rustydisc rip` auto-detect Red Book, Data CD, and Blue Book without needing to specify the type
 - **MusicBrainz metadata** — computes the MusicBrainz DiscID from the TOC and queries the MusicBrainz API to fetch album title, artist, release year, and per-track titles and recording IDs; embedded as tags in every encoded file
@@ -141,9 +180,80 @@ Format constraints are enforced **before** any hardware is touched, so you get a
 - **Archive mode** — `--archive` produces a complete reconstruction kit: `disc.json`, `cdtext.json`, `musicbrainz.json`, `checksums.json`
 - **SHA256 verification** — `rustydisc verify` checks every ripped file against its stored checksum
 
+### Web UI
+- **Everything the CLI does, in a browser** — scan, rip, burn, verify, recover and blank from `rustydisc serve`
+- **Built for headless servers** — drive attached to one machine, UI on any other; official Dockerfile and compose file
+- **Live job progress** — streamed to every open browser, with logs, cancel, and a prompt when a multi-disc burn needs the next blank disc
+- **Library browser** — cover art grid, in-browser playback, downloads, one-click checksum verification
+- **Plan preview** — see the exact execution plan (and validate hand-written disc graphs) before burning
+- **Mock mode** — `--mock` simulates a drive for trying or developing the UI without hardware
+
 ### General
 - **Structured errors** — every error is machine-readable JSON with a code, message, and `recoverable` flag
 - **Machine-readable progress** — `--progress-json` emits newline-delimited JSON events for integration with frontends (e.g. TrackBridge)
+
+---
+
+## Web UI & Docker
+
+`rustydisc serve` runs a web interface for everything the CLI does — scan and rip discs, burn Audio / Data / Enhanced CDs, browse and play your rips, verify archives, recover or blank discs — so a headless machine with the drive attached can be driven from any browser on the network.
+
+```bash
+rustydisc serve --rips-dir /srv/Music/CDRips --media-dir /srv/burn-sources
+# → http://<host>:8080
+```
+
+Want to look around first? `rustydisc serve --mock` simulates a drive, with no hardware needed.
+
+### A tour
+
+**Disc & Rip** — scan the disc, see every session and track, get the MusicBrainz match and cover art, then rip with the format and options you choose. The rip destination is named from the metadata (`Artist - Album (Year)/`) unless you pick a name.
+
+<p align="center"><img src="Images/Screenshots/disc-scan.png" alt="Disc scan with MusicBrainz match" width="820"></p>
+
+**Live progress** — jobs run on the server and stream their progress to every open browser. Close the tab and come back later; the job keeps going. A banner follows you around the app while the drive is busy.
+
+<p align="center"><img src="Images/Screenshots/rip-progress.png" alt="A rip in progress with live log" width="820"></p>
+
+**Burn** — build an Audio CD, Data CD or Enhanced (Blue Book) CD from files in the server's media folder, reorder tracks, set CD-Text, transcode on the fly, and preview the execution plan before anything is written. Prefer to hand-write it? Paste a disc graph JSON and validate it.
+
+<p align="center"><img src="Images/Screenshots/burn.png" alt="Burn page with an Enhanced CD and its execution plan" width="820"></p>
+
+**Library** — every rip in one place, with cover art, format badges and archive status.
+
+<p align="center"><img src="Images/Screenshots/library.png" alt="Library grid of ripped albums" width="820"></p>
+
+**Play, download and verify** — play tracks in the browser, download files, and re-check an archive against its SHA-256 checksums with one click.
+
+<p align="center"><img src="Images/Screenshots/library-detail.png" alt="Album detail with verification result and audio players" width="820"></p>
+
+**Jobs** — a history of everything that ran, with full logs and cancel support.
+
+<p align="center"><img src="Images/Screenshots/jobs.png" alt="Jobs history and log" width="820"></p>
+
+The **Tools** page covers disc recovery and CD-RW blanking, and checks that the external programs RustyDisc relies on are installed.
+
+| Flag | Env var | Default | |
+|---|---|---|---|
+| `--bind` | `RUSTYDISC_BIND` | `0.0.0.0:8080` | listen address |
+| `--device` | `RUSTYDISC_DEVICE` | `/dev/sr0` | default drive |
+| `--rips-dir` | `RUSTYDISC_RIPS_DIR` | `./rips` | rip output + library |
+| `--media-dir` | `RUSTYDISC_MEDIA_DIR` | `./media` | burn sources |
+| `--mock` | `RUSTYDISC_MOCK` | off | simulate a drive (no hardware needed) |
+
+There is **no authentication** — run it on a trusted network or behind a reverse proxy. Only one job may use the drive at a time; long jobs stream live progress to every open browser.
+
+### Docker
+
+```bash
+docker compose up -d --build     # http://<host>:8080
+```
+
+The image bundles everything RustyDisc needs (`cdparanoia`, `cdrdao`, `xorriso`, `wodim`, `ffmpeg`, `eject`). `docker-compose.yml` passes `/dev/sr0` (and `/dev/sg0`, needed for burning) into the container, adds the `SYS_RAWIO` capability, and mounts `./rips` (your output) and `./media` (burn sources, read-only). Edit the device names and volume paths to match your machine.
+
+**On Proxmox:** Docker usually runs inside a VM or LXC, so pass the drive into that guest first. For a VM, use SATA or USB passthrough; for an LXC, allow and bind the `/dev/sr0` and `/dev/sg*` device nodes.
+
+**Security:** the UI has no login. Keep it on a trusted network, or put it behind a reverse proxy that adds authentication.
 
 ---
 
@@ -868,7 +978,7 @@ Exit codes:
 
 ### Secure ripping
 
-Audio extraction uses **cdparanoia**, the same algorithm underpinning Exact Audio Copy (EAC) and dBpoweramp on Windows. It reads each sector multiple times, compares results, re-reads on disagreement, and uses majority voting to produce the most accurate possible extraction. Drive read offset is automatically handled by cdparanoia's jitter correction.
+Audio extraction uses **cdparanoia** in its full paranoia mode: it reads sectors with overlap, compares the results, re-reads on disagreement, and corrects jitter, so scratched or marginal discs still come out as close to bit-perfect as the drive allows. RustyDisc does **not** yet check rips against the AccurateRip database, so if you need that confirmation, run [whipper](https://github.com/whipper-team/whipper) or Exact Audio Copy alongside it.
 
 ### User permissions
 

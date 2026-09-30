@@ -6,6 +6,7 @@ mod model;
 mod parser;
 mod planner;
 mod rip;
+mod web;
 
 use clap::{Parser, Subcommand};
 
@@ -36,6 +37,8 @@ enum Cmd {
     Rip(commands::rip::RipArgs),
     /// Verify a ripped archive against its checksums.json
     Verify(commands::verify::VerifyArgs),
+    /// Run the web UI and API (headless-server friendly)
+    Serve(commands::serve::ServeArgs),
 }
 
 fn main() {
@@ -48,6 +51,7 @@ fn main() {
         Cmd::Info(args)     => commands::info::run(args),
         Cmd::Rip(args)      => commands::rip::run(args),
         Cmd::Verify(args)   => commands::verify::run(args),
+        Cmd::Serve(args)    => commands::serve::run(args),
     };
     if let Err(e) = result {
         let disc_err = e.to_disc_error();

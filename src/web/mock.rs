@@ -1,0 +1,199 @@
+//! Hardware-free simulation (`serve --mock`) so the web UI can be developed and
+//! tested on a machine with no optical drive.
+
+use std::{path::PathBuf, sync::Arc, time::Duration};
+
+use serde_json::{json, Value};
+
+use super::jobs::{fail, Event, Job, Status};
+use crate::rip::{metadata, musicbrainz::{MbTrackInfo, ReleaseInfo}};
+
+const ARTIST: &str = "The Static Lights";
+const ALBUM: &str = "Neon Cathedral";
+
+const TRACKS: &[(&str, f64)] = &[
+    ("Cathedral of Neon", 254.2),
+    ("Tape Hiss Lullaby", 198.7),
+    ("Parallel Lines Redux", 312.0),
+    ("Static in the Snow", 221.4),
+    ("Hidden Track (Reprise)", 163.9),
+];
+
+/// A generated placeholder cover so demos and screenshots have artwork without network access.
+pub fn cover_svg() -> String {
+    r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#1b1035"/><stop offset="1" stop-color="#e8743b"/></linearGradient></defs><rect width="400" height="400" fill="url(#g)"/><circle cx="200" cy="200" r="120" fill="none" stroke="#fff" stroke-opacity=".25" stroke-width="2"/><circle cx="200" cy="200" r="80" fill="none" stroke="#fff" stroke-opacity=".35" stroke-width="2"/><circle cx="200" cy="200" r="40" fill="#0e0a1c"/><circle cx="200" cy="200" r="8" fill="#e8743b"/><text x="24" y="368" font-family="sans-serif" font-size="26" font-weight="700" fill="#fff">NEON CATHEDRAL</text></svg>"##.to_string()
+}
+
+pub fn info(scenario: &str, device: &str) -> Result<Value, (String, String)> {
+    let mut lba = 150u32;
+    let audio_tracks: Vec<Value> = TRACKS
+        .iter()
+        .enumerate()
+        .map(|(i, (_, secs))| {
+            let frames = (*secs * 75.0) as u32;
+            let t = json!({
+                "number": i + 1, "kind": "audio", "duration_secs": secs,
+                "lba_start": lba, "lba_end": lba + frames - 1,
+            });
+            lba += frames;
+            t
+        })
+        .collect();
+
+    let audio_session = json!({
+        "index": 1, "kind": {"type": "audio"}, "tracks": audio_tracks,
+        "cd_text": {"title": ALBUM, "artist": ARTIST},
+    });
+    let data_session = |index: u32, first: usize| json!({
+        "index": index,
+        "kind": {"type": "data", "volume_label": "BONUS_CONTENT", "size_mb": 182.4, "filesystem": "ISO9660"},
+        "tracks": [{"number": first, "kind": "data", "lba_start": lba + 11400, "lba_end": lba + 11400 + 93400}],
+    });
+
+    match scenario {
+        "none" => Err(("DEVICE_ERROR".into(), "No disc in drive (mock scenario 'none').".into())),
+        "data" => Ok(json!({
+            "format": "datacd", "is_writable": false, "device": device,
+            "sessions": [data_session(1, 1)],
+        })),
+        "bluebook" => Ok(json!({
+            "format": "bluebook", "is_writable": false, "device": device,
+            "discid": "Wn8eRBtfLDfM0qjYPdxrz.Zjs_U-",
+            "sessions": [audio_session, data_session(2, TRACKS.len() + 1)],
+        })),
+        _ => Ok(json!({
+            "format": "redbook", "is_writable": false, "device": device,
+            "discid": "Wn8eRBtfLDfM0qjYPdxrz.Zjs_U-",
+            "sessions": [audio_session],
+        })),
+    }
+}
+
+pub fn release() -> ReleaseInfo {
+    ReleaseInfo {
+        mb_release_id: "00000000-0000-4000-8000-000000000000".into(),
+        album: ALBUM.into(),
+        album_artist: ARTIST.into(),
+        mb_artist_id: None,
+        date: Some("1999-04-12".into()),
+        year: Some("1999".into()),
+        tracks: TRACKS
+            .iter()
+            .enumerate()
+            .map(|(i, (t, _))| MbTrackInfo {
+                number: i + 1,
+                title: (*t).into(),
+                artist: None,
+                mb_recording_id: None,
+                mb_artist_id: None,
+            })
+            .collect(),
+        total_releases: 1,
+    }
+}
+
+async fn nap(ms: u64) {
+    tokio::time::sleep(Duration::from_millis(ms)).await;
+}
+
+/// Sleep in slices, returning early (true) if the job was cancelled.
+async fn work(job: &Job, ms: u64) -> bool {
+    tokio::select! {
+        _ = nap(ms) => false,
+        _ = job.cancel_notified().notified() => true,
+    }
+}
+
+fn cancelled(job: &Job) {
+    job.push(Event::Step { msg: "Cancelled".into() });
+    job.push(Event::Status { status: Status::Cancelled });
+}
+
+pub async fn rip(job: Arc<Job>, rips_dir: PathBuf, folder: Option<String>, archive: bool, format: String, no_mb: bool) {
+    job.push(Event::Step { msg: "Analysing disc...".into() });
+    job.push(Event::Progress { pct: 0.0 });
+    if work(&job, 700).await { return cancelled(&job); }
+    job.push(Event::Step { msg: "Detected: Red Book Audio CD".into() });
+    if !no_mb {
+        job.push(Event::Step { msg: "Looking up metadata on MusicBrainz...".into() });
+        if work(&job, 600).await { return cancelled(&job); }
+        job.push(Event::Step { msg: format!("Found: {ALBUM} — {ARTIST}") });
+    }
+
+    let name = folder.unwrap_or_else(|| format!("{ARTIST} - {ALBUM} (1999)"));
+    let out = rips_dir.join(&name);
+    let audio_dir = if archive { out.join("audio") } else { out.clone() };
+    if let Err(e) = std::fs::create_dir_all(&audio_dir) {
+        return fail(&job, "IO_ERROR", &e.to_string(), false);
+    }
+
+    job.push(Event::Step { msg: "Ripping audio tracks from disc...".into() });
+    for i in 0..TRACKS.len() {
+        for s in 0..4 {
+            if work(&job, 250).await { return cancelled(&job); }
+            let pct = (i as f32 + (s + 1) as f32 / 4.0) / TRACKS.len() as f32 * 85.0;
+            job.push(Event::Progress { pct });
+        }
+        job.push(Event::Log { msg: format!("  Ripping track {} of {}...", i + 1, TRACKS.len()) });
+    }
+    job.push(Event::Step { msg: "  Rip complete — encoding...".into() });
+    for (i, (title, _)) in TRACKS.iter().enumerate() {
+        let file = format!("{:02} - {}.{}", i + 1, title, format);
+        job.push(Event::Step { msg: format!("Encoding track {} of {} — {}", i + 1, TRACKS.len(), file) });
+        if work(&job, 300).await { return cancelled(&job); }
+        // Placeholder bytes (not real audio) so the library and verify have something to work with.
+        let _ = std::fs::write(audio_dir.join(&file), format!("mock audio data for {title}\n").repeat(2000));
+        job.push(Event::Progress { pct: 85.0 + (i + 1) as f32 / TRACKS.len() as f32 * 12.0 });
+    }
+
+    if archive {
+        job.push(Event::Step { msg: "Writing metadata and checksums...".into() });
+        let meta = out.join("metadata");
+        let _ = std::fs::create_dir_all(&meta);
+        let _ = std::fs::write(meta.join("disc.json"), serde_json::to_string_pretty(&info("redbook", "mock").unwrap()).unwrap());
+        if !no_mb {
+            let _ = std::fs::write(meta.join("musicbrainz.json"), serde_json::to_string_pretty(&release()).unwrap());
+        }
+        let dir = out.to_string_lossy().to_string();
+        match metadata::generate_checksums(&dir).and_then(|m| metadata::write_checksums(&m, &meta.to_string_lossy())) {
+            Ok(()) => {}
+            Err(e) => return fail(&job, "IO_ERROR", &e.to_string(), false),
+        }
+    }
+    job.push(Event::Progress { pct: 100.0 });
+    job.push(Event::Status { status: Status::Done });
+}
+
+pub async fn burn(job: Arc<Job>, dry_run: bool) {
+    let steps: &[(&str, f32)] = &[
+        ("Building ISO image...", 20.0),
+        ("Writing to disc...", 60.0),
+        ("Closing disc...", 95.0),
+    ];
+    for (msg, target) in steps {
+        job.push(Event::Step { msg: (*msg).into() });
+        let start = job.summary().pct;
+        for s in 1..=6 {
+            if work(&job, 300).await { return cancelled(&job); }
+            job.push(Event::Progress { pct: start + (target - start) * s as f32 / 6.0 });
+        }
+        if dry_run { break; }
+    }
+    job.push(Event::Progress { pct: 100.0 });
+    job.push(Event::Status { status: Status::Done });
+}
+
+pub async fn recover(job: Arc<Job>, blank: Option<String>) {
+    job.push(Event::Step {
+        msg: match &blank {
+            Some(m) => format!("Blanking CD-RW (mode: {m})..."),
+            None => "Checking disc state...".into(),
+        },
+    });
+    for s in 1..=4 {
+        if work(&job, 400).await { return cancelled(&job); }
+        job.push(Event::Progress { pct: s as f32 * 25.0 });
+    }
+    job.push(Event::Log { msg: "Disc on /dev/sr0 is blank. No recovery needed.".into() });
+    job.push(Event::Status { status: Status::Done });
+}
