@@ -279,7 +279,8 @@ pre.json { background: var(--bg); border: 1px solid var(--line); border-radius: 
         <h2>Options</h2>
         <div class="grid2">
           <div style="display:flex;flex-direction:column;gap:12px">
-            <label class="field" id="label-wrap">Disc label<input type="text" id="burn-label" placeholder="Untitled"></label>
+            <label class="field" id="label-wrap">Disc label<input type="text" id="burn-label" placeholder="Untitled">
+              <small id="label-help">Filled in from the playlist's name; change it if you like. Jobs that need several discs are labelled “… - Disc 1”, “… - Disc 2” and so on.</small></label>
             <label class="field" id="discsize-wrap">Blank disc
               <select id="burn-discsize"><option value="700">700 MB · 80 min (standard CD-R)</option><option value="650">650 MB · 74 min</option><option value="800">800 MB · 90 min</option></select>
             </label>
@@ -957,8 +958,23 @@ function playlistRow(list, path, clear) {
   $("[data-a=clear]", list).onclick = clear;
 }
 
+// The label follows the chosen playlist's name (Magnum Opus.m3u8 → "Magnum Opus") until it is edited.
+let autoLabel = "";
+function playlistLabel(path) {
+  return path.split("/").pop().replace(/\.m3u8?$/i, "").trim();
+}
+function syncAutoLabel() {
+  const input = $("#burn-label");
+  const active = burn.fmt === "datacd" ? burn.dplaylist : burn.fmt === "graph" ? null : burn.playlist;
+  const untouched = !input.value.trim() || input.value.trim() === autoLabel;
+  if (!untouched) { autoLabel = ""; return; }   // the user has typed their own
+  autoLabel = active ? playlistLabel(active) : "";
+  input.value = autoLabel;
+}
+
 function renderBurn() {
   const f = burn.fmt, isGraph = f === "graph", isData = f === "datacd", isEnh = f === "bluebook";
+  syncAutoLabel();
   $$("#burn-tabs button").forEach(b => b.classList.toggle("active", b.dataset.fmt === f));
   $("#burn-audio-block").classList.toggle("hidden", isGraph || isData);
   $("#burn-data-block").classList.toggle("hidden", isGraph || f === "redbook");

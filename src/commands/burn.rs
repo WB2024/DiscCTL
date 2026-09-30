@@ -506,15 +506,17 @@ fn eject(device: &str) {
     let _ = std::process::Command::new("eject").arg(device).status();
 }
 
+/// The label for disc `disc_num` of `total`: the base label as it is for a single disc,
+/// otherwise "Base - Disc N". ISO volume labels are at most 32 characters, so a long base
+/// is shortened to leave room for the suffix.
 fn disc_label(base: &str, disc_num: usize, total: usize) -> String {
-    if total > 1 {
-        // ISO volume labels: uppercase, max 32 chars — keep base short
-        let max_base = 26; // leaves room for " (X/Y)"
-        let truncated: String = base.chars().take(max_base).collect();
-        format!("{} ({}/{})", truncated, disc_num, total)
-    } else {
-        base.to_string()
+    if total <= 1 {
+        return base.to_string();
     }
+    let suffix = format!(" - Disc {}", disc_num);
+    let room = 32usize.saturating_sub(suffix.chars().count());
+    let truncated: String = base.chars().take(room).collect();
+    format!("{}{}", truncated.trim_end(), suffix)
 }
 
 
@@ -592,5 +594,19 @@ mod tests {
         assert!(resolve(args(None, None)).is_err());
         assert!(resolve(args(Some(vec!["/etc/hostname".into()]), Some("/tmp".into()))).is_err());
         assert!(resolve(args(Some(vec!["/definitely/not/here".into()]), None)).is_err());
+    }
+
+    #[test]
+    fn disc_labels() {
+        // a single disc keeps its label as it is
+        assert_eq!(disc_label("Magnum Opus", 1, 1), "Magnum Opus");
+        // several discs get "- Disc N"
+        assert_eq!(disc_label("Magnum Opus", 1, 7), "Magnum Opus - Disc 1");
+        assert_eq!(disc_label("Magnum Opus", 12, 38), "Magnum Opus - Disc 12");
+        // a long label is shortened so the whole thing stays within 32 characters
+        let long = disc_label("A very long playlist name that goes on and on", 3, 9);
+        assert_eq!(long, "A very long playlist na - Disc 3");
+        assert!(long.chars().count() <= 32);
+        assert!(disc_label(&"x".repeat(40), 123, 200).chars().count() <= 32);
     }
 }

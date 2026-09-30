@@ -924,7 +924,7 @@ Insert blank disc 1 into /dev/sr0 and press ENTER to burn...
 
 For converted Data CDs the count is an estimate until the files are converted, so the prompt shows `Disc 1 of ~3` and corrects itself as it goes.
 
-Each disc's volume label is automatically suffixed: `"Giant Collection (1/6)"`, `"Giant Collection (2/6)"`, etc.
+Each disc's volume label is automatically suffixed: `"Giant Collection - Disc 1"`, `"Giant Collection - Disc 2"`, etc. (a single disc keeps the label as it is; long labels are shortened to fit the 32-character limit). In the web UI the label is filled in from the playlist's file name (`Magnum Opus.m3u8` becomes `Magnum Opus`) until you type your own.
 
 ---
 
