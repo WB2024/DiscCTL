@@ -8,6 +8,7 @@
 mod jobs;
 mod mock;
 mod settings;
+mod stick;
 
 use std::{
     convert::Infallible,
@@ -46,6 +47,8 @@ pub struct Config {
     pub media_dir: PathBuf,
     /// Where settings.json lives (mount a volume here in Docker).
     pub config_dir: PathBuf,
+    /// Extra folders Rusty Stick may write to (besides detected USB sticks).
+    pub stick_dirs: Vec<PathBuf>,
     pub mock: bool,
 }
 
@@ -54,6 +57,8 @@ struct AppState {
     jobs: Jobs,
     settings: settings::Store,
     cover_cache: std::sync::Mutex<std::collections::HashMap<String, Option<Arc<Cover>>>>,
+    /// The last scan of a stick job's sources (tags take a while to read).
+    stick_scan: std::sync::Mutex<Option<(String, std::time::Instant, Arc<crate::stick::scan::Scan>)>>,
 }
 
 type S = State<Arc<AppState>>;
@@ -179,7 +184,7 @@ pub async fn serve(cfg: Config, bind: SocketAddr) -> Result<(), Error> {
     let rips_dir = cfg.rips_dir.clone();
     let media_dir = cfg.media_dir.clone();
     let settings = settings::Store::load(&cfg.config_dir);
-    let state = Arc::new(AppState { cfg, jobs: Jobs::default(), settings, cover_cache: Default::default() });
+    let state = Arc::new(AppState { cfg, jobs: Jobs::default(), settings, cover_cache: Default::default(), stick_scan: Default::default() });
 
     let app = Router::new()
         .route("/", get(|| async { Html(INDEX_HTML) }))
@@ -190,6 +195,11 @@ pub async fn serve(cfg: Config, bind: SocketAddr) -> Result<(), Error> {
         .route("/api/cover", get(cover))
         .route("/api/cover/info", get(cover_info))
         .route("/api/settings", get(get_settings).put(put_settings))
+        .route("/api/stick/targets", get(stick::targets))
+        .route("/api/stick/plan", post(stick::plan))
+        .route("/api/stick/mount", post(stick::mount))
+        .route("/api/stick/eject", post(stick::eject))
+        .route("/api/jobs/stick", post(stick::start))
         .route("/api/settings/test-fanart", post(test_fanart))
         .route("/api/eject", post(eject))
         .route("/api/browse", get(browse))
@@ -476,6 +486,10 @@ struct SettingsUpdate {
     cover_embed: bool,
     /// Omit to keep the stored key; send "" to remove it.
     fanart_api_key: Option<String>,
+    #[serde(default)]
+    stick_extra_folders: Vec<String>,
+    #[serde(default)]
+    stick_preset: String,
 }
 
 async fn put_settings(State(st): S, Json(u): Json<SettingsUpdate>) -> ApiResult<Json<Value>> {
@@ -489,6 +503,8 @@ async fn put_settings(State(st): S, Json(u): Json<SettingsUpdate>) -> ApiResult<
         cover_save_file: u.cover_save_file,
         cover_embed: u.cover_embed,
         fanart_api_key: u.fanart_api_key.unwrap_or(current.fanart_api_key),
+        stick_extra_folders: u.stick_extra_folders,
+        stick_preset: u.stick_preset,
     }
     .validate()
     .map_err(ApiError::bad)?;

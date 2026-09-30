@@ -24,6 +24,11 @@ pub struct ServeArgs {
     #[arg(long, env = "RUSTYDISC_CONFIG_DIR", default_value = "./config")]
     pub config_dir: String,
 
+    /// Folders Rusty Stick may write to besides detected USB sticks (separate several with ':').
+    /// Sticks mounted inside them are listed too.
+    #[arg(long, env = "RUSTYDISC_STICK_DIRS", value_delimiter = ':')]
+    pub stick_dir: Vec<String>,
+
     /// Simulate the drive (fake disc, fake rips/burns) — for trying the UI without hardware
     #[arg(long, env = "RUSTYDISC_MOCK", value_parser = clap::builder::BoolishValueParser::new())]
     pub mock: bool,
@@ -36,6 +41,7 @@ pub fn run(args: ServeArgs) -> Result<(), Error> {
         rips_dir: std::path::PathBuf::from(args.rips_dir),
         media_dir: std::path::PathBuf::from(args.media_dir),
         config_dir: std::path::PathBuf::from(args.config_dir),
+        stick_dirs: args.stick_dir.iter().filter(|s| !s.trim().is_empty()).map(std::path::PathBuf::from).collect(),
         mock: args.mock,
     };
     std::fs::create_dir_all(&cfg.media_dir)?;

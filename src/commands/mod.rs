@@ -6,3 +6,4 @@ pub mod rip;
 pub mod validate;
 pub mod verify;
 pub mod serve;
+pub mod stick;

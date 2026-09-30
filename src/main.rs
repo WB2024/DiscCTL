@@ -6,6 +6,7 @@ mod model;
 mod parser;
 mod planner;
 mod rip;
+mod stick;
 mod web;
 
 use clap::{Parser, Subcommand};
@@ -39,6 +40,8 @@ enum Cmd {
     Verify(commands::verify::VerifyArgs),
     /// Run the web UI and API (headless-server friendly)
     Serve(commands::serve::ServeArgs),
+    /// Rusty Stick: write music to a USB stick, filed the way you like
+    Stick(commands::stick::StickArgs),
 }
 
 fn main() {
@@ -52,6 +55,7 @@ fn main() {
         Cmd::Rip(args)      => commands::rip::run(args),
         Cmd::Verify(args)   => commands::verify::run(args),
         Cmd::Serve(args)    => commands::serve::run(args),
+        Cmd::Stick(args)    => commands::stick::run(args),
     };
     if let Err(e) = result {
         let disc_err = e.to_disc_error();

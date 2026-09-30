@@ -82,10 +82,28 @@ impl TranscodeSpec {
 
 /// Convert one audio file. Audio only (embedded cover art is dropped) with tags kept.
 pub fn transcode_file(input: &str, output: &str, spec: &TranscodeSpec, debug: bool) -> Result<(), Error> {
+    transcode_file_art(input, output, spec, false, debug)
+}
+
+/// Like [`transcode_file`], optionally keeping the embedded cover picture (MP3, M4A and FLAC
+/// can carry it; other formats ignore the request).
+pub fn transcode_file_art(input: &str, output: &str, spec: &TranscodeSpec, keep_art: bool, debug: bool) -> Result<(), Error> {
     let mut cmd = Command::new("ffmpeg");
-    // Audio only, tags kept. Embedded cover art is dropped: it would be copied into every
-    // file and make sizes unpredictable when planning how many discs are needed.
-    cmd.arg("-y").arg("-i").arg(input).arg("-vn").arg("-map_metadata").arg("0");
+    // Never read the terminal: another part of the program may be waiting on it for a keypress.
+    cmd.arg("-nostdin").stdin(std::process::Stdio::null());
+    let art = keep_art && matches!(spec.format, OutputFormat::Mp3 | OutputFormat::Aac | OutputFormat::Flac);
+    if art {
+        // Audio plus the first picture stream (if there is one), copied as it is.
+        cmd.arg("-y").arg("-i").arg(input)
+            .args(["-map", "0:a:0", "-map", "0:v:0?", "-c:v", "copy", "-disposition:v:0", "attached_pic", "-map_metadata", "0"]);
+        if spec.format == OutputFormat::Mp3 {
+            cmd.args(["-id3v2_version", "3"]);
+        }
+    } else {
+        // Audio only, tags kept. Embedded cover art is dropped: it would be copied into every
+        // file and make sizes unpredictable when planning how many discs are needed.
+        cmd.arg("-y").arg("-i").arg(input).arg("-vn").arg("-map_metadata").arg("0");
+    }
 
     match spec.format {
         OutputFormat::Mp3 => {

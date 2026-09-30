@@ -20,3 +20,10 @@ services:
     environment:
       RUSTYDISC_DEVICE: /dev/sr0
       # RUSTYDISC_MOCK: "1"   # simulate a drive, for trying the UI without hardware
+      # Rusty Stick (USB sticks): let sticks mounted on the host show up, e.g. /mnt/usb/STICK1
+      # RUSTYDISC_STICK_DIRS: /usb
+    # volumes (add): - /mnt/usb:/usb:rslave
+    #
+    # Or let RustyDisc mount sticks itself (hot-plug); needs these two settings on the service:
+    # cap_add: [SYS_ADMIN, MKNOD]        (merge with the cap_add above)
+    # device_cgroup_rules: ["b 8:* rwm"]

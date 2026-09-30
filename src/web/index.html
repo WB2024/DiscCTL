@@ -149,6 +149,20 @@ audio { width: 100%; height: 34px; }
 a { color: var(--accent2); }
 table.ar td, table.ar th { padding: 4px 8px; }
 .ar-ok { color: var(--ok); } .ar-bad { color: var(--err); } .ar-skip { color: var(--muted); }
+/* Rusty Stick */
+.target { display: flex; gap: 14px; align-items: center; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; cursor: pointer; margin-bottom: 10px; background: var(--panel2); }
+.target:hover { border-color: var(--muted); }
+.target.sel { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--panel2)); }
+.target .icon { font-size: 30px; }
+.target .meter { width: 220px; }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip { background: var(--panel2); border: 1px solid var(--line); border-radius: 14px; padding: 2px 10px; font: 12.5px var(--mono); cursor: pointer; color: var(--accent2); }
+.chip:hover { border-color: var(--accent); }
+.tnode > summary { cursor: pointer; padding: 3px 0; }
+.tchild { margin-left: 18px; border-left: 1px solid var(--line); padding-left: 10px; }
+.tfile { padding: 1px 0; display: flex; gap: 10px; }
+.sample { font: 12.5px var(--mono); color: var(--muted); padding: 2px 0; word-break: break-all; }
+.sample b { color: var(--text); font-weight: 500; }
 pre.json { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 12px; overflow: auto; max-height: 340px; font: 12px/1.5 var(--mono); }
 </style>
 </head>
@@ -162,6 +176,7 @@ pre.json { background: var(--bg); border: 1px solid var(--line); border-radius: 
     <nav id="nav">
       <button data-page="disc">💿 Rip</button>
       <button data-page="burn">🔥 Burn</button>
+      <button data-page="stick">🔌 Rusty Stick</button>
       <button data-page="library">📚 Library</button>
       <button data-page="jobs">⚙️ Jobs <span class="count hidden" id="jobcount"></span></button>
       <button data-page="tools">🧰 Tools</button>
@@ -324,6 +339,81 @@ pre.json { background: var(--bg); border: 1px solid var(--line); border-radius: 
       </div>
     </section>
 
+
+    <!-- ── Rusty Stick ────────────────────────────── -->
+    <section class="page" id="page-stick">
+      <div class="page-head"><h1>Rusty Stick</h1><div class="muted">Put your music on a USB stick, filed the way you like — converted to fit if you want.</div></div>
+
+      <div class="card">
+        <div class="row" style="margin-bottom:10px"><h2 style="margin:0" class="grow">1 · The stick</h2><button class="btn small" id="st-refresh">↻ Refresh</button></div>
+        <div id="st-targets"></div>
+        <div id="st-unmounted"></div>
+      </div>
+
+      <div class="card">
+        <div class="row" style="margin-bottom:8px">
+          <h2 style="margin:0">2 · The music</h2><span class="muted" id="st-src-summary"></span><span class="grow"></span>
+          <button class="btn small" id="st-add-folder">📁 Add folder…</button>
+          <button class="btn small" id="st-add-files">+ Add files…</button>
+          <button class="btn small" id="st-add-playlist">Add playlist (.m3u / .m3u8)…</button>
+        </div>
+        <div class="filelist" id="st-sources"></div>
+        <div class="muted" style="margin-top:8px">Mix folders, single files and playlists. Folders include everything inside them. Everything must be inside the server's media folder. The same track chosen twice is written once.</div>
+      </div>
+
+      <div class="card">
+        <h2>3 · How to organise it</h2>
+        <div class="grid2">
+          <div style="display:flex;flex-direction:column;gap:12px">
+            <label class="field">Layout
+              <select id="st-preset"></select></label>
+            <label class="field">Folder pattern <small>Folders are separated by “/”. Click a piece to add it.</small>
+              <input type="text" id="st-template" spellcheck="false" style="font-family:var(--mono)"></label>
+            <div class="chips" id="st-tokens"></div>
+            <label class="field">Put everything inside this folder on the stick <small>Leave empty for the root of the stick.</small>
+              <input type="text" id="st-subfolder" placeholder="e.g. Music"></label>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:12px">
+            <label class="check"><input type="checkbox" id="st-the" checked><span>Ignore a leading “The”<small>“The Beatles” is filed under B</small></span></label>
+            <label class="check"><input type="checkbox" id="st-covers" checked><span>Put cover.jpg in each album folder<small>found next to the tracks (cover, folder, front…)</small></span></label>
+            <label class="check"><input type="checkbox" id="st-skip" checked><span>Skip files already on the stick<small>lets you top a stick up, or resume after an interruption</small></span></label>
+            <label class="field">File names
+              <select id="st-windows"><option value="auto">Automatic (safe for FAT, exFAT and NTFS when needed)</option><option value="on">Always safe for Windows filesystems</option><option value="off">Allow everything Linux allows</option></select></label>
+          </div>
+        </div>
+        <div style="margin-top:14px"><div class="muted" style="margin-bottom:4px">What the first few tracks would look like:</div><div id="st-samples"><span class="muted">Choose a stick and some music.</span></div></div>
+      </div>
+
+      <div class="card">
+        <h2>4 · Convert first (optional)</h2>
+        <div class="row">
+          <label class="field" style="min-width:260px">Convert audio while writing
+            <select id="st-transcode">
+              <option value="">No — copy the files as they are</option>
+              <option value="mp3:320">MP3 320k</option><option value="mp3:256">MP3 256k</option><option value="mp3:192">MP3 192k</option><option value="mp3:160">MP3 160k</option><option value="mp3:128">MP3 128k</option>
+              <option value="aac:256">AAC 256k</option><option value="aac:192">AAC 192k</option><option value="opus:128">Opus 128k</option><option value="opus:96">Opus 96k</option><option value="flac">FLAC (lossless)</option>
+            </select></label>
+          <label class="check" style="align-self:flex-end"><input type="checkbox" id="st-art" checked><span>Keep the embedded cover picture<small>car stereos and phones show it; it takes a little space</small></span></label>
+        </div>
+        <div class="muted" style="margin-top:8px">Only files that would shrink are converted: lossless files become the chosen format, but a lossy file already at or below that bitrate is copied untouched. Tags are kept.</div>
+      </div>
+
+      <div class="card">
+        <h2>Plan</h2>
+        <div id="st-plan"><span class="muted">Choose a stick and some music to see the plan.</span></div>
+      </div>
+
+      <div class="card">
+        <h2>Write it</h2>
+        <div class="row" style="gap:24px">
+          <label class="check"><input type="checkbox" id="st-clear"><span>Empty the stick first<small>deletes everything in the destination — you'll be asked to type its name</small></span></label>
+          <label class="check"><input type="checkbox" id="st-dry"><span>Dry run<small>work through it without writing anything</small></span></label>
+        </div>
+        <div class="row" style="margin-top:14px"><button class="btn primary" id="st-write">Write to stick</button><span class="muted" id="st-write-hint"></span></div>
+        <div id="st-job"></div>
+      </div>
+    </section>
+
     <!-- ── Library ────────────────────────────────── -->
     <section class="page" id="page-library">
       <div class="page-head row">
@@ -386,6 +476,15 @@ pre.json { background: var(--bg); border: 1px solid var(--line); border-radius: 
       </div>
 
       <div class="card">
+        <h2>Rusty Stick</h2>
+        <div class="muted" style="margin-bottom:12px">USB sticks that are mounted on the machine running RustyDisc are found automatically. To write somewhere else (a folder you mount sticks into, or any other place), allow it here. Sticks mounted inside an allowed folder are listed too.</div>
+        <label class="field">Extra places Rusty Stick may write to <small>One absolute path per line, e.g. /usb</small>
+          <textarea id="set-stick-folders" rows="3" spellcheck="false" placeholder="/usb"></textarea></label>
+        <label class="field" style="max-width:420px;margin-top:12px">Default layout<select id="set-stick-preset"></select></label>
+        <div class="muted" id="set-stick-env" style="margin-top:8px"></div>
+      </div>
+
+      <div class="card">
         <h2>Rip defaults</h2>
         <div class="muted" style="margin-bottom:12px">These pre-fill the options on the Rip page. You can still change them for each rip.</div>
         <div class="grid2">
@@ -437,7 +536,7 @@ const confirmBox = (msg) => window.confirm(msg);
 
 // ── Global state / navigation ───────────────────────────────────────────────
 let STATUS = null;
-const pages = ["disc", "burn", "library", "jobs", "tools", "settings"];
+const pages = ["disc", "burn", "stick", "library", "jobs", "tools", "settings"];
 
 function showPage(name) {
   if (!pages.includes(name)) name = "disc";
@@ -448,9 +547,24 @@ function showPage(name) {
   if (name === "jobs") loadJobs();
   if (name === "tools") renderTools();
   if (name === "settings") loadSettings();
+  if (name === "stick") loadStick();
 }
 window.addEventListener("hashchange", () => showPage(location.hash.slice(1)));
 $("#nav").addEventListener("click", e => { const b = e.target.closest("button"); if (b) showPage(b.dataset.page); });
+
+// ── Rusty Stick result shown in the job panel ───────────────────────────────
+function stickDone(d) {
+  const mins = d.seconds >= 90 ? `${Math.round(d.seconds / 60)} min` : `${Math.round(d.seconds)} s`;
+  const what = d.dry_run ? "Dry run finished — nothing was written." : `Wrote <b>${d.written}</b> file${d.written === 1 ? "" : "s"}${d.converted ? ` (${d.converted} converted)` : ""}${d.covers ? ` and ${d.covers} cover${d.covers > 1 ? "s" : ""}` : ""}, ${fmtMB(d.bytes)} in ${mins}${d.already_there ? ` · ${d.already_there} were already there` : ""}. The stick has been flushed — it's safe to remove.`;
+  return `<div class="notice" style="margin-top:12px"><span class="ar-ok">✔</span> ${what}
+    ${d.dry_run ? "" : `<div style="margin-top:8px"><button class="btn small" onclick="ejectStick(this)">⏏ Eject the stick</button></div>`}</div>`;
+}
+async function ejectStick(btn) {
+  if (!STICK.target) return;
+  btn.disabled = true; btn.textContent = "Ejecting…";
+  try { await api("/api/stick/eject", { body: { target: STICK.target } }); toast("You can unplug the stick now", "ok"); loadStick(); btn.textContent = "Ejected"; }
+  catch (e) { toast(e.message, "err", 10000); btn.disabled = false; btn.textContent = "⏏ Eject the stick"; }
+}
 
 // ── Cover art note shown in the job panel ──────────────────────────────────
 function coverNote(c) {
@@ -489,6 +603,7 @@ function jobPanel(container, jobId, { onEnd } = {}) {
       <div class="stepline jp-step muted"></div>
       <div class="notice warn jp-input hidden" style="margin-top:10px"><div class="row"><span class="grow jp-input-msg"></span><button class="btn primary small jp-continue">Continue</button></div></div>
       <div class="jp-cover"></div>
+      <div class="jp-stick"></div>
       <div class="jp-result"></div>
       <div class="notice err jp-error hidden" style="margin-top:10px"></div>
       <pre class="log jp-log"></pre>
@@ -522,6 +637,7 @@ function jobPanel(container, jobId, { onEnd } = {}) {
       case "result":
         if (ev.name === "accuraterip") q(".jp-result").innerHTML = arTable(ev.data);
         if (ev.name === "cover") q(".jp-cover").innerHTML = coverNote(ev.data);
+        if (ev.name === "stick") q(".jp-stick").innerHTML = stickDone(ev.data);
         break;
       case "error": { const e = q(".jp-error"); e.classList.remove("hidden"); e.innerHTML = `<b>${esc(ev.error)}</b> — ${esc(ev.message).replace(/\n/g, "<br>")}${ev.recoverable ? "" : ""}`; break; }
     }
@@ -1282,6 +1398,216 @@ async function runRecover(blank) {
   } catch (e) { toast(e.message, "err", 8000); }
 }
 
+// ── Rusty Stick ─────────────────────────────────────────────────────────────
+const FALLBACK_PRESETS = [
+  { id: "initial-artist-album", label: "A–Z › Artist › Album › Disc › Tracks", template: "{initial}/{albumartist}/{album}/{discfolder}/{track} - {title}" },
+  { id: "artist-album", label: "Artist › Album › Disc › Tracks", template: "{albumartist}/{album}/{discfolder}/{track} - {title}" },
+];
+const STICK = { meta: null, targets: [], unmounted: [], target: null, sources: [], plan: null, seq: 0, timer: null, ready: false };
+
+function selectedStick() { return STICK.targets.find(t => t.mount_point === STICK.target) || null; }
+
+async function loadStick() {
+  try {
+    const d = await api("/api/stick/targets");
+    STICK.meta = d; STICK.targets = d.targets; STICK.unmounted = d.unmounted;
+  } catch (e) { toast(e.message, "err"); return; }
+  if (STICK.target && !STICK.targets.some(t => t.mount_point === STICK.target)) STICK.target = null;
+  if (!STICK.target && STICK.targets.length === 1) STICK.target = STICK.targets[0].mount_point;
+  if (!STICK.ready) initStickForm();
+  renderStickTargets(); renderStickSources(); replanSoon();
+}
+
+function initStickForm() {
+  STICK.ready = true;
+  const presets = STICK.meta.presets;
+  $("#st-preset").innerHTML = presets.map(p => `<option value="${p.id}">${esc(p.label)}</option>`).join("") + `<option value="custom">Custom pattern</option>`;
+  const start = (SET && presets.find(p => p.id === SET.stick_preset)) || presets.find(p => p.id === "artist-album") || presets[0];
+  $("#st-preset").value = start.id; $("#st-template").value = start.template;
+  $("#st-tokens").innerHTML = STICK.meta.tokens.map(t => `<span class="chip" data-t="${t.name}" title="${esc(t.description)}">{${t.name}}</span>`).join("");
+  $("#st-tokens").onclick = e => {
+    const c = e.target.closest(".chip"); if (!c) return;
+    const inp = $("#st-template"), a = inp.selectionStart ?? inp.value.length, b = inp.selectionEnd ?? a;
+    inp.value = inp.value.slice(0, a) + `{${c.dataset.t}}` + inp.value.slice(b);
+    inp.focus(); inp.setSelectionRange(a + c.dataset.t.length + 2, a + c.dataset.t.length + 2);
+    $("#st-preset").value = "custom"; replanSoon();
+  };
+  $("#st-preset").onchange = e => { const p = presets.find(p => p.id === e.target.value); if (p) $("#st-template").value = p.template; replanSoon(); };
+  $("#st-template").oninput = () => { const p = presets.find(p => p.template === $("#st-template").value.trim()); $("#st-preset").value = p ? p.id : "custom"; replanSoon(); };
+  ["st-the", "st-covers", "st-skip", "st-windows", "st-subfolder", "st-transcode", "st-art", "st-clear"].forEach(id => { $("#" + id).onchange = replanSoon; });
+  $("#st-subfolder").oninput = replanSoon;
+  $("#st-refresh").onclick = loadStick;
+  $("#st-add-folder").onclick = async () => { const r = await pickPath({ mode: "folder", title: "Add a folder of music" }); if (r) addStickSource("folder", r); };
+  $("#st-add-files").onclick = async () => { const r = await pickPath({ mode: "files", title: "Add audio files" }); if (r?.length) addStickSource("file", r); };
+  $("#st-add-playlist").onclick = async () => { const r = await pickPath({ mode: "playlist", title: "Choose a playlist (.m3u / .m3u8)" }); if (r?.length) addStickSource("playlist", r); };
+  $("#st-write").onclick = stickWrite;
+}
+
+function addStickSource(kind, paths) {
+  paths.forEach(p => { if (!STICK.sources.some(s => s.kind === kind && s.path === p)) STICK.sources.push({ kind, path: p }); });
+  renderStickSources(); replanSoon();
+}
+
+function renderStickSources() {
+  const list = $("#st-sources");
+  if (!STICK.sources.length) { list.innerHTML = `<div class="empty">Nothing chosen yet — add a folder, some files or a playlist.</div>`; $("#st-src-summary").textContent = ""; return; }
+  list.innerHTML = "";
+  const icon = { folder: "📁", file: "🎵", playlist: "📃" };
+  STICK.sources.forEach((s, i) => {
+    const row = document.createElement("div"); row.className = "item";
+    row.innerHTML = `<span>${icon[s.kind]}</span><span class="grow">${esc(s.path || "/")}</span><button class="btn small" data-i="${i}">Remove</button>`;
+    $("button", row).onclick = () => { STICK.sources.splice(i, 1); renderStickSources(); replanSoon(); };
+    list.append(row);
+  });
+  const n = k => STICK.sources.filter(s => s.kind === k).length;
+  $("#st-src-summary").textContent = [n("folder") && `${n("folder")} folder${n("folder") > 1 ? "s" : ""}`, n("file") && `${n("file")} file${n("file") > 1 ? "s" : ""}`, n("playlist") && `${n("playlist")} playlist${n("playlist") > 1 ? "s" : ""}`].filter(Boolean).join(" · ");
+}
+
+function fsBadge(t) {
+  const names = { vfat: "FAT32", exfat: "exFAT", ntfs: "NTFS", ntfs3: "NTFS", fuseblk: "NTFS/exFAT", ext4: "ext4", ext3: "ext3", ext2: "ext2", btrfs: "Btrfs", xfs: "XFS" };
+  return names[t.fs_type] || t.fs_type || "?";
+}
+
+function renderStickTargets() {
+  const box = $("#st-targets");
+  if (!STICK.targets.length) {
+    box.innerHTML = `<div class="notice">No USB stick found. Plug one in and press Refresh.
+      <div class="muted" style="margin-top:6px">The stick has to be <b>mounted</b> where this program can see it. On a desktop that happens automatically. On a server or in Docker, mount it on the host and make the folder available to RustyDisc, then list that folder under <b>Settings → Rusty Stick</b> (see the README).</div></div>`;
+  } else {
+    box.innerHTML = STICK.targets.map(t => {
+      const used = t.total_bytes - t.free_bytes, pct = t.total_bytes ? used / t.total_bytes * 100 : 0;
+      const name = [t.vendor, t.model].filter(Boolean).join(" ") || (t.kind === "folder" ? "Folder" : "USB stick");
+      return `<div class="target ${t.mount_point === STICK.target ? "sel" : ""}" data-mp="${esc(t.mount_point)}">
+        <div class="icon">${t.kind === "usb" ? "🔌" : "📂"}</div>
+        <div class="grow"><b>${esc(t.label)}</b> <span class="muted">${esc(name)}</span>
+          <div class="muted mono">${esc(t.mount_point)}</div></div>
+        <span class="badge">${esc(fsBadge(t))}</span>${t.read_only ? `<span class="badge err">read-only</span>` : ""}
+        <div class="meter"><div class="bar"><i style="width:${pct}%"></i></div><div class="muted" style="font-size:12px;margin-top:3px">${fmtMB(t.free_bytes)} free of ${fmtMB(t.total_bytes)}</div></div>
+      </div>`;
+    }).join("");
+    $$(".target", box).forEach(el => el.onclick = () => { STICK.target = el.dataset.mp; renderStickTargets(); replanSoon(); });
+  }
+  const un = $("#st-unmounted");
+  un.innerHTML = STICK.unmounted.length ? `<div class="muted" style="margin:10px 0 6px">Found but not mounted:</div>` + STICK.unmounted.map(u => `
+    <div class="row" style="padding:6px 0"><span>💾</span><span class="grow">${esc(u.label || u.device)} <span class="muted">${esc(u.model)} · ${fmtMB(u.size_bytes)} · ${esc(u.fs_type)} · ${esc(u.device)}</span></span>
+    <button class="btn small" data-dev="${esc(u.device)}">Mount</button></div>`).join("") : "";
+  $$("#st-unmounted button").forEach(b => b.onclick = async () => {
+    b.disabled = true; b.textContent = "Mounting…";
+    try { const r = await api("/api/stick/mount", { body: { device: b.dataset.dev } }); toast("Mounted at " + r.mount_point, "ok"); loadStick(); }
+    catch (e) { toast(e.message, "err", 10000); b.disabled = false; b.textContent = "Mount"; }
+  });
+}
+
+function stickBody(extra = {}) {
+  const src = k => STICK.sources.filter(s => s.kind === k).map(s => s.path);
+  return {
+    target: STICK.target, folders: src("folder"), files: src("file"), playlists: src("playlist"),
+    layout: $("#st-template").value.trim(), transcode: $("#st-transcode").value || null,
+    keep_art: $("#st-art").checked, copy_covers: $("#st-covers").checked, skip_existing: $("#st-skip").checked,
+    windows_names: $("#st-windows").value, keep_the: !$("#st-the").checked, subfolder: $("#st-subfolder").value.trim(),
+    clear: $("#st-clear").checked, ...extra,
+  };
+}
+
+function replanSoon() { clearTimeout(STICK.timer); STICK.timer = setTimeout(doStickPlan, 450); }
+
+async function doStickPlan() {
+  const box = $("#st-plan");
+  if (!STICK.target || !STICK.sources.length) {
+    STICK.plan = null;
+    box.innerHTML = `<span class="muted">${!STICK.target ? "Choose a stick above." : "Add some music above."}</span>`;
+    $("#st-samples").innerHTML = `<span class="muted">Choose a stick and some music.</span>`;
+    return;
+  }
+  const seq = ++STICK.seq;
+  box.innerHTML = `<span class="muted">Reading the music and working out the plan…</span>`;
+  try {
+    const r = await api("/api/stick/plan", { body: stickBody() });
+    if (seq !== STICK.seq) return;
+    STICK.plan = r.plan;
+    box.innerHTML = renderStickPlan(r.plan, r.target);
+    wirePlan(box, r.plan);
+    $("#st-samples").innerHTML = r.plan.tracks.filter(t => t.action !== "duplicate").slice(0, 4).map(t => `<div class="sample">${esc(t.dest).replace(/\//g, " <b>/</b> ")}</div>`).join("") || `<span class="muted">Nothing to show.</span>`;
+  } catch (e) {
+    if (seq !== STICK.seq) return;
+    STICK.plan = null;
+    box.innerHTML = `<div class="notice err"><b>${esc(e.code || "Error")}</b> — ${esc(e.message)}</div>`;
+    $("#st-samples").innerHTML = "";
+  }
+}
+
+function buildTree(paths) {
+  const root = { name: "", kids: new Map(), files: [], count: 0 };
+  for (const p of paths) {
+    const parts = p.split("/"); let n = root;
+    for (const part of parts.slice(0, -1)) {
+      if (!n.kids.has(part)) n.kids.set(part, { name: part, kids: new Map(), files: [], count: 0 });
+      n = n.kids.get(part); n.count++;
+    }
+    n.files.push(parts[parts.length - 1]);
+  }
+  return root;
+}
+let TREE_NODES = [];
+function treeHtml(node) {
+  let h = "";
+  for (const kid of node.kids.values()) { TREE_NODES.push(kid); h += `<details class="tnode" data-n="${TREE_NODES.length - 1}"><summary>📁 ${esc(kid.name)} <span class="muted">${kid.count}</span></summary><div class="tchild"></div></details>`; }
+  const shown = node.files.slice(0, 200);
+  h += shown.map(f => `<div class="tfile">🎵 ${esc(f)}</div>`).join("");
+  if (node.files.length > shown.length) h += `<div class="muted">…and ${node.files.length - shown.length} more</div>`;
+  return h;
+}
+
+function renderStickPlan(p, target) {
+  const okTracks = p.tracks.filter(t => t.action === "write" || t.action === "skip_exists");
+  const over = p.needed_bytes + Math.max(p.total_bytes / 200, 32 * 1024 * 1024) - p.available_bytes;
+  const head = p.to_write === 0 && p.already_there > 0
+    ? `<div style="font-size:20px;font-weight:700">Everything is already on the stick</div>`
+    : `<div style="font-size:20px;font-weight:700">${p.fits ? "Fits" : "Doesn't fit"} — ${p.to_write} file${p.to_write === 1 ? "" : "s"}, ${fmtMB(p.write_bytes)}</div>`;
+  const conv = p.transcode && p.converted > 0 ? ` · ${p.converted} converted to ${esc(p.transcode)} (${fmtMB(p.original_bytes)} as they are)` : "";
+  const bits = [p.already_there && `${p.already_there} already on the stick`, p.duplicates && `${p.duplicates} duplicate${p.duplicates > 1 ? "s" : ""} skipped`].filter(Boolean).join(" · ");
+  const bar = `<div class="bar" style="width:100%;margin-top:10px"><i style="width:${Math.min(100, p.percent_after)}%;${p.fits ? "" : "background:var(--err)"}"></i></div>
+    <div class="muted" style="margin-top:4px">${esc(target.label)}: ${fmtMB(p.free_bytes)} free of ${fmtMB(p.total_bytes)}${p.clear_bytes ? ` (+ ${fmtMB(p.clear_bytes)} that would be emptied)` : ""} → about <b>${Math.round(p.percent_after)}%</b> full afterwards${p.fits ? "" : ` · <span class="ar-bad">over by about ${fmtMB(Math.max(0, over))}</span>`}</div>`;
+  const sugg = p.suggestions.length && (!p.fits || p.transcode !== null || true)
+    ? `<div style="margin-top:12px"><div class="muted" style="margin-bottom:6px">${p.fits ? "Other sizes:" : "These would fit — click one:"}</div><div class="chips">${p.suggestions.map(s => `<span class="chip" data-spec="${s.transcode}" style="${s.fits ? "" : "opacity:.5"}">${esc(s.label)} · ${fmtMB(s.needed_bytes)} ${s.fits ? "✓" : "✗"}</span>`).join("")}</div></div>` : "";
+  const warn = noticeList("Heads up", p.warnings.map(w => `<li>${esc(w)}</li>`), "warn");
+  const skipped = noticeList("Left out", p.skipped.map(k => `<li><span class="mono">${esc(k.entry)}</span> — ${esc(k.reason)}</li>`), "warn");
+  TREE_NODES = [];
+  const tree = buildTree(okTracks.map(t => t.dest));
+  return `<div class="notice">${head}<div class="muted" style="margin-top:4px">${conv ? conv.slice(3) : `${p.tracks.length} track${p.tracks.length === 1 ? "" : "s"}`}${bits ? " · " + bits : ""}</div>${bar}</div>
+    ${sugg}${warn}${skipped}
+    <details style="margin-top:14px" id="st-tree-wrap"><summary style="cursor:pointer"><b>See how it will be laid out</b> <span class="muted">(${okTracks.length} files)</span></summary><div style="margin-top:8px" id="st-tree">${treeHtml(tree)}</div></details>`;
+}
+
+function wirePlan(box, p) {
+  $$(".chip[data-spec]", box).forEach(c => c.onclick = () => { $("#st-transcode").value = c.dataset.spec; replanSoon(); });
+  const root = $("#st-tree", box);
+  root?.addEventListener("toggle", e => {
+    const d = e.target; if (!d.classList?.contains("tnode") || d.dataset.built) return;
+    d.dataset.built = "1"; $(".tchild", d).innerHTML = treeHtml(TREE_NODES[+d.dataset.n]);
+  }, true);
+}
+
+async function stickWrite() {
+  const t = selectedStick(), p = STICK.plan;
+  if (!t) return toast("Choose a stick first", "err");
+  if (!p) return toast("Add some music first", "err");
+  if (!p.fits) return toast("This doesn't fit on the stick. Convert to a smaller size or choose less music.", "err", 8000);
+  const body = stickBody({ dry_run: $("#st-dry").checked });
+  const sub = body.subfolder.split("/").filter(Boolean).pop();
+  const destName = sub || t.mount_point.split("/").filter(Boolean).pop();
+  if (body.clear) {
+    const typed = window.prompt(`This deletes EVERYTHING in ${p.dest_root} (${fmtMB(p.clear_bytes)}) before writing.\n\nType “${destName}” to confirm:`);
+    if (typed !== destName) return toast("Not confirmed — nothing was changed", "err");
+    body.confirm_clear = typed;
+  } else if (!body.dry_run && !confirmBox(`Write ${p.to_write} file${p.to_write === 1 ? "" : "s"} (${fmtMB(p.write_bytes)}) to ${t.label} (${t.mount_point})?\n\nExisting files with different names are left alone.`)) return;
+  try {
+    const job = await api("/api/jobs/stick", { body });
+    jobPanel($("#st-job"), job.id, { onEnd: () => { loadStick(); } });
+    refreshJobs();
+  } catch (e) { toast(e.message, "err", 9000); }
+}
+
 // ── Settings ────────────────────────────────────────────────────────────────
 let SET = null, SETINFO = null, SRC_ORDER = [];
 
@@ -1312,6 +1638,9 @@ function renderSettings() {
   $("#set-noar").checked = SET.rip_skip_accuraterip;
   $("#cover-save").checked = SET.cover_save_file;
   $("#cover-embed").checked = SET.cover_embed;
+  $("#set-stick-folders").value = (SET.stick_extra_folders || []).join("\n");
+  $("#set-stick-preset").innerHTML = (STICK.meta?.presets || FALLBACK_PRESETS).map(p => `<option value="${p.id}">${esc(p.label)}</option>`).join("");
+  $("#set-stick-preset").value = SET.stick_preset || "artist-album";
   $("#fanart-key").value = "";
   $("#fanart-key").placeholder = SET.fanart_api_key_set ? `Key saved (${SET.fanart_api_key_hint}) — paste a new one to replace it` : "Paste your fanart.tv API key";
   $("#fanart-remove").classList.toggle("hidden", !SET.fanart_api_key_set);
@@ -1362,6 +1691,8 @@ async function saveSettings(extra = {}) {
     rip_format: $("#set-format").value, rip_archive: $("#set-archive").checked,
     rip_skip_musicbrainz: $("#set-nomb").checked, rip_skip_accuraterip: $("#set-noar").checked,
     cover_sources: enabledSources(), cover_save_file: $("#cover-save").checked, cover_embed: $("#cover-embed").checked,
+    stick_extra_folders: $("#set-stick-folders").value.split("\n").map(l => l.trim()).filter(Boolean),
+    stick_preset: $("#set-stick-preset").value,
     ...extra,
   };
   const typed = $("#fanart-key").value.trim();

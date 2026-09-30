@@ -31,6 +31,12 @@ pub struct Settings {
     /// fanart.tv API key. Never sent back to the browser.
     #[serde(default)]
     pub fanart_api_key: String,
+
+    // Rusty Stick
+    /// Folders (absolute paths) that may be written to besides detected USB sticks.
+    pub stick_extra_folders: Vec<String>,
+    /// Default folder layout: a preset id.
+    pub stick_preset: String,
 }
 
 impl Default for Settings {
@@ -44,6 +50,8 @@ impl Default for Settings {
             cover_save_file: true,
             cover_embed: true,
             fanart_api_key: String::new(),
+            stick_extra_folders: Vec::new(),
+            stick_preset: "artist-album".into(),
         }
     }
 }
@@ -62,6 +70,20 @@ impl Settings {
             }
         }
         self.cover_sources = seen.iter().map(|s| s.id().to_string()).collect();
+        self.stick_extra_folders = self
+            .stick_extra_folders
+            .iter()
+            .map(|f| f.trim().trim_end_matches('/').to_string())
+            .filter(|f| !f.is_empty())
+            .collect();
+        for f in &self.stick_extra_folders {
+            if !f.starts_with('/') || f.split('/').any(|c| c == "..") || f == "/" {
+                return Err(format!("'{f}' isn't a usable folder: give an absolute path such as /mnt/usb"));
+            }
+        }
+        if !crate::stick::layout::PRESETS.iter().any(|p| p.id == self.stick_preset) {
+            self.stick_preset = "artist-album".into();
+        }
         self.fanart_api_key = self.fanart_api_key.trim().to_string();
         if self.fanart_api_key.len() > 200 || self.fanart_api_key.chars().any(char::is_whitespace) {
             return Err("That doesn't look like a fanart.tv API key".into());
