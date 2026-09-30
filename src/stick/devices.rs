@@ -176,6 +176,84 @@ fn fs_rules(fs: &str) -> (Option<u64>, bool) {
     }
 }
 
+/// Is this block device (e.g. `/dev/sdb1`) a USB or removable one? Used to make sure nothing but a
+/// stick can ever be reformatted.
+pub fn is_usb_device(device: &str) -> bool {
+    let name = device.rsplit('/').next().unwrap_or("");
+    if name.is_empty() || name.contains("..") {
+        return false;
+    }
+    std::fs::read_to_string(format!("/sys/class/block/{name}/dev")).map(|mm| is_usb_or_removable(mm.trim())).unwrap_or(false)
+}
+
+/// Does this device have partitions of its own (so it shouldn't be formatted as a whole)?
+pub fn has_partitions(device: &str) -> bool {
+    let name = device.rsplit('/').next().unwrap_or("");
+    std::fs::read_dir(format!("/sys/class/block/{name}"))
+        .map(|rd| rd.filter_map(|e| e.ok()).any(|e| e.file_name().to_string_lossy().starts_with(name) && e.path().join("partition").exists()))
+        .unwrap_or(false)
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct DeviceFacts {
+    pub uuid: String,
+    pub label: String,
+    pub fs_type: String,
+    /// "dos" (MBR), "gpt" or "" when the stick has no partition table.
+    pub partition_table: String,
+}
+
+/// UUID, label and partition table of a device, as far as the system will tell us.
+pub fn device_facts(device: &str) -> DeviceFacts {
+    let mut f = DeviceFacts::default();
+    if let Ok(out) = Command::new("blkid").args(["-o", "export", device]).output() {
+        for line in String::from_utf8_lossy(&out.stdout).lines() {
+            match line.split_once('=') {
+                Some(("UUID", v)) => f.uuid = v.into(),
+                Some(("LABEL", v)) => f.label = v.into(),
+                Some(("TYPE", v)) => f.fs_type = v.into(),
+                _ => {}
+            }
+        }
+    }
+    if let Ok(out) = Command::new("lsblk").args(["-J", "-o", "PATH,UUID,LABEL,FSTYPE,PTTYPE,PKNAME", device]).output() {
+        if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&out.stdout) {
+            if let Some(d) = v["blockdevices"].get(0) {
+                let pick = |k: &str| d[k].as_str().unwrap_or("").to_string();
+                if f.uuid.is_empty() { f.uuid = pick("uuid"); }
+                if f.label.is_empty() { f.label = pick("label"); }
+                if f.fs_type.is_empty() { f.fs_type = pick("fstype"); }
+                f.partition_table = pick("pttype");
+                if f.partition_table.is_empty() {
+                    let parent = pick("pkname");
+                    if !parent.is_empty() {
+                        if let Ok(o) = Command::new("lsblk").args(["-no", "PTTYPE", &format!("/dev/{parent}")]).output() {
+                            f.partition_table = String::from_utf8_lossy(&o.stdout).lines().next().unwrap_or("").trim().to_string();
+                        }
+                    }
+                }
+            }
+        }
+    }
+    f
+}
+
+/// Make the device node exist inside a container (see `mount_device`).
+pub fn ensure_node(device: &str) -> Result<(), Error> {
+    let name = device.rsplit('/').next().unwrap_or("");
+    if Path::new(device).exists() {
+        return Ok(());
+    }
+    let numbers = std::fs::read_to_string(format!("/sys/class/block/{name}/dev")).unwrap_or_default();
+    if let Some((maj, min)) = numbers.trim().split_once(':') {
+        let out = Command::new("mknod").args([device, "b", maj, min]).output().map_err(|e| Error::device(format!("Could not run mknod: {e}")))?;
+        if !out.status.success() {
+            return Err(Error::device(format!("The device node ({device}) doesn't exist here and couldn't be created: {}", String::from_utf8_lossy(&out.stderr).trim())));
+        }
+    }
+    Ok(())
+}
+
 // ── Listing ───────────────────────────────────────────────────────────────────
 
 fn label_of(device: &str, mount_point: &str) -> String {

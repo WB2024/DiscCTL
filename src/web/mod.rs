@@ -63,6 +63,8 @@ struct AppState {
     cover_cache: std::sync::Mutex<std::collections::HashMap<String, Option<Arc<Cover>>>>,
     /// The last scan of a stick job's sources (tags take a while to read).
     stick_scan: std::sync::Mutex<Option<(String, std::time::Instant, Arc<crate::stick::scan::Scan>)>>,
+    /// What was found on a stick, kept until its contents change.
+    stick_existing: std::sync::Mutex<std::collections::HashMap<String, ((u64, u64, i64), Arc<Vec<crate::stick::existing::ExistingTrack>>)>>,
 }
 
 type S = State<Arc<AppState>>;
@@ -190,7 +192,7 @@ pub async fn serve(cfg: Config, bind: SocketAddr) -> Result<(), Error> {
     let settings = settings::Store::load(&cfg.config_dir);
     let (env_user, env_pass) = cfg.auth.clone().unzip();
     let auth = auth::Auth::new(env_user, env_pass).map_err(Error::validation)?;
-    let state = Arc::new(AppState { cfg, jobs: Jobs::default(), settings, auth, cover_cache: Default::default(), stick_scan: Default::default() });
+    let state = Arc::new(AppState { cfg, jobs: Jobs::default(), settings, auth, cover_cache: Default::default(), stick_scan: Default::default(), stick_existing: Default::default() });
 
     let app = Router::new()
         .route("/", get(|| async { Html(INDEX_HTML) }))
@@ -208,6 +210,8 @@ pub async fn serve(cfg: Config, bind: SocketAddr) -> Result<(), Error> {
         .route("/api/stick/targets", get(stick::targets))
         .route("/api/stick/plan", post(stick::plan))
         .route("/api/stick/mount", post(stick::mount))
+        .route("/api/stick/identify", post(stick::identify))
+        .route("/api/stick/format", post(stick::format))
         .route("/api/stick/eject", post(stick::eject))
         .route("/api/jobs/stick", post(stick::start))
         .route("/api/settings/test-fanart", post(test_fanart))

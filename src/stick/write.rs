@@ -37,6 +37,9 @@ pub struct Summary {
     pub covers: usize,
     pub bytes: u64,
     pub skipped_existing: usize,
+    pub moved: usize,
+    pub replaced: usize,
+    pub deleted: usize,
     pub seconds: f64,
 }
 
@@ -127,7 +130,7 @@ pub fn write(plan: &StickPlan, opts: &WriteOptions) -> Result<Summary, Error> {
         .tracks
         .iter()
         .enumerate()
-        .filter(|(_, t)| t.action == Action::Write)
+        .filter(|(_, t)| matches!(t.action, Action::Write | Action::Replace))
         .map(|(idx, plan)| Item::Track { idx, plan })
         .chain(plan.covers.iter().map(Item::Cover))
         .collect();
@@ -136,6 +139,12 @@ pub fn write(plan: &StickPlan, opts: &WriteOptions) -> Result<Summary, Error> {
 
     if opts.dry_run {
         say(opts, &format!("Dry run: would write {} file(s) ({:.0} MB) to {}", items.len(), plan.write_bytes as f64 / 1e6, plan.dest_root));
+        if !plan.moves.is_empty() {
+            say(opts, &format!("Dry run: would move {} file(s) already on the stick", plan.moves.len()));
+        }
+        if !plan.deletes.is_empty() {
+            say(opts, &format!("Dry run: would remove {} older copies", plan.deletes.len()));
+        }
         return Ok(summary);
     }
 
@@ -162,8 +171,43 @@ pub fn write(plan: &StickPlan, opts: &WriteOptions) -> Result<Summary, Error> {
     }
     remove_partials(&dest_root);
 
+    // Re-file what is already on the stick before anything new is written.
+    if !plan.moves.is_empty() {
+        say(opts, &format!("Moving {} file(s) already on the stick into the new layout...", plan.moves.len()));
+        let mut old_dirs: Vec<PathBuf> = Vec::new();
+        for (n, m) in plan.moves.iter().enumerate() {
+            let (from, to) = (dest_root.join(&m.from), dest_root.join(&m.to));
+            if !from.is_file() {
+                continue;
+            }
+            if to.exists() {
+                return Err(Error::device(format!("Can't move '{}': '{}' already exists", m.from, m.to)));
+            }
+            if let Some(parent) = to.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| io_error("Can't create a folder on the stick", e))?;
+            }
+            std::fs::rename(&from, &to).map_err(|e| io_error(&format!("Can't move '{}'", m.from), e))?;
+            if m.kind == "track" {
+                summary.moved += 1;
+            }
+            if let Some(d) = from.parent() {
+                if !old_dirs.contains(&d.to_path_buf()) {
+                    old_dirs.push(d.to_path_buf());
+                }
+            }
+            if n % 25 == 0 {
+                say(opts, &format!("Moved {} of {}", n + 1, plan.moves.len()));
+            }
+        }
+        for d in old_dirs {
+            prune_empty(&d, &dest_root);
+        }
+    }
+
     if items.is_empty() {
-        say(opts, "Nothing new to write: everything is already on the stick.");
+        say(opts, if summary.moved > 0 { "Nothing new to write." } else { "Nothing new to write: everything is already on the stick." });
+        finish_deletes(plan, &dest_root, opts, &mut summary);
+        let _ = Command::new("sync").arg("-f").arg(&dest_root).status();
         progress(opts, 99.0);
         return Ok(summary);
     }
@@ -275,6 +319,9 @@ pub fn write(plan: &StickPlan, opts: &WriteOptions) -> Result<Summary, Error> {
                     summary.covers += 1;
                 } else {
                     summary.written += 1;
+                    if matches!(item, Item::Track { plan: t, .. } if t.action == Action::Replace) {
+                        summary.replaced += 1;
+                    }
                 }
                 Ok(written)
             })();
@@ -300,12 +347,49 @@ pub fn write(plan: &StickPlan, opts: &WriteOptions) -> Result<Summary, Error> {
     });
     result?;
 
+    finish_deletes(plan, &dest_root, opts, &mut summary);
     say(opts, "Flushing to the stick — wait for this before pulling it out...");
     let _ = Command::new("sync").arg("-f").arg(&dest_root).status();
     remove_partials(&dest_root);
     progress(opts, 99.0);
     summary.seconds = started.elapsed().as_secs_f64();
     Ok(summary)
+}
+
+/// Remove a folder if nothing but cover pictures are left in it, then its parents likewise.
+fn prune_empty(dir: &Path, root: &Path) {
+    let mut d = dir.to_path_buf();
+    while d.starts_with(root) && d != root {
+        let Ok(rd) = std::fs::read_dir(&d) else { return };
+        let left: Vec<_> = rd.filter_map(|e| e.ok()).collect();
+        if !left.is_empty() {
+            return;
+        }
+        if std::fs::remove_dir(&d).is_err() {
+            return;
+        }
+        match d.parent() {
+            Some(p) => d = p.to_path_buf(),
+            None => return,
+        }
+    }
+}
+
+/// Delete the older copies that a written file replaced (at another path).
+fn finish_deletes(plan: &StickPlan, dest_root: &Path, opts: &WriteOptions, summary: &mut Summary) {
+    if plan.deletes.is_empty() {
+        return;
+    }
+    say(opts, &format!("Removing {} older copies...", plan.deletes.len()));
+    for rel in &plan.deletes {
+        let p = dest_root.join(rel);
+        if p.is_file() && std::fs::remove_file(&p).is_ok() {
+            summary.deleted += 1;
+            if let Some(d) = p.parent() {
+                prune_empty(d, dest_root);
+            }
+        }
+    }
 }
 
 fn copy_file(src: &Path, dst: &Path) -> Result<u64, Error> {
@@ -377,7 +461,7 @@ mod tests {
         // 1. plain copy
         let mut o = StickOptions::default();
         o.layout = Layout { template: "{initial}/{albumartist}/{album}/{track} - {title}".into(), options: LayoutOptions::default() };
-        let plan = build_plan(&scan, &o, &target).unwrap();
+        let plan = build_plan(&scan, &[], &o, &target).unwrap();
         let s = write(&plan, &quiet()).unwrap();
         assert_eq!((s.written, s.converted), (3, 0));
         assert!(stick.join("B/The Band/Album/01 - One.wav").is_file());
@@ -385,7 +469,7 @@ mod tests {
         assert!(!stick.join("B/The Band/Album/01 - One.wav.rustydisc-part").exists());
 
         // 2. a second run finds everything already there
-        let again = build_plan(&scan, &o, &target).unwrap();
+        let again = build_plan(&scan, &crate::stick::existing::read_existing(&stick), &o, &target).unwrap();
         assert_eq!((again.already_there, again.to_write), (3, 0));
         assert_eq!(write(&again, &quiet()).unwrap().written, 0);
 
@@ -393,7 +477,7 @@ mod tests {
         let mut c = o.clone();
         c.transcode = Some("mp3:128".into());
         c.dest_subfolder = "Converted".into();
-        let plan = build_plan(&scan, &c, &target).unwrap();
+        let plan = build_plan(&scan, &[], &c, &target).unwrap();
         assert_eq!(plan.converted, 3);
         let s = write(&plan, &quiet()).unwrap();
         assert_eq!((s.written, s.converted), (3, 3));
@@ -403,7 +487,7 @@ mod tests {
         // 4. emptying needs the right confirmation and removes the old content
         let mut e = o.clone();
         e.clear = true;
-        let plan = build_plan(&scan, &e, &target).unwrap();
+        let plan = build_plan(&scan, &[], &e, &target).unwrap();
         let mut wo = quiet();
         wo.clear = true;
         assert!(write(&plan, &wo).unwrap_err().to_string().contains("confirm"));
@@ -415,10 +499,78 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
+    /// Re-file what is on the stick, and replace an old copy with a better one.
+    #[test]
+    fn reorganizes_existing_music_and_replaces_by_quality() {
+        use crate::stick::existing::{read_existing, Conflict, ExistingMode};
+        if !have_ffmpeg() {
+            eprintln!("skipping: ffmpeg not installed");
+            return;
+        }
+        let root = std::env::temp_dir().join(format!("rd_stick_reorg_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (music, stick) = (root.join("music"), root.join("stick"));
+        std::fs::create_dir_all(&music).unwrap();
+        std::fs::create_dir_all(&stick).unwrap();
+        let mp3 = |path: &Path, kbps: u32, secs: u32| {
+            assert!(Command::new("ffmpeg")
+                .args(["-v", "error", "-y", "-f", "lavfi", "-i", &format!("sine=frequency=440:duration={secs}"), "-b:a", &format!("{kbps}k"), "-metadata", "artist=Band", "-metadata", "album=Rec", "-metadata", "title=Song", "-metadata", "track=1"])
+                .arg(path).status().unwrap().success());
+        };
+        // the stick has a low-quality copy filed as Artist/Album/Song
+        std::fs::create_dir_all(stick.join("Old/Stuff")).unwrap();
+        mp3(&stick.join("Old/Stuff/song.mp3"), 64, 20);
+        std::fs::write(stick.join("Old/Stuff/cover.jpg"), b"jpg").unwrap();
+        // a better copy is on the computer
+        let better = music.join("song.mp3");
+        mp3(&better, 256, 20);
+        let mut t = src(&better, "Band", "Rec", "Song", 1, 20.0);
+        t.size = std::fs::metadata(&better).unwrap().len();
+        let scan = Scan { tracks: vec![t], skipped: vec![] };
+        let target = TargetInfo { mount_point: stick.clone(), total_bytes: 1 << 30, free_bytes: 1 << 30, block_size: 4096, max_file_bytes: None };
+        let mut o = StickOptions::default();
+        o.layout = Layout { template: "{albumartist}/{album}/{track} - {title}".into(), options: LayoutOptions::default() };
+        o.existing_mode = ExistingMode::Reorganize;
+        o.conflict = Conflict::HigherQuality;
+
+        let on_stick = read_existing(&stick);
+        assert_eq!(on_stick.len(), 1);
+        let plan = build_plan(&scan, &on_stick, &o, &target).unwrap();
+        assert_eq!(plan.moved, 1, "{:?}", plan.moves);
+        assert_eq!(plan.moves.iter().filter(|m| m.kind == "cover").count(), 1);
+        assert_eq!(plan.replacing, 1);
+        assert!(plan.tracks[0].note.as_deref().unwrap_or("").contains("Better quality"));
+        assert!(plan.freed_bytes > 0);
+        let s = write(&plan, &quiet()).unwrap();
+        assert_eq!((s.moved, s.replaced, s.written), (1, 1, 1));
+        assert!(stick.join("Band/Rec/01 - Song.mp3").is_file());
+        assert!(stick.join("Band/Rec/cover.jpg").is_file(), "the cover moves with the album");
+        assert!(!stick.join("Old").exists(), "emptied folders are removed");
+        let now = std::fs::metadata(stick.join("Band/Rec/01 - Song.mp3")).unwrap().len();
+        assert_eq!(now, std::fs::metadata(&better).unwrap().len(), "the better copy is what is there now");
+
+        // now the stick's copy is better than a lower-quality candidate: it is kept
+        let worse = music.join("worse.mp3");
+        mp3(&worse, 64, 20);
+        let mut w = src(&worse, "Band", "Rec", "Song", 1, 20.0);
+        w.size = std::fs::metadata(&worse).unwrap().len();
+        let scan2 = Scan { tracks: vec![w.clone()], skipped: vec![] };
+        let on_stick = read_existing(&stick);
+        let kept = build_plan(&scan2, &on_stick, &o, &target).unwrap();
+        assert_eq!((kept.already_there, kept.to_write), (1, 0));
+        // ...unless we ask for lower quality (to save space), or keep both
+        o.conflict = Conflict::LowerQuality;
+        assert_eq!(build_plan(&scan2, &on_stick, &o, &target).unwrap().replacing, 1);
+        o.conflict = Conflict::KeepBoth;
+        let both = build_plan(&scan2, &on_stick, &o, &target).unwrap();
+        assert_eq!(both.tracks[0].dest, "Band/Rec/01 - Song (2).mp3");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
     #[test]
     fn a_dry_run_writes_nothing() {
         let plan = StickPlan {
-            dest_root: "/definitely/not/here".into(), layout: "x".into(), transcode: None, transcode_spec: None, tracks: vec![], covers: vec![],
+            dest_root: "/definitely/not/here".into(), layout: "x".into(), transcode: None, transcode_spec: None, tracks: vec![], covers: vec![], moves: vec![], deletes: vec![], conflict: "skip".into(), replacing: 0, moved: 0, freed_bytes: 0,
             original_bytes: 0, write_bytes: 0, needed_bytes: 0, to_write: 0, already_there: 0, duplicates: 0, converted: 0, total_bytes: 0,
             free_bytes: 0, clear_bytes: 0, available_bytes: 0, fits: true, percent_after: 0.0, suggestions: vec![], skipped: vec![], warnings: vec![],
         };

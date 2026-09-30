@@ -5,7 +5,7 @@ use clap::Args;
 use crate::{
     error::Error,
     stick::{
-        devices,
+        devices, existing,
         layout::{self, Layout, LayoutOptions},
         plan::{build_plan, StickOptions, TargetInfo},
         scan::{self, SourceSpec},
@@ -47,9 +47,16 @@ pub struct StickArgs {
     /// Don't put cover.jpg in each album folder
     #[arg(long)]
     pub no_covers: bool,
-    /// Write files even if they are already on the stick
+    /// What to do when a track is already on the stick: skip (default), replace, higher-quality,
+    /// lower-quality, newer, keep-both
+    #[arg(long, default_value = "skip")]
+    pub on_conflict: String,
+    /// Same as --on-conflict replace
     #[arg(long)]
     pub no_skip_existing: bool,
+    /// Music already on the stick but filed differently: leave it, or reorganize it into the layout
+    #[arg(long, default_value = "leave")]
+    pub existing: String,
     /// Delete everything in the destination first (needs --confirm-clear with the folder's name)
     #[arg(long)]
     pub clear: bool,
@@ -147,7 +154,8 @@ pub fn run(args: StickArgs) -> Result<(), Error> {
         transcode: args.transcode.clone().filter(|t| !t.trim().is_empty()),
         keep_art: !args.no_keep_art,
         copy_covers: !args.no_covers,
-        skip_existing: !args.no_skip_existing,
+        conflict: if args.no_skip_existing { existing::Conflict::Replace } else { args.on_conflict.parse().map_err(Error::validation)? },
+        existing_mode: args.existing.parse().map_err(Error::validation)?,
         clear: args.clear,
         dest_subfolder: args.subfolder.clone(),
     };
@@ -162,7 +170,9 @@ pub fn run(args: StickArgs) -> Result<(), Error> {
         max_file_bytes: max_file,
     };
     note(&args, "Working out where everything goes and whether it fits...");
-    let plan = build_plan(&scanned, &opts, &info)?;
+    let dest_root = if opts.dest_subfolder.trim().is_empty() { target.clone() } else { target.join(crate::stick::plan::sanitize_subfolder(&opts.dest_subfolder)?) };
+    let on_stick = if opts.clear { Vec::new() } else { note(&args, "Looking at what is already on the stick..."); existing::read_existing(&dest_root) };
+    let plan = build_plan(&scanned, &on_stick, &opts, &info)?;
 
     if args.plan {
         println!("{}", serde_json::to_string_pretty(&plan)?);
@@ -196,7 +206,8 @@ pub fn run(args: StickArgs) -> Result<(), Error> {
 
     let result = serde_json::json!({
         "type": "stick_done", "written": summary.written, "converted": summary.converted, "covers": summary.covers,
-        "bytes": summary.bytes, "already_there": summary.skipped_existing, "seconds": summary.seconds,
+        "bytes": summary.bytes, "already_there": summary.skipped_existing,
+        "moved": summary.moved, "replaced": summary.replaced, "deleted": summary.deleted, "seconds": summary.seconds,
         "dest": plan.dest_root, "dry_run": args.dry_run,
     });
     if args.progress_json {

@@ -8,6 +8,7 @@ use std::{
 use serde::Serialize;
 
 use super::{
+    existing::{self, Conflict, ExistingMode, ExistingTrack, Quality},
     layout::{self, Layout},
     scan::{natural_cmp, Scan, SourceTrack},
 };
@@ -26,8 +27,10 @@ pub struct StickOptions {
     pub keep_art: bool,
     /// Put the cover image (`cover.jpg`) in each album folder.
     pub copy_covers: bool,
-    /// Leave files that are already on the stick alone.
-    pub skip_existing: bool,
+    /// What to do with a track that is already on the stick.
+    pub conflict: Conflict,
+    /// What to do with music already on the stick that is filed differently.
+    pub existing_mode: ExistingMode,
     /// Empty the destination before writing.
     pub clear: bool,
     /// Folder on the stick to write into ("" = the root).
@@ -41,7 +44,8 @@ impl Default for StickOptions {
             transcode: None,
             keep_art: true,
             copy_covers: true,
-            skip_existing: true,
+            conflict: Conflict::Skip,
+            existing_mode: ExistingMode::Leave,
             clear: false,
             dest_subfolder: String::new(),
         }
@@ -64,6 +68,8 @@ pub enum Action {
     Write,
     /// Already on the stick.
     SkipExists,
+    /// Written over an older copy that is already there.
+    Replace,
     /// The same track was chosen twice.
     Duplicate,
     /// Bigger than the filesystem allows.
@@ -83,6 +89,25 @@ pub struct PlannedTrack {
     pub album: String,
     pub title: String,
     pub art_bytes: u64,
+    /// Why an existing copy was kept or replaced.
+    pub note: Option<String>,
+    /// An older copy at another path that is removed once this one is written.
+    pub replaces: Option<String>,
+    /// Size of the copy on the stick that this replaces.
+    pub existing_bytes: u64,
+    /// The track is already on the stick, filed at another path.
+    #[serde(skip)]
+    pub elsewhere: bool,
+}
+
+/// A file already on the stick that is moved to where the layout says it belongs.
+#[derive(Debug, Clone, Serialize)]
+pub struct MoveOp {
+    pub from: String,
+    pub to: String,
+    pub bytes: u64,
+    /// "track" or "cover"
+    pub kind: &'static str,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -110,6 +135,15 @@ pub struct StickPlan {
     pub transcode_spec: Option<String>,
     pub tracks: Vec<PlannedTrack>,
     pub covers: Vec<CoverCopy>,
+    /// Existing files to re-file before anything is written.
+    pub moves: Vec<MoveOp>,
+    /// Older copies (at other paths) to delete after their replacement is written.
+    pub deletes: Vec<String>,
+    pub conflict: String,
+    pub replacing: usize,
+    pub moved: usize,
+    /// Space given back by the files that get replaced.
+    pub freed_bytes: u64,
     pub original_bytes: u64,
     /// Size of everything that will be written, after converting.
     pub write_bytes: u64,
@@ -174,7 +208,39 @@ fn ext_of(path: &str) -> String {
 /// Which converted-size choices to offer when it doesn't fit.
 const SUGGESTED: &[&str] = &["mp3:320", "mp3:256", "mp3:192", "mp3:160", "mp3:128", "opus:96"];
 
-pub fn build_plan(scan: &Scan, opts: &StickOptions, target: &TargetInfo) -> Result<StickPlan, Error> {
+struct VFile {
+    rel: String,
+    size: u64,
+    mtime: i64,
+    quality: Quality,
+}
+
+fn with_suffix(path: &str, n: usize) -> String {
+    match path.rsplit_once('.') {
+        Some((stem, e)) => format!("{stem} ({n}).{e}"),
+        None => format!("{path} ({n})"),
+    }
+}
+
+const COVER_STEMS: &[&str] = &["cover", "folder", "front", "albumart"];
+
+/// Cover pictures in `dir` (relative to the stick) that belong to an album folder.
+fn cover_files(dest_root: &Path, dir: &str) -> Vec<String> {
+    let Ok(rd) = std::fs::read_dir(dest_root.join(dir)) else { return Vec::new() };
+    rd.filter_map(|e| e.ok())
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().to_string();
+            let (stem, ext) = name.rsplit_once('.')?;
+            (COVER_STEMS.contains(&stem.to_lowercase().as_str()) && matches!(ext.to_lowercase().as_str(), "jpg" | "jpeg" | "png") && e.path().is_file()).then_some(name)
+        })
+        .collect()
+}
+
+fn parent_of(rel: &str) -> &str {
+    rel.rsplit_once('/').map(|(d, _)| d).unwrap_or("")
+}
+
+pub fn build_plan(scan: &Scan, existing_tracks: &[ExistingTrack], opts: &StickOptions, target: &TargetInfo) -> Result<StickPlan, Error> {
     layout::validate_template(&opts.layout.template)?;
     let spec = match opts.transcode.as_deref().filter(|t| !t.trim().is_empty()) {
         Some(t) => Some(TranscodeSpec::parse(t)?),
@@ -189,6 +255,67 @@ pub fn build_plan(scan: &Scan, opts: &StickOptions, target: &TargetInfo) -> Resu
 
     let metas: Vec<&layout::TrackMeta> = scan.tracks.iter().map(|t| &t.meta).collect();
     let infos = layout::album_infos(&metas);
+
+    // What is on the stick (nothing, if it is being emptied first), and where it will be once any
+    // re-filing is done.
+    let on_stick: &[ExistingTrack] = if opts.clear { &[] } else { existing_tracks };
+    let mut vfiles: HashMap<String, VFile> = HashMap::new();
+    let mut moves: Vec<MoveOp> = Vec::new();
+    let mut moved_covers: HashSet<String> = HashSet::new();
+    let mut taken: HashSet<String> = on_stick.iter().map(|e| e.rel.to_lowercase()).collect();
+    let einfos = {
+        let m: Vec<&layout::TrackMeta> = on_stick.iter().map(|e| &e.meta).collect();
+        layout::album_infos(&m)
+    };
+    let mut cover_from: Vec<(String, String)> = Vec::new(); // (old folder, new folder), first move of each
+    for e in on_stick {
+        let mut rel = e.rel.clone();
+        let tagged = !(e.meta.artist.is_empty() && e.meta.album_artist.is_empty() && e.meta.album.is_empty());
+        if opts.existing_mode == ExistingMode::Reorganize && tagged {
+            let info = einfos.get(&layout::album_key(&e.meta)).copied().unwrap_or_default();
+            let want = layout::render(&e.meta, info, &opts.layout, &ext_of(&e.rel))?;
+            if want.to_lowercase() != e.rel.to_lowercase() {
+                let mut to = want.clone();
+                let mut n = 1;
+                while taken.contains(&to.to_lowercase()) {
+                    n += 1;
+                    to = with_suffix(&want, n);
+                }
+                taken.insert(to.to_lowercase());
+                if !cover_from.iter().any(|(f, _)| f == parent_of(&e.rel)) {
+                    cover_from.push((parent_of(&e.rel).to_string(), parent_of(&to).to_string()));
+                }
+                moves.push(MoveOp { from: e.rel.clone(), to: to.clone(), bytes: e.size, kind: "track" });
+                rel = to;
+            }
+        }
+        vfiles.insert(rel.to_lowercase(), VFile { rel, size: e.size, mtime: e.mtime, quality: e.quality.clone() });
+    }
+    for (from_dir, to_dir) in cover_from {
+        if from_dir == to_dir || from_dir.is_empty() {
+            continue;
+        }
+        for name in cover_files(&dest_root, &from_dir) {
+            let to = if to_dir.is_empty() { name.clone() } else { format!("{to_dir}/{name}") };
+            if taken.contains(&to.to_lowercase()) || dest_root.join(&to).exists() {
+                continue;
+            }
+            taken.insert(to.to_lowercase());
+            moved_covers.insert(to.to_lowercase());
+            let from = if from_dir.is_empty() { name.clone() } else { format!("{from_dir}/{name}") };
+            let bytes = std::fs::metadata(dest_root.join(&from)).map(|m| m.len()).unwrap_or(0);
+            moves.push(MoveOp { from, to, bytes, kind: "cover" });
+        }
+    }
+    let mut by_ident: HashMap<(String, String, u32, u32, String), String> = HashMap::new();
+    for e in on_stick {
+        if let Some(id) = existing::ident(&e.meta) {
+            let key = moves.iter().find(|m| m.from == e.rel && m.kind == "track").map(|m| m.to.to_lowercase()).unwrap_or_else(|| e.rel.to_lowercase());
+            by_ident.entry(id).or_insert(key);
+        }
+    }
+    let target_quality = spec.as_ref().map(existing::quality_of_spec);
+    let mut deletes: Vec<String> = Vec::new();
 
     let mut tracks: Vec<PlannedTrack> = Vec::with_capacity(scan.tracks.len());
     let mut sources: Vec<&SourceTrack> = Vec::with_capacity(scan.tracks.len());
@@ -243,10 +370,65 @@ pub fn build_plan(scan: &Scan, opts: &StickOptions, target: &TargetInfo) -> Resu
                 }
             }
         }
-        if action == Action::Write && opts.skip_existing && !opts.clear {
-            if let Ok(m) = std::fs::metadata(dest_root.join(&dest)) {
-                if m.is_file() && m.len() > 0 && (transcode || m.len() == t.size) {
+        let (mut note, mut replaces, mut existing_bytes, mut elsewhere) = (None, None, 0u64, false);
+        if action == Action::Write && !vfiles.is_empty() {
+            let same_path = vfiles.get(&dest.to_lowercase());
+            let by_id = existing::ident(&t.meta).and_then(|i| by_ident.get(&i)).and_then(|p| vfiles.get(p));
+            if let Some(old) = same_path.or(by_id) {
+                let at_dest = same_path.is_some();
+                let new_q = match (&target_quality, transcode) {
+                    (Some(q), true) => q.clone(),
+                    _ => existing::quality_of(&ext_of(&t.path), t.size, t.duration_secs),
+                };
+                let ord = existing::compare(&new_q, &old.quality);
+                let identical = at_dest && if transcode { ord == std::cmp::Ordering::Equal && ext_of(&old.rel) == ext } else { old.size == t.size };
+                let (replace, why) = if identical {
+                    (false, "Already on the stick".to_string())
+                } else {
+                    match opts.conflict {
+                        Conflict::Skip => (false, if at_dest { format!("Kept the copy on the stick ({})", old.quality.label) } else { format!("Already on the stick as {}", old.rel) }),
+                        Conflict::Replace => (true, format!("Replaces the copy on the stick ({} → {})", old.quality.label, new_q.label)),
+                        Conflict::HigherQuality => match ord {
+                            std::cmp::Ordering::Greater => (true, format!("Better quality: {} replaces {}", new_q.label, old.quality.label)),
+                            _ => (false, format!("Kept {} on the stick ({} isn't better)", old.quality.label, new_q.label)),
+                        },
+                        Conflict::LowerQuality => match ord {
+                            std::cmp::Ordering::Less => (true, format!("Smaller: {} replaces {}", new_q.label, old.quality.label)),
+                            _ => (false, format!("Kept {} on the stick ({} isn't lower)", old.quality.label, new_q.label)),
+                        },
+                        Conflict::Newer => {
+                            if existing::mtime_of(Path::new(&t.path)) > old.mtime + 2 {
+                                (true, "Newer than the copy on the stick".to_string())
+                            } else {
+                                (false, "The copy on the stick is as new or newer".to_string())
+                            }
+                        }
+                        Conflict::KeepBoth => (false, String::new()),
+                    }
+                };
+                if opts.conflict == Conflict::KeepBoth && !identical {
+                    if at_dest {
+                        let base = dest.clone();
+                        let mut n = 1;
+                        while vfiles.contains_key(&dest.to_lowercase()) || used_paths.contains_key(&dest.to_lowercase()) {
+                            n += 1;
+                            dest = with_suffix(&base, n);
+                        }
+                        used_paths.insert(dest.to_lowercase(), 1);
+                    }
+                    note = Some("Kept both copies".to_string());
+                } else if replace {
+                    action = Action::Replace;
+                    existing_bytes = old.size;
+                    if !old.rel.eq_ignore_ascii_case(&dest) {
+                        replaces = Some(old.rel.clone());
+                        deletes.push(old.rel.clone());
+                    }
+                    note = Some(why);
+                } else {
                     action = Action::SkipExists;
+                    elsewhere = !at_dest;
+                    note = Some(why);
                 }
             }
         }
@@ -262,8 +444,24 @@ pub fn build_plan(scan: &Scan, opts: &StickOptions, target: &TargetInfo) -> Resu
             album: t.meta.album.clone(),
             title: t.meta.title.clone(),
             art_bytes: t.art_bytes,
+            note,
+            replaces,
+            existing_bytes,
+            elsewhere,
         });
         sources.push(t);
+    }
+
+    // A file that is about to be replaced doesn't need re-filing first: remove it where it is.
+    for t in tracks.iter_mut() {
+        let Some(old) = t.replaces.clone() else { continue };
+        if let Some(i) = moves.iter().position(|m| m.kind == "track" && m.to == old) {
+            let from = moves.remove(i).from;
+            for d in deletes.iter_mut().filter(|d| **d == old) {
+                *d = from.clone();
+            }
+            t.replaces = Some(from);
+        }
     }
 
     // Write in a sorted order: many car stereos and players play a folder in the order the files
@@ -279,7 +477,7 @@ pub fn build_plan(scan: &Scan, opts: &StickOptions, target: &TargetInfo) -> Resu
     if opts.copy_covers {
         let mut done: HashSet<String> = HashSet::new();
         for (t, s) in tracks.iter().zip(sorted_sources.iter()) {
-            if t.action != Action::Write && t.action != Action::SkipExists {
+            if !matches!(t.action, Action::Write | Action::Replace | Action::SkipExists) || t.elsewhere {
                 continue;
             }
             let (Some(cover), Some(dir)) = (&s.cover, Path::new(&t.dest).parent()) else { continue };
@@ -289,7 +487,8 @@ pub fn build_plan(scan: &Scan, opts: &StickOptions, target: &TargetInfo) -> Resu
             }
             let ext = cover.extension().and_then(|e| e.to_str()).unwrap_or("jpg").to_lowercase();
             let dest = format!("{dir}/cover.{ext}");
-            if opts.skip_existing && !opts.clear && dest_root.join(&dest).is_file() {
+            let there = !opts.clear && (dest_root.join(&dest).is_file() || moved_covers.contains(&dest.to_lowercase()));
+            if there && opts.conflict != Conflict::Replace {
                 continue;
             }
             let bytes = std::fs::metadata(cover).map(|m| m.len()).unwrap_or(0);
@@ -299,7 +498,8 @@ pub fn build_plan(scan: &Scan, opts: &StickOptions, target: &TargetInfo) -> Resu
 
     // Space.
     let block = target.block_size;
-    let writes: Vec<&PlannedTrack> = tracks.iter().filter(|t| t.action == Action::Write).collect();
+    let writes: Vec<&PlannedTrack> = tracks.iter().filter(|t| matches!(t.action, Action::Write | Action::Replace)).collect();
+    let freed: u64 = writes.iter().filter(|t| t.action == Action::Replace).map(|t| cost(t.existing_bytes, block)).sum();
     let write_bytes: u64 = writes.iter().map(|t| t.est_bytes).sum::<u64>() + covers.iter().map(|c| c.bytes).sum::<u64>();
     let mut needed: u64 = writes.iter().map(|t| cost(t.est_bytes, block)).sum::<u64>() + covers.iter().map(|c| cost(c.bytes, block)).sum::<u64>();
 
@@ -322,7 +522,7 @@ pub fn build_plan(scan: &Scan, opts: &StickOptions, target: &TargetInfo) -> Resu
     needed += new_dirs.len() as u64 * block.max(4096);
 
     let clear_bytes = if opts.clear { dir_size(&dest_root) } else { 0 };
-    let available = target.free_bytes + clear_bytes;
+    let available = target.free_bytes + clear_bytes + freed;
     let safety = (target.total_bytes / 200).max(32 * 1024 * 1024);
     let fits = needed + safety <= available;
     let used_now = target.total_bytes.saturating_sub(target.free_bytes);
@@ -335,7 +535,10 @@ pub fn build_plan(scan: &Scan, opts: &StickOptions, target: &TargetInfo) -> Resu
         for s in SUGGESTED {
             let Ok(sp) = TranscodeSpec::parse(s) else { continue };
             let mut sum = 0u64;
-            for t in &sorted_sources {
+            for (t, planned) in sorted_sources.iter().zip(tracks.iter()) {
+                if !matches!(planned.action, Action::Write | Action::Replace) {
+                    continue;
+                }
                 let (_, est, _) = estimate(t, Some(&sp), opts.keep_art);
                 sum += cost(est, block);
             }
@@ -365,6 +568,10 @@ pub fn build_plan(scan: &Scan, opts: &StickOptions, target: &TargetInfo) -> Resu
     if untagged > 0 {
         warnings.push(format!("{untagged} file(s) have no artist tag, so they will be filed as 'Unknown Artist'."));
     }
+    if !moves.is_empty() {
+        let n = moves.iter().filter(|m| m.kind == "track").count();
+        warnings.push(format!("{n} file(s) already on the stick will be moved to match the layout."));
+    }
     if opts.clear && clear_bytes > 0 {
         warnings.push(format!("Everything in {} ({:.1} GB) will be deleted first.", dest_root.display(), clear_bytes as f64 / 1e9));
     }
@@ -378,6 +585,12 @@ pub fn build_plan(scan: &Scan, opts: &StickOptions, target: &TargetInfo) -> Resu
         write_bytes,
         needed_bytes: needed,
         to_write: writes.len(),
+        replacing: tracks.iter().filter(|t| t.action == Action::Replace).count(),
+        moved: moves.iter().filter(|m| m.kind == "track").count(),
+        freed_bytes: freed,
+        conflict: opts.conflict.id().to_string(),
+        moves,
+        deletes,
         already_there: tracks.iter().filter(|t| t.action == Action::SkipExists).count(),
         duplicates,
         converted: writes.iter().filter(|t| t.transcode).count(),
@@ -450,7 +663,7 @@ mod tests {
             ],
             skipped: vec![],
         };
-        let p = build_plan(&scan, &opts("{albumartist}/{album}/{track} - {title}"), &target(10_000)).unwrap();
+        let p = build_plan(&scan, &[], &opts("{albumartist}/{album}/{track} - {title}"), &target(10_000)).unwrap();
         let dests: Vec<&str> = p.tracks.iter().map(|t| t.dest.as_str()).collect();
         assert_eq!(dests, ["Alpha/One/02 - A2.flac", "Alpha/One/10 - A10.flac", "Beta/Two/02 - B2.flac"]);
         assert!(p.fits && p.to_write == 3 && p.already_there == 0);
@@ -461,10 +674,10 @@ mod tests {
         // 100 tracks of 5 minutes, 35 MB FLAC each
         let tracks: Vec<SourceTrack> = (1..=100).map(|i| track("A", "Album", &format!("T{i}"), i, 1, 35_000_000, 300.0, "flac")).collect();
         let scan = Scan { tracks, skipped: vec![] };
-        let plain = build_plan(&scan, &opts("{albumartist}/{album}/{track} - {title}"), &target(10_000)).unwrap();
+        let plain = build_plan(&scan, &[], &opts("{albumartist}/{album}/{track} - {title}"), &target(10_000)).unwrap();
         let mut o = opts("{albumartist}/{album}/{track} - {title}");
         o.transcode = Some("mp3:320".into());
-        let mp3 = build_plan(&scan, &o, &target(10_000)).unwrap();
+        let mp3 = build_plan(&scan, &[], &o, &target(10_000)).unwrap();
         assert!(mp3.write_bytes * 2 < plain.write_bytes, "{} vs {}", mp3.write_bytes, plain.write_bytes);
         assert!(mp3.tracks.iter().all(|t| t.transcode && t.dest.ends_with(".mp3")));
         assert_eq!(mp3.converted, 100);
@@ -476,7 +689,7 @@ mod tests {
         let tracks: Vec<SourceTrack> = (1..=100).map(|i| track("A", "Album", &format!("T{i}"), i, 1, 35_000_000, 300.0, "flac")).collect();
         let scan = Scan { tracks, skipped: vec![] };
         // 3.5 GB of FLAC on a stick with 2.5 GB free
-        let p = build_plan(&scan, &opts("{albumartist}/{album}/{track} - {title}"), &target(2500)).unwrap();
+        let p = build_plan(&scan, &[], &opts("{albumartist}/{album}/{track} - {title}"), &target(2500)).unwrap();
         assert!(!p.fits);
         let mp3_256 = p.suggestions.iter().find(|s| s.transcode == "mp3:256").unwrap();
         let mp3_320 = p.suggestions.iter().find(|s| s.transcode == "mp3:320").unwrap();
@@ -495,7 +708,7 @@ mod tests {
             ],
             skipped: vec![],
         };
-        let p = build_plan(&scan, &opts("{albumartist}/{album}/{discfolder}/{track} - {title}"), &target(10_000)).unwrap();
+        let p = build_plan(&scan, &[], &opts("{albumartist}/{album}/{discfolder}/{track} - {title}"), &target(10_000)).unwrap();
         let dests: Vec<&str> = p.tracks.iter().map(|t| t.dest.as_str()).collect();
         assert_eq!(dests, ["A/Box/Disc 1/01 - d1.mp3", "A/Box/Disc 2/01 - d2.mp3", "A/Single/01 - s.mp3"]);
     }
@@ -510,7 +723,7 @@ mod tests {
         clash.meta.track = None;
         a.meta.track = Some(1);
         let scan = Scan { tracks: vec![a, dup, clash], skipped: vec![] };
-        let p = build_plan(&scan, &opts("{albumartist}/{album}/{title}"), &target(10_000)).unwrap();
+        let p = build_plan(&scan, &[], &opts("{albumartist}/{album}/{title}"), &target(10_000)).unwrap();
         assert_eq!(p.duplicates, 1);
         assert_eq!(p.tracks.iter().filter(|t| t.action == Action::Duplicate).count(), 1);
         let writes: Vec<&str> = p.tracks.iter().filter(|t| t.action == Action::Write).map(|t| t.dest.as_str()).collect();
@@ -520,7 +733,7 @@ mod tests {
     #[test]
     fn files_over_the_fat32_limit_are_flagged() {
         let scan = Scan { tracks: vec![track("A", "Album", "Huge", 1, 1, 5_000_000_000, 3600.0, "wav")], skipped: vec![] };
-        let p = build_plan(&scan, &opts("{albumartist}/{album}/{title}"), &target(10_000_000)).unwrap();
+        let p = build_plan(&scan, &[], &opts("{albumartist}/{album}/{title}"), &target(10_000_000)).unwrap();
         assert_eq!(p.tracks[0].action, Action::TooBig);
         assert!(p.warnings.iter().any(|w| w.contains("FAT32")));
         assert_eq!(p.to_write, 0);
@@ -535,12 +748,13 @@ mod tests {
         std::fs::write(root.join("A/Album/junk.bin"), vec![0u8; 5_000_000]).unwrap();
         let scan = Scan { tracks: vec![track("A", "Album", "Song", 1, 1, 1_000_000, 200.0, "mp3"), track("A", "Album", "New", 2, 1, 1_000_000, 200.0, "mp3")], skipped: vec![] };
         let t = TargetInfo { mount_point: root.clone(), total_bytes: 100_000_000, free_bytes: 10_000_000, block_size: 4096, max_file_bytes: None };
-        let p = build_plan(&scan, &opts("{albumartist}/{album}/{track} - {title}"), &t).unwrap();
+        let on_stick = existing::read_existing(&root);
+        let p = build_plan(&scan, &on_stick, &opts("{albumartist}/{album}/{track} - {title}"), &t).unwrap();
         assert_eq!((p.already_there, p.to_write), (1, 1));
         // clearing: nothing is skipped, and the destination's contents free their space
         let mut o = opts("{albumartist}/{album}/{track} - {title}");
         o.clear = true;
-        let c = build_plan(&scan, &o, &t).unwrap();
+        let c = build_plan(&scan, &[], &o, &t).unwrap();
         assert_eq!((c.already_there, c.to_write), (0, 2));
         assert!(c.clear_bytes >= 6_000_000 && c.available_bytes >= 16_000_000, "{} {}", c.clear_bytes, c.available_bytes);
         assert!(c.warnings.iter().any(|w| w.contains("deleted")));

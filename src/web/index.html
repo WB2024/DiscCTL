@@ -348,6 +348,7 @@ pre.json { background: var(--bg); border: 1px solid var(--line); border-radius: 
         <div class="row" style="margin-bottom:10px"><h2 style="margin:0" class="grow">1 · The stick</h2><button class="btn small" id="st-refresh">↻ Refresh</button></div>
         <div id="st-targets"></div>
         <div id="st-unmounted"></div>
+        <div id="st-identify"></div>
       </div>
 
       <div class="card">
@@ -376,7 +377,11 @@ pre.json { background: var(--bg); border: 1px solid var(--line); border-radius: 
           <div style="display:flex;flex-direction:column;gap:12px">
             <label class="check"><input type="checkbox" id="st-the" checked><span>Ignore a leading “The”<small>“The Beatles” is filed under B</small></span></label>
             <label class="check"><input type="checkbox" id="st-covers" checked><span>Put cover.jpg in each album folder<small>found next to the tracks (cover, folder, front…)</small></span></label>
-            <label class="check"><input type="checkbox" id="st-skip" checked><span>Skip files already on the stick<small>lets you top a stick up, or resume after an interruption</small></span></label>
+            <label class="field">If a track is already on the stick
+              <select id="st-conflict"></select><small id="st-conflict-note" class="muted"></small></label>
+            <label class="field">Music already on the stick, filed differently
+              <select id="st-existing"><option value="leave">Leave it where it is</option><option value="reorganize">Reorganise it to match this layout</option></select></label>
+            <div id="st-existing-hint"></div>
             <label class="field">File names
               <select id="st-windows"><option value="auto">Automatic (safe for FAT, exFAT and NTFS when needed)</option><option value="on">Always safe for Windows filesystems</option><option value="off">Allow everything Linux allows</option></select></label>
           </div>
@@ -569,7 +574,7 @@ $("#nav").addEventListener("click", e => { const b = e.target.closest("button");
 // ── Rusty Stick result shown in the job panel ───────────────────────────────
 function stickDone(d) {
   const mins = d.seconds >= 90 ? `${Math.round(d.seconds / 60)} min` : `${Math.round(d.seconds)} s`;
-  const what = d.dry_run ? "Dry run finished — nothing was written." : `Wrote <b>${d.written}</b> file${d.written === 1 ? "" : "s"}${d.converted ? ` (${d.converted} converted)` : ""}${d.covers ? ` and ${d.covers} cover${d.covers > 1 ? "s" : ""}` : ""}, ${fmtMB(d.bytes)} in ${mins}${d.already_there ? ` · ${d.already_there} were already there` : ""}. The stick has been flushed — it's safe to remove.`;
+  const what = d.dry_run ? "Dry run finished — nothing was written." : `${d.written ? "" : "Nothing new to write. "}Wrote <b>${d.written}</b> file${d.written === 1 ? "" : "s"}${d.converted ? ` (${d.converted} converted)` : ""}${d.covers ? ` and ${d.covers} cover${d.covers > 1 ? "s" : ""}` : ""}, ${fmtMB(d.bytes)} in ${mins}${d.replaced ? ` · ${d.replaced} replaced an older copy` : ""}${d.moved ? ` · ${d.moved} re-filed` : ""}${d.deleted ? ` · ${d.deleted} old copies removed` : ""}${d.already_there ? ` · ${d.already_there} were already there` : ""}. The stick has been flushed — it's safe to remove.`;
   return `<div class="notice" style="margin-top:12px"><span class="ar-ok">✔</span> ${what}
     ${d.dry_run ? "" : `<div style="margin-top:8px"><button class="btn small" onclick="ejectStick(this)">⏏ Eject the stick</button></div>`}</div>`;
 }
@@ -1428,6 +1433,7 @@ async function loadStick() {
   } catch (e) { toast(e.message, "err"); return; }
   if (STICK.target && !STICK.targets.some(t => t.mount_point === STICK.target)) STICK.target = null;
   if (!STICK.target && STICK.targets.length === 1) STICK.target = STICK.targets[0].mount_point;
+  if (STICK.target !== STICK.identified) identifyStick();
   if (!STICK.ready) initStickForm();
   renderStickTargets(); renderStickSources(); replanSoon();
 }
@@ -1438,6 +1444,8 @@ function initStickForm() {
   $("#st-preset").innerHTML = presets.map(p => `<option value="${p.id}">${esc(p.label)}</option>`).join("") + `<option value="custom">Custom pattern</option>`;
   const start = (SET && presets.find(p => p.id === SET.stick_preset)) || presets.find(p => p.id === "artist-album") || presets[0];
   $("#st-preset").value = start.id; $("#st-template").value = start.template;
+  $("#st-conflict").innerHTML = STICK.meta.conflicts.map(c => `<option value="${c.id}">${esc(c.label)}</option>`).join("");
+  $("#st-conflict").onchange = () => { $("#st-conflict-note").textContent = STICK.meta.conflicts.find(c => c.id === $("#st-conflict").value)?.note || ""; };
   $("#st-tokens").innerHTML = STICK.meta.tokens.map(t => `<span class="chip" data-t="${t.name}" title="${esc(t.description)}">{${t.name}}</span>`).join("");
   $("#st-tokens").onclick = e => {
     const c = e.target.closest(".chip"); if (!c) return;
@@ -1448,8 +1456,9 @@ function initStickForm() {
   };
   $("#st-preset").onchange = e => { const p = presets.find(p => p.id === e.target.value); if (p) $("#st-template").value = p.template; replanSoon(); };
   $("#st-template").oninput = () => { const p = presets.find(p => p.template === $("#st-template").value.trim()); $("#st-preset").value = p ? p.id : "custom"; replanSoon(); };
-  ["st-the", "st-covers", "st-skip", "st-windows", "st-subfolder", "st-transcode", "st-art", "st-clear"].forEach(id => { $("#" + id).onchange = replanSoon; });
-  $("#st-subfolder").oninput = replanSoon;
+  ["st-the", "st-covers", "st-conflict", "st-existing", "st-windows", "st-subfolder", "st-transcode", "st-art", "st-clear"].forEach(id => { $("#" + id).onchange = replanSoon; });
+  $("#st-subfolder").oninput = () => { renderExistingHint(); replanSoon(); };
+  ["st-preset", "st-template"].forEach(id => $("#" + id).addEventListener(id === "st-template" ? "input" : "change", renderExistingHint));
   $("#st-refresh").onclick = loadStick;
   $("#st-add-folder").onclick = async () => { const r = await pickPath({ mode: "folder", title: "Add a folder of music" }); if (r) addStickSource("folder", r); };
   $("#st-add-files").onclick = async () => { const r = await pickPath({ mode: "files", title: "Add audio files" }); if (r?.length) addStickSource("file", r); };
@@ -1499,7 +1508,7 @@ function renderStickTargets() {
         <div class="meter"><div class="bar"><i style="width:${pct}%"></i></div><div class="muted" style="font-size:12px;margin-top:3px">${fmtMB(t.free_bytes)} free of ${fmtMB(t.total_bytes)}</div></div>
       </div>`;
     }).join("");
-    $$(".target", box).forEach(el => el.onclick = () => { STICK.target = el.dataset.mp; renderStickTargets(); replanSoon(); });
+    $$(".target", box).forEach(el => el.onclick = () => { STICK.target = el.dataset.mp; renderStickTargets(); replanSoon(); identifyStick(); });
   }
   const un = $("#st-unmounted");
   un.innerHTML = STICK.unmounted.length ? `<div class="muted" style="margin:10px 0 6px">Found but not mounted:</div>` + STICK.unmounted.map(u => `
@@ -1512,12 +1521,108 @@ function renderStickTargets() {
   });
 }
 
+// ── Identify / reformat ─────────────────────────────────────────────────────
+STICK.identified = null; STICK.info = null;
+const nf = n => Number(n).toLocaleString();
+
+async function identifyStick(force) {
+  const box = $("#st-identify");
+  if (!STICK.target) { box.innerHTML = ""; STICK.identified = null; STICK.info = null; renderExistingHint(); return; }
+  const mp = STICK.target; STICK.identified = mp;
+  box.innerHTML = `<div class="muted" style="margin-top:12px">Identifying the stick…</div>`;
+  try {
+    const info = await api("/api/stick/identify", { body: { target: mp } });
+    if (STICK.target !== mp) return;
+    STICK.info = info; renderIdentify(); renderExistingHint();
+  } catch (e) { if (STICK.target === mp) box.innerHTML = `<div class="muted" style="margin-top:12px">Couldn't identify the stick: ${esc(e.message)}</div>`; }
+}
+
+function renderIdentify() {
+  const i = STICK.info, t = i.target, c = i.content, f = i.facts;
+  const box = $("#st-identify");
+  const fmts = Object.entries(c.formats).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${nf(n)} ${k.toUpperCase()}`).join(" · ");
+  const layout = i.detected_layout
+    ? `<div>Organised as <b>${esc(i.detected_layout.label)}</b>${i.detected_layout.subfolder ? ` inside <span class="mono">${esc(i.detected_layout.subfolder)}/</span>` : ""} <span class="muted">(${i.detected_layout.match_pct}% of tracks match)</span> <button class="btn small" id="id-use-layout">Use this layout</button></div>`
+    : c.audio_files ? `<div class="muted">No clear folder layout detected.</div>` : "";
+  const folders = c.folders.length ? `<details style="margin-top:6px"><summary class="muted" style="cursor:pointer">Top-level folders (${c.folders.length}${c.folders.length >= 40 ? "+" : ""})</summary><div class="mono" style="margin-top:4px;columns:2">${c.folders.map(([n, k]) => `${esc(n)} <span class="muted">${nf(k)}</span>`).join("<br>")}</div></details>` : "";
+  box.innerHTML = `<div class="notice" style="margin-top:14px">
+    <div class="row" style="align-items:flex-start">
+      <div class="grow">
+        <div style="font-weight:700;font-size:15px">${esc(f.label || t.label)} <span class="badge">${esc(i.fs_name)}</span> ${t.read_only ? `<span class="badge err">read-only</span>` : ""}</div>
+        <div class="muted mono" style="margin-top:2px">${esc([t.device, f.uuid && "UUID " + f.uuid, f.partition_table && ({ dos: "MBR", gpt: "GPT" }[f.partition_table] || f.partition_table) + " partition table"].filter(Boolean).join(" · "))}</div>
+        <div class="muted" style="margin-top:6px">${esc(i.limits.join(" "))}</div>
+      </div>
+      <button class="btn small" id="id-refresh">↻ Re-identify</button>
+      <button class="btn small" id="id-format" ${i.can_format ? "" : `disabled title="${esc(i.format_blocked)}"`}>Reformat…</button>
+    </div>
+    <div style="margin-top:10px">${c.audio_files
+      ? `<b>${nf(c.audio_files)}</b> music file${c.audio_files === 1 ? "" : "s"} (${fmtMB(c.audio_bytes)}) — ${nf(c.albums)} album${c.albums === 1 ? "" : "s"} by ${nf(c.artists)} artist${c.artists === 1 ? "" : "s"}${c.untagged ? `, ${nf(c.untagged)} without tags` : ""}<div class="muted">${esc(fmts)}${c.lossless_files ? ` · ${nf(c.lossless_files)} lossless` : ""}</div>`
+      : `<span class="muted">No music on it yet.</span>`}
+      ${c.other_files ? `<div class="muted">${nf(c.other_files)} other file${c.other_files === 1 ? "" : "s"} (${fmtMB(c.other_bytes)})</div>` : ""}</div>
+    <div style="margin-top:6px">${layout}</div>${folders}
+    <div id="id-format-form"></div>
+  </div>`;
+  $("#id-refresh").onclick = () => identifyStick(true);
+  $("#id-format").onclick = showFormatForm;
+  const use = $("#id-use-layout");
+  if (use) use.onclick = () => useDetectedLayout();
+}
+
+function useDetectedLayout() {
+  const d = STICK.info?.detected_layout; if (!d) return;
+  $("#st-preset").value = d.preset; $("#st-template").value = d.template; $("#st-subfolder").value = d.subfolder;
+  $("#st-existing").value = "leave";
+  renderExistingHint(); replanSoon(); toast("Using the layout already on the stick", "ok");
+}
+
+// When the stick is organised differently from the chosen layout, say so and offer both ways out.
+function renderExistingHint() {
+  const box = $("#st-existing-hint"), i = STICK.info, d = i?.detected_layout;
+  if (!box) return;
+  if (!d || !i.content.audio_files) { box.innerHTML = ""; return; }
+  const same = d.template === $("#st-template").value.trim() && d.subfolder === $("#st-subfolder").value.trim();
+  box.innerHTML = same ? `<div class="muted">✓ Matches how the stick is already organised.</div>`
+    : `<div class="notice warn" style="padding:8px 12px"><div>The stick is organised as <b>${esc(d.label)}</b>${d.subfolder ? ` in <span class="mono">${esc(d.subfolder)}/</span>` : ""}. This layout is different.</div>
+      <div class="row" style="margin-top:6px"><button class="btn small" id="hint-match">Match the stick</button>${$("#st-existing").value === "reorganize" ? `<span class="muted">Existing music will be re-filed to this layout.</span>` : `<button class="btn small" id="hint-reorg">Re-file what's there to this layout</button>`}</div></div>`;
+  $("#hint-match")?.addEventListener("click", useDetectedLayout);
+  $("#hint-reorg")?.addEventListener("click", () => { $("#st-existing").value = "reorganize"; renderExistingHint(); replanSoon(); });
+}
+
+function showFormatForm() {
+  const i = STICK.info, t = i.target, wrap = $("#id-format-form");
+  if (wrap.innerHTML) { wrap.innerHTML = ""; return; }
+  const short = (t.device || "").split("/").pop();
+  const cur = i.facts.fs_type === "vfat" ? "fat32" : i.facts.fs_type;
+  const opts = i.filesystems.map(f => `<option value="${f.id}" ${f.available ? "" : "disabled"} ${f.id === (["fat32", "exfat", "ext4", "ntfs"].includes(cur) ? cur : "exfat") ? "selected" : ""}>${f.label}${f.available ? "" : " (not installed)"}</option>`).join("");
+  wrap.innerHTML = `<div class="notice err" style="margin-top:14px">
+    <div style="font-weight:700">Reformat ${esc(t.label)} (${esc(t.device)}, ${fmtMB(t.total_bytes)})</div>
+    <div style="margin-top:4px">This <b>erases everything</b> on the stick${i.content.audio_files || i.content.other_files ? ` — ${nf(i.content.audio_files + i.content.other_files)} files` : ""} — and can't be undone.</div>
+    <div class="row" style="margin-top:10px;align-items:flex-end">
+      <label class="field">New filesystem<select id="fmt-fs">${opts}</select></label>
+      <label class="field">Name<input id="fmt-label" value="${esc((i.facts.label || t.label || "MUSIC").replace(/[^A-Za-z0-9 _-]/g, "").slice(0, 11))}" style="width:160px"></label>
+      <label class="field">Type “${esc(short)}” to confirm<input id="fmt-confirm" autocomplete="off" style="width:120px"></label>
+      <button class="btn danger" id="fmt-go">Erase and format</button>
+    </div>
+    <div class="muted" id="fmt-note" style="margin-top:6px"></div></div>`;
+  const note = () => { const f = i.filesystems.find(f => f.id === $("#fmt-fs").value); $("#fmt-note").textContent = f ? f.note : ""; };
+  $("#fmt-fs").onchange = note; note();
+  $("#fmt-go").onclick = async () => {
+    const btn = $("#fmt-go"); btn.disabled = true; btn.textContent = "Formatting…";
+    try {
+      const r = await api("/api/stick/format", { body: { device: t.device, fs: $("#fmt-fs").value, label: $("#fmt-label").value, confirm: $("#fmt-confirm").value } });
+      toast(r.mount_point ? "Formatted and ready" : "Formatted — press Mount to use it", "ok");
+      STICK.target = r.mount_point || null; STICK.identified = null;
+      await loadStick();
+    } catch (e) { toast(e.message, "err", 10000); btn.disabled = false; btn.textContent = "Erase and format"; }
+  };
+}
+
 function stickBody(extra = {}) {
   const src = k => STICK.sources.filter(s => s.kind === k).map(s => s.path);
   return {
     target: STICK.target, folders: src("folder"), files: src("file"), playlists: src("playlist"),
     layout: $("#st-template").value.trim(), transcode: $("#st-transcode").value || null,
-    keep_art: $("#st-art").checked, copy_covers: $("#st-covers").checked, skip_existing: $("#st-skip").checked,
+    keep_art: $("#st-art").checked, copy_covers: $("#st-covers").checked, conflict: $("#st-conflict").value, existing: $("#st-existing").value,
     windows_names: $("#st-windows").value, keep_the: !$("#st-the").checked, subfolder: $("#st-subfolder").value.trim(),
     clear: $("#st-clear").checked, ...extra,
   };
@@ -1573,23 +1678,27 @@ function treeHtml(node) {
 }
 
 function renderStickPlan(p, target) {
-  const okTracks = p.tracks.filter(t => t.action === "write" || t.action === "skip_exists");
+  const okTracks = p.tracks.filter(t => t.action === "write" || t.action === "replace" || t.action === "skip_exists");
   const over = p.needed_bytes + Math.max(p.total_bytes / 200, 32 * 1024 * 1024) - p.available_bytes;
   const head = p.to_write === 0 && p.already_there > 0
     ? `<div style="font-size:20px;font-weight:700">Everything is already on the stick</div>`
     : `<div style="font-size:20px;font-weight:700">${p.fits ? "Fits" : "Doesn't fit"} — ${p.to_write} file${p.to_write === 1 ? "" : "s"}, ${fmtMB(p.write_bytes)}</div>`;
   const conv = p.transcode && p.converted > 0 ? ` · ${p.converted} converted to ${esc(p.transcode)} (${fmtMB(p.original_bytes)} as they are)` : "";
-  const bits = [p.already_there && `${p.already_there} already on the stick`, p.duplicates && `${p.duplicates} duplicate${p.duplicates > 1 ? "s" : ""} skipped`].filter(Boolean).join(" · ");
+  const bits = [p.replacing && `${p.replacing} replacing an older copy`, p.moved && `${p.moved} already on the stick re-filed`, p.already_there && `${p.already_there} already on the stick`, p.duplicates && `${p.duplicates} duplicate${p.duplicates > 1 ? "s" : ""} skipped`].filter(Boolean).join(" · ");
   const bar = `<div class="bar" style="width:100%;margin-top:10px"><i style="width:${Math.min(100, p.percent_after)}%;${p.fits ? "" : "background:var(--err)"}"></i></div>
     <div class="muted" style="margin-top:4px">${esc(target.label)}: ${fmtMB(p.free_bytes)} free of ${fmtMB(p.total_bytes)}${p.clear_bytes ? ` (+ ${fmtMB(p.clear_bytes)} that would be emptied)` : ""} → about <b>${Math.round(p.percent_after)}%</b> full afterwards${p.fits ? "" : ` · <span class="ar-bad">over by about ${fmtMB(Math.max(0, over))}</span>`}</div>`;
   const sugg = p.suggestions.length && (!p.fits || p.transcode !== null || true)
     ? `<div style="margin-top:12px"><div class="muted" style="margin-bottom:6px">${p.fits ? "Other sizes:" : "These would fit — click one:"}</div><div class="chips">${p.suggestions.map(s => `<span class="chip" data-spec="${s.transcode}" style="${s.fits ? "" : "opacity:.5"}">${esc(s.label)} · ${fmtMB(s.needed_bytes)} ${s.fits ? "✓" : "✗"}</span>`).join("")}</div></div>` : "";
   const warn = noticeList("Heads up", p.warnings.map(w => `<li>${esc(w)}</li>`), "warn");
   const skipped = noticeList("Left out", p.skipped.map(k => `<li><span class="mono">${esc(k.entry)}</span> — ${esc(k.reason)}</li>`), "warn");
+  const noted = p.tracks.filter(t => t.note && t.action !== "duplicate" && t.note !== "Already on the stick");
+  const notes = noted.length ? `<details style="margin-top:14px"><summary style="cursor:pointer"><b>Files already on the stick</b> <span class="muted">(${noted.length} decision${noted.length === 1 ? "" : "s"})</span></summary><div style="margin-top:8px">${noted.slice(0, 300).map(t => `<div class="tfile">${t.action === "replace" ? "🔁" : t.action === "skip_exists" ? "⏭" : "➕"} <span class="mono">${esc(t.dest)}</span> <span class="muted">— ${esc(t.note)}${t.replaces ? ` (removes ${esc(t.replaces)})` : ""}</span></div>`).join("")}${noted.length > 300 ? `<div class="muted">…and ${noted.length - 300} more</div>` : ""}</div></details>` : "";
+  const moves = p.moves.filter(m => m.kind === "track");
+  const movesHtml = moves.length ? `<details style="margin-top:14px"><summary style="cursor:pointer"><b>Re-filing what is already on the stick</b> <span class="muted">(${moves.length} file${moves.length === 1 ? "" : "s"} moved, nothing copied)</span></summary><div style="margin-top:8px">${moves.slice(0, 200).map(m => `<div class="tfile">📦 <span class="mono">${esc(m.from)}</span> → <span class="mono">${esc(m.to)}</span></div>`).join("")}${moves.length > 200 ? `<div class="muted">…and ${moves.length - 200} more</div>` : ""}</div></details>` : "";
   TREE_NODES = [];
   const tree = buildTree(okTracks.map(t => t.dest));
   return `<div class="notice">${head}<div class="muted" style="margin-top:4px">${conv ? conv.slice(3) : `${p.tracks.length} track${p.tracks.length === 1 ? "" : "s"}`}${bits ? " · " + bits : ""}</div>${bar}</div>
-    ${sugg}${warn}${skipped}
+    ${sugg}${warn}${skipped}${movesHtml}${notes}
     <details style="margin-top:14px" id="st-tree-wrap"><summary style="cursor:pointer"><b>See how it will be laid out</b> <span class="muted">(${okTracks.length} files)</span></summary><div style="margin-top:8px" id="st-tree">${treeHtml(tree)}</div></details>`;
 }
 

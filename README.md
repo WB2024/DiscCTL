@@ -331,6 +331,16 @@ rustydisc stick --target /run/media/you/STICK --folder ~/Music --transcode mp3:2
 | `--clear --confirm-clear <name>` | Empty the destination first (the name must match) |
 | `--plan`, `--dry-run`, `--force` | Show the plan / write nothing / write even if it won't fit |
 
+### Identify, reformat and tidy what's already on the stick
+
+Selecting a stick **identifies** it: its name, filesystem (with what that means, e.g. FAT32's 4 GB file limit), UUID, partition table, how much music is on it (albums, artists, formats, lossless count) and how it is organised. If the folders follow one of the built-in layouts, RustyDisc says so and can **use that layout** for what you add.
+
+- **Reformat…** erases the stick and creates exFAT, FAT32, ext4 or NTFS with a name you choose. It only works on USB/removable partitions that RustyDisc itself lists, and you must type the device name (e.g. `sdb1`) to confirm. The stick is mounted again afterwards.
+- **Music already on the stick, filed differently:** leave it, or **reorganise** it into the layout you chose. Files are moved (renamed, never copied), album cover pictures go with them, and emptied folders are removed.
+- **If a track is already on the stick** (matched by artist, album, disc, track and title, so a different folder or format still counts): skip it, replace it if the new file is **higher quality** (lossless beats lossy; lossy is compared by bitrate, adjusted for codec), replace it if it is **lower quality** (to save space), replace it if it is **newer**, always replace, or keep both. The plan lists every decision and the space that replacing frees.
+
+On the command line: `--on-conflict skip|replace|higher-quality|lower-quality|newer|keep-both` and `--existing leave|reorganize`.
+
 ### Making sticks visible to RustyDisc
 
 The stick has to be **mounted** where RustyDisc runs.
