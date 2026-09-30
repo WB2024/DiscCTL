@@ -9,6 +9,8 @@ use super::jobs::{fail, Event, Job, Status};
 use crate::rip::{metadata, musicbrainz::{MbTrackInfo, ReleaseInfo}};
 
 const ARTIST: &str = "The Static Lights";
+/// A mock disc that MusicBrainz doesn't know, to try the release override.
+pub const UNMATCHED_DISCID: &str = "UnmatchedMockDiscId0000000000-";
 const ALBUM: &str = "Neon Cathedral";
 
 const TRACKS: &[(&str, f64)] = &[
@@ -61,6 +63,11 @@ pub fn info(scenario: &str, device: &str) -> Result<Value, (String, String)> {
             "discid": "Wn8eRBtfLDfM0qjYPdxrz.Zjs_U-",
             "sessions": [audio_session, data_session(2, TRACKS.len() + 1)],
         })),
+        "unmatched" => Ok(json!({
+            "format": "redbook", "is_writable": false, "device": device,
+            "discid": UNMATCHED_DISCID,
+            "sessions": [json!({"index": 1, "kind": {"type": "audio"}, "tracks": audio_tracks})],
+        })),
         _ => Ok(json!({
             "format": "redbook", "is_writable": false, "device": device,
             "discid": "Wn8eRBtfLDfM0qjYPdxrz.Zjs_U-",
@@ -109,12 +116,16 @@ fn cancelled(job: &Job) {
     job.push(Event::Status { status: Status::Cancelled });
 }
 
-pub async fn rip(job: Arc<Job>, rips_dir: PathBuf, folder: Option<String>, archive: bool, format: String, no_mb: bool, no_ar: bool) {
+pub async fn rip(job: Arc<Job>, rips_dir: PathBuf, folder: Option<String>, archive: bool, format: String, no_mb: bool, no_ar: bool, mb_chosen: bool) {
     job.push(Event::Step { msg: "Analysing disc...".into() });
     job.push(Event::Progress { pct: 0.0 });
     if work(&job, 700).await { return cancelled(&job); }
     job.push(Event::Step { msg: "Detected: Red Book Audio CD".into() });
-    if !no_mb {
+    if mb_chosen {
+        job.push(Event::Step { msg: "Fetching the chosen MusicBrainz release...".into() });
+        if work(&job, 600).await { return cancelled(&job); }
+        job.push(Event::Step { msg: format!("Using: {ALBUM} — {ARTIST}") });
+    } else if !no_mb {
         job.push(Event::Step { msg: "Looking up metadata on MusicBrainz...".into() });
         if work(&job, 600).await { return cancelled(&job); }
         job.push(Event::Step { msg: format!("Found: {ALBUM} — {ARTIST}") });
@@ -171,7 +182,7 @@ pub async fn rip(job: Arc<Job>, rips_dir: PathBuf, folder: Option<String>, archi
         let meta = out.join("metadata");
         let _ = std::fs::create_dir_all(&meta);
         let _ = std::fs::write(meta.join("disc.json"), serde_json::to_string_pretty(&info("redbook", "mock").unwrap()).unwrap());
-        if !no_mb {
+        if !no_mb || mb_chosen {
             let _ = std::fs::write(meta.join("musicbrainz.json"), serde_json::to_string_pretty(&release()).unwrap());
         }
         if let Some(r) = &ar_report {

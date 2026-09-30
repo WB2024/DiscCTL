@@ -1,0 +1,21 @@
+# RustyDisc stack for Dockge (or any Docker Compose host) — uses the prebuilt image.
+# In Dockge: create a stack named "rustydisc", paste this in, adjust the CHANGE ME lines, Deploy.
+services:
+  rustydisc:
+    image: wb20244/rustydisc:latest      # or pin a version, e.g. wb20244/rustydisc:0.1.0
+    container_name: rustydisc
+    restart: unless-stopped
+    ports:
+      - "8080:8080"                      # web UI → http://<server>:8080
+    devices:
+      - /dev/sr0:/dev/sr0                # CHANGE ME if your drive isn't sr0
+      - /dev/sg0:/dev/sg0                # CHANGE ME: needed for burning
+                                         #   find it: ls -l /sys/class/block/sr0/device/scsi_generic
+    cap_add:
+      - SYS_RAWIO                        # raw SCSI access for cdparanoia / cdrdao / cdrecord
+    volumes:
+      - /path/to/music/CDRips:/rips      # CHANGE ME: where ripped albums are saved
+      - /path/to/burn-sources:/media:ro  # CHANGE ME: files you want to burn to disc
+    environment:
+      RUSTYDISC_DEVICE: /dev/sr0
+      # RUSTYDISC_MOCK: "true"           # simulate a drive to try the UI without hardware

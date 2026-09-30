@@ -276,14 +276,43 @@ async fn info(State(st): S, Query(q): Query<InfoQuery>) -> ApiResult<Json<Value>
 
 #[derive(Deserialize)]
 struct MbQuery {
-    discid: String,
+    /// Look the disc up by its MusicBrainz DiscID...
+    discid: Option<String>,
+    /// ...or fetch a specific release (ID or URL) instead.
+    release: Option<String>,
+    /// With `release`: the disc's audio track count, to pick the right disc of a multi-disc release.
+    tracks: Option<usize>,
 }
 
 async fn musicbrainz_lookup(State(st): S, Query(q): Query<MbQuery>) -> ApiResult<Json<Value>> {
+    if let Some(wanted) = q.release {
+        let mbid = musicbrainz::parse_release_id(&wanted)?;
+        if st.cfg.mock {
+            let mut r = mock::release();
+            r.mb_release_id = mbid;
+            return Ok(Json(serde_json::to_value(r).map_err(Error::from)?));
+        }
+        let discid = q.discid;
+        let (release, warning) = tokio::task::spawn_blocking(move || {
+            musicbrainz::lookup_release(&mbid, discid.as_deref(), q.tracks, false)
+        })
+        .await
+        .map_err(|e| Error::backend(e.to_string()))??;
+        let mut v = serde_json::to_value(release).map_err(Error::from)?;
+        v["warning"] = json!(warning);
+        return Ok(Json(v));
+    }
+
+    let Some(discid) = q.discid else {
+        return Err(ApiError::bad("Provide a discid or a release"));
+    };
     if st.cfg.mock {
+        if discid == mock::UNMATCHED_DISCID {
+            return Ok(Json(Value::Null));
+        }
         return Ok(Json(serde_json::to_value(mock::release()).map_err(Error::from)?));
     }
-    let release = tokio::task::spawn_blocking(move || musicbrainz::lookup(&q.discid, false))
+    let release = tokio::task::spawn_blocking(move || musicbrainz::lookup(&discid, false))
         .await
         .map_err(|e| Error::backend(e.to_string()))??;
     Ok(Json(serde_json::to_value(release).map_err(Error::from)?))
@@ -619,13 +648,15 @@ struct RipReq {
     no_musicbrainz: bool,
     no_accuraterip: bool,
     debug: bool,
+    /// Use this MusicBrainz release (ID or URL) instead of the DiscID lookup.
+    mb_release: Option<String>,
     /// Explicit folder name inside the rips directory. Empty = auto-name from metadata.
     folder: Option<String>,
 }
 
 impl Default for RipReq {
     fn default() -> Self {
-        RipReq { device: None, format: None, archive: false, no_musicbrainz: false, no_accuraterip: false, debug: false, folder: None }
+        RipReq { device: None, format: None, archive: false, no_musicbrainz: false, no_accuraterip: false, debug: false, mb_release: None, folder: None }
     }
 }
 
@@ -653,7 +684,16 @@ async fn start_rip(State(st): S, Json(req): Json<RipReq>) -> ApiResult<Json<Valu
         }
         None => args.extend(["--dir".into(), path_str(&st.cfg.rips_dir)]),
     }
-    for (flag, on) in [("--archive", req.archive), ("--no-musicbrainz", req.no_musicbrainz), ("--no-accuraterip", req.no_accuraterip), ("--debug", req.debug)] {
+    let mb_release = match req.mb_release.as_deref().map(str::trim).filter(|m| !m.is_empty()) {
+        Some(m) => Some(musicbrainz::parse_release_id(m)?),
+        None => None,
+    };
+    if let Some(id) = &mb_release {
+        args.extend(["--mb-release".into(), id.clone()]);
+    }
+    // An explicit release wins over "skip MusicBrainz".
+    let skip_mb = req.no_musicbrainz && mb_release.is_none();
+    for (flag, on) in [("--archive", req.archive), ("--no-musicbrainz", skip_mb), ("--no-accuraterip", req.no_accuraterip), ("--debug", req.debug)] {
         if on {
             args.push(flag.into());
         }
@@ -661,7 +701,7 @@ async fn start_rip(State(st): S, Json(req): Json<RipReq>) -> ApiResult<Json<Valu
 
     let job = start_job(&st, "rip", &format!("Rip {device} → {}", format.to_uppercase()), true)?;
     if st.cfg.mock {
-        tokio::spawn(mock::rip(job.clone(), st.cfg.rips_dir.clone(), folder, req.archive, format, req.no_musicbrainz, req.no_accuraterip));
+        tokio::spawn(mock::rip(job.clone(), st.cfg.rips_dir.clone(), folder, req.archive, format, skip_mb, req.no_accuraterip, mb_release.is_some()));
     } else {
         spawn_cli(&st, job.clone(), args, None);
     }

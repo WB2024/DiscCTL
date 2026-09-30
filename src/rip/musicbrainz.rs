@@ -68,10 +68,19 @@ struct MbArtistRef {
 struct MbMedia {
     #[serde(default)]
     tracks: Vec<MbTrack>,
+    /// Discs (DiscIDs) attached to this medium; only present when requested with `inc=discids`.
+    #[serde(default)]
+    discs: Vec<MbDisc>,
+}
+
+#[derive(Deserialize)]
+struct MbDisc {
+    id: String,
 }
 
 #[derive(Deserialize)]
 struct MbTrack {
+    position: Option<usize>,
     number: Option<String>,
     title: String,
     #[serde(rename = "artist-credit", default)]
@@ -180,7 +189,7 @@ pub fn lookup(discid: &str, debug: bool) -> Result<Option<ReleaseInfo>, Error> {
 
             // Pick the first release (MB returns them in relevance order).
             let best = &releases[0];
-            let info = parse_release(best, total);
+            let info = parse_release(best, &best.media, total);
 
             if debug {
                 eprintln!("MusicBrainz: matched \"{}\" by \"{}\" ({})",
@@ -193,9 +202,92 @@ pub fn lookup(discid: &str, debug: bool) -> Result<Option<ReleaseInfo>, Error> {
     }
 }
 
+/// Extract a release MBID from a bare UUID or a MusicBrainz release URL
+/// (e.g. `https://musicbrainz.org/release/bc8d517f-6ce0-4e45-b6d8-af0f29cdd1ea`).
+pub fn parse_release_id(input: &str) -> Result<String, Error> {
+    let s = input.trim();
+    let candidate = match s.find("/release/") {
+        Some(i) => s[i + "/release/".len()..].split(['/', '?', '#']).next().unwrap_or(""),
+        None => s,
+    };
+    let c = candidate.to_ascii_lowercase();
+    let b = c.as_bytes();
+    let shape_ok = b.len() == 36
+        && [8usize, 13, 18, 23].iter().all(|&i| b[i] == b'-')
+        && b.iter().enumerate().all(|(i, ch)| [8usize, 13, 18, 23].contains(&i) || ch.is_ascii_hexdigit());
+    if shape_ok {
+        Ok(c)
+    } else {
+        Err(Error::validation(format!(
+            "'{}' is not a MusicBrainz release ID or URL (expected e.g. bc8d517f-6ce0-4e45-b6d8-af0f29cdd1ea)",
+            s
+        )))
+    }
+}
+
+/// Fetch a specific release by MBID, for when the DiscID lookup finds nothing (or the
+/// wrong release).
+///
+/// A release can hold several discs. The medium used for the track list is the one
+/// carrying `discid`, otherwise the one whose track count equals `audio_tracks`.
+/// Returns the release plus an optional warning (e.g. the track count doesn't match).
+pub fn lookup_release(
+    mbid: &str,
+    discid: Option<&str>,
+    audio_tracks: Option<usize>,
+    debug: bool,
+) -> Result<(ReleaseInfo, Option<String>), Error> {
+    let url = format!("{}/release/{}?inc=recordings+artist-credits+discids&fmt=json", MB_API, mbid);
+    if debug { eprintln!("MusicBrainz release lookup: {}", url); }
+
+    let release: MbRelease = match ureq::get(&url).set("User-Agent", USER_AGENT).call() {
+        Ok(resp) => resp.into_json().map_err(|e| Error::backend(format!("MusicBrainz response parse error: {}", e)))?,
+        Err(ureq::Error::Status(404, _)) => {
+            return Err(Error::validation(format!("MusicBrainz has no release with ID {}", mbid)));
+        }
+        Err(ureq::Error::Status(code, _)) => {
+            return Err(Error::backend(format!("MusicBrainz returned HTTP {} for release {}", code, mbid)));
+        }
+        Err(e) => return Err(Error::backend(format!("Could not reach MusicBrainz: {}", e))),
+    };
+
+    if release.media.is_empty() {
+        return Err(Error::validation("That MusicBrainz release has no track list"));
+    }
+
+    let by_discid = discid.and_then(|d| release.media.iter().position(|m| m.discs.iter().any(|x| x.id == d)));
+    let by_count = audio_tracks.and_then(|n| release.media.iter().position(|m| m.tracks.len() == n));
+
+    let (idx, warning) = match (by_discid, by_count) {
+        (Some(i), _) => (i, None),
+        (None, Some(i)) => (i, None),
+        (None, None) if release.media.len() == 1 => {
+            let have = release.media[0].tracks.len();
+            let warning = audio_tracks.filter(|&n| n != have).map(|n| format!(
+                "This release lists {have} tracks but the disc has {n} audio tracks — check it is the right release."
+            ));
+            (0, warning)
+        }
+        (None, None) => {
+            let counts: Vec<String> = release.media.iter().map(|m| m.tracks.len().to_string()).collect();
+            return Err(Error::validation(format!(
+                "That release has {} discs with {} tracks, but the disc has {} audio tracks — none of them match",
+                release.media.len(), counts.join("/"), audio_tracks.unwrap_or(0)
+            )));
+        }
+    };
+
+    let mut info = parse_release(&release, std::slice::from_ref(&release.media[idx]), 1);
+    if release.media.len() > 1 && debug {
+        eprintln!("MusicBrainz: release has {} discs — using disc {}", release.media.len(), idx + 1);
+    }
+    info.total_releases = 1;
+    Ok((info, warning))
+}
+
 // ── Response parsing helpers ──────────────────────────────────────────────────
 
-fn parse_release(r: &MbRelease, total_releases: usize) -> ReleaseInfo {
+fn parse_release(r: &MbRelease, media: &[MbMedia], total_releases: usize) -> ReleaseInfo {
     let album_artist = artist_name(&r.artist_credit);
     let mb_artist_id = r.artist_credit.first()
         .and_then(|c| c.artist.as_ref())
@@ -209,10 +301,10 @@ fn parse_release(r: &MbRelease, total_releases: usize) -> ReleaseInfo {
 
     // Flatten all tracks from all media (for a single-disc release there's one medium).
     let mut tracks: Vec<MbTrackInfo> = Vec::new();
-    for medium in &r.media {
+    for medium in media {
         for t in &medium.tracks {
-            let num = t.number.as_deref()
-                .and_then(|n| n.parse::<usize>().ok())
+            let num = t.position
+                .or_else(|| t.number.as_deref().and_then(|n| n.parse::<usize>().ok()))
                 .unwrap_or(tracks.len() + 1);
 
             // Track-level artist: prefer recording artist-credit, then track-level, then album artist.
@@ -263,4 +355,31 @@ fn artist_name(credits: &[MbArtistCredit]) -> String {
             .unwrap_or("");
         format!("{}{}", name, c.joinphrase)
     }).collect::<String>().trim().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_release_ids_and_urls() {
+        let id = "bc8d517f-6ce0-4e45-b6d8-af0f29cdd1ea";
+        assert_eq!(parse_release_id(id).unwrap(), id);
+        assert_eq!(parse_release_id(&format!("  {}  ", id.to_uppercase())).unwrap(), id);
+        assert_eq!(parse_release_id(&format!("https://musicbrainz.org/release/{id}")).unwrap(), id);
+        assert_eq!(parse_release_id(&format!("https://musicbrainz.org/release/{id}/disc/1?x=1#y")).unwrap(), id);
+        assert!(parse_release_id("https://musicbrainz.org/release-group/bc8d517f-6ce0-4e45-b6d8-af0f29cdd1ea").is_err());
+        assert!(parse_release_id("not-an-id").is_err());
+        assert!(parse_release_id("bc8d517f-6ce0-4e45-b6d8-af0f29cdd1eZ").is_err());
+    }
+
+    /// Hits the real MusicBrainz API; run with `cargo test -- --ignored`.
+    #[test]
+    #[ignore]
+    fn live_release_lookup() {
+        let (r, warning) = lookup_release("bc8d517f-6ce0-4e45-b6d8-af0f29cdd1ea", None, None, false).unwrap();
+        println!("{} — {} ({:?}) {} tracks, warning {:?}", r.album, r.album_artist, r.year, r.tracks.len(), warning);
+        assert!(!r.tracks.is_empty());
+        assert_eq!(r.tracks[0].number, 1);
+    }
 }

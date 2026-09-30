@@ -177,7 +177,7 @@ pre.json { background: var(--bg); border: 1px solid var(--line); border-radius: 
           </label>
           <input type="text" id="device-custom" placeholder="/dev/sr1" class="hidden" style="align-self:flex-end">
           <label class="field hidden" id="scenario-wrap">Mock disc
-            <select id="scenario"><option value="redbook">Audio CD</option><option value="bluebook">Enhanced CD (Blue Book)</option><option value="data">Data CD</option><option value="none">No disc</option></select>
+            <select id="scenario"><option value="redbook">Audio CD</option><option value="unmatched">Audio CD — not on MusicBrainz</option><option value="bluebook">Enhanced CD (Blue Book)</option><option value="data">Data CD</option><option value="none">No disc</option></select>
           </label>
           <div class="row" style="align-self:flex-end">
             <button class="btn primary" id="scan">Scan disc</button>
@@ -490,7 +490,7 @@ function trackRows(session) {
   return session.tracks.map(t => `<tr>
     <td>${t.number}</td>
     <td>${t.kind === "audio" ? "🎵 Audio" : "💾 Data"}</td>
-    <td data-tn="${t.number}">${esc(t.cd_text?.title || "")}${t.cd_text?.artist ? ` <span class="muted">— ${esc(t.cd_text.artist)}</span>` : ""}</td>
+    <td data-tn="${t.number}" data-orig="${esc(t.cd_text?.title || "")}">${esc(t.cd_text?.title || "")}${t.cd_text?.artist ? ` <span class="muted">— ${esc(t.cd_text.artist)}</span>` : ""}</td>
     <td class="num">${fmtDur(t.duration_secs)}</td>
     <td class="num mono muted">${t.lba_start}–${t.lba_end}</td></tr>`).join("");
 }
@@ -522,29 +522,81 @@ function renderDisc(info) {
       ${sessions}
     </div>
     <div id="mb-card"></div>`;
-  if (info.discid) lookupMb(info.discid);
+  MB.tracks = audioTracks.length; MB.over = null; MB.error = ""; MB.auto = null;
+  MB.discid = info.discid || null;
+  if (info.discid) lookupMb(info.discid); else if (audioTracks.length) renderMb();
 }
 
+// MusicBrainz state: the automatic DiscID match and an optional user-chosen release.
+const MB = { discid: null, tracks: 0, auto: undefined, over: null, error: "" };
+
 async function lookupMb(discid) {
-  const card = $("#mb-card");
-  if ($("#rip-nomb").checked) { card.innerHTML = ""; return; }
-  card.innerHTML = `<div class="card muted">Looking up metadata on MusicBrainz…</div>`;
+  MB.discid = discid; MB.over = null; MB.error = ""; MB.auto = undefined;
+  renderMb();
+  if ($("#rip-nomb").checked) { MB.auto = null; renderMb(); return; }
+  try { MB.auto = await api("/api/musicbrainz?discid=" + encodeURIComponent(discid)); }
+  catch (e) { MB.auto = null; MB.error = e.message; }
+  renderMb();
+}
+
+async function applyMbOverride() {
+  const input = $("#mb-override-input").value.trim();
+  if (!input) return;
+  const btn = $("#mb-override-go"); btn.disabled = true; btn.textContent = "Looking up…";
+  const q = new URLSearchParams({ release: input, tracks: MB.tracks });
+  if (MB.discid) q.set("discid", MB.discid);
   try {
-    const r = await api("/api/musicbrainz?discid=" + encodeURIComponent(discid));
-    if (!r) { card.innerHTML = `<div class="card"><b>Not found on MusicBrainz</b><div class="muted">Tags will come from CD-Text or default to track numbers.</div></div>`; return; }
-    r.tracks.forEach(t => { const c = $(`td[data-tn="${t.number}"]`); if (c && !c.textContent.trim()) c.textContent = t.title; });
-    card.innerHTML = `<div class="card"><div class="mb">
+    const r = await api("/api/musicbrainz?" + q);
+    MB.over = { input, release: r }; MB.error = "";
+  } catch (e) { MB.error = e.message; }
+  renderMb();
+}
+
+function renderMb() {
+  const card = $("#mb-card");
+  if (!card) return;
+  const r = MB.over?.release || (MB.auto && MB.auto.tracks ? MB.auto : null);
+  const chosen = !!MB.over;
+
+  // Track titles in the disc table follow whichever release is in use.
+  $$("td[data-tn]").forEach(c => {
+    const t = r?.tracks.find(t => t.number === +c.dataset.tn);
+    c.textContent = t ? t.title : c.dataset.orig || "";
+  });
+
+  let top = "";
+  if (r) {
+    top = `<div class="mb">
       <img class="cover" alt="" src="/api/cover?mbid=${encodeURIComponent(r.mb_release_id)}" onerror="this.outerHTML='<div class=&quot;cover ph&quot;>♪</div>'">
       <div class="grow">
-        <div class="muted">MusicBrainz match${r.total_releases > 1 ? ` <span class="badge">${r.total_releases} releases share this DiscID</span>` : ""}</div>
+        <div class="muted">${chosen ? `<span class="badge accent">Release you chose</span>` : "MusicBrainz match"}${!chosen && r.total_releases > 1 ? ` <span class="badge">${r.total_releases} releases share this DiscID</span>` : ""}</div>
         <h1>${esc(r.album)}</h1>
         <div>${esc(r.album_artist)}${r.year ? ` <span class="muted">· ${esc(r.year)}</span>` : ""}</div>
         <ol style="margin:10px 0 0;padding-left:22px;columns:2;column-gap:28px">${r.tracks.map(t => `<li>${esc(t.title)}</li>`).join("")}</ol>
+        ${chosen && r.warning ? `<div class="notice warn" style="margin-top:10px">${esc(r.warning)}</div>` : ""}
         <div class="muted" style="margin-top:8px">Rips will be saved to <span class="mono">${esc(r.album_artist)} - ${esc(r.album)}${r.year ? ` (${esc(r.year)})` : ""}/</span></div>
-      </div></div></div>`;
-  } catch (e) {
-    card.innerHTML = `<div class="card muted">MusicBrainz lookup failed: ${esc(e.message)}</div>`;
+      </div></div>`;
+  } else if (MB.auto === undefined) {
+    top = `<div class="muted">Looking up metadata on MusicBrainz…</div>`;
+  } else {
+    top = `<b>Not found on MusicBrainz by DiscID</b><div class="muted">Tags will come from CD-Text or default to track numbers — unless you pick the release yourself below.</div>`;
   }
+
+  const open = (!r || chosen || MB.error) ? "open" : "";
+  card.innerHTML = `<div class="card">${top}
+    <details ${open} style="margin-top:${r ? 14 : 12}px"><summary class="muted" style="cursor:pointer">${chosen ? "Change the MusicBrainz release" : r ? "Wrong release? Use a different one" : "Use a MusicBrainz release I've found"}</summary>
+      <div class="row" style="margin-top:10px">
+        <input type="text" id="mb-override-input" class="grow" placeholder="Release ID or URL, e.g. https://musicbrainz.org/release/bc8d517f-6ce0-4e45-b6d8-af0f29cdd1ea" value="${esc(MB.over?.input || "")}">
+        <button class="btn primary" id="mb-override-go">Use this release</button>
+        ${chosen ? `<button class="btn" id="mb-override-clear">Clear</button>` : ""}
+      </div>
+      ${MB.error ? `<div class="notice err" style="margin-top:10px">${esc(MB.error)}</div>` : ""}
+      <div class="muted" style="margin-top:8px">Tags, cover art and the folder name will come from this release instead of the DiscID lookup.</div>
+    </details></div>`;
+  $("#mb-override-go").onclick = applyMbOverride;
+  $("#mb-override-input").onkeydown = e => { if (e.key === "Enter") applyMbOverride(); };
+  const clear = $("#mb-override-clear");
+  if (clear) clear.onclick = () => { MB.over = null; MB.error = ""; renderMb(); };
 }
 
 async function scan() {
@@ -576,7 +628,7 @@ async function startRip() {
   if ($('input[name=dest]:checked').value === "custom" && !folder) return toast("Enter a folder name or choose auto-naming", "err");
   const body = {
     device: selectedDevice(), format: $("#rip-format").value, archive: $("#rip-archive").checked,
-    no_musicbrainz: $("#rip-nomb").checked, no_accuraterip: $("#rip-noar").checked, debug: $("#rip-debug").checked, folder: folder || null,
+    no_musicbrainz: $("#rip-nomb").checked, mb_release: MB.over ? MB.over.input : null, no_accuraterip: $("#rip-noar").checked, debug: $("#rip-debug").checked, folder: folder || null,
   };
   try {
     const job = await api("/api/jobs/rip", { body });

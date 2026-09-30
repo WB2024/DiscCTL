@@ -33,6 +33,11 @@ pub struct RipArgs {
     #[arg(long)]
     pub no_musicbrainz: bool,
 
+    /// Use this MusicBrainz release for tags instead of the DiscID lookup.
+    /// Accepts a release ID or URL, e.g. bc8d517f-6ce0-4e45-b6d8-af0f29cdd1ea
+    #[arg(long, value_name = "ID_OR_URL", conflicts_with = "no_musicbrainz")]
+    pub mb_release: Option<String>,
+
     /// Skip the AccurateRip check (for offline use)
     #[arg(long)]
     pub no_accuraterip: bool,
@@ -74,6 +79,7 @@ pub fn run(args: RipArgs) -> Result<(), Error> {
         debug:          args.debug,
         progress_json:  args.progress_json,
         no_musicbrainz: args.no_musicbrainz,
+        mb_release:     args.mb_release,
         no_accuraterip: args.no_accuraterip,
     };
 

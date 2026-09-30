@@ -23,6 +23,8 @@ pub struct RipOptions {
     pub debug: bool,
     pub progress_json: bool,
     pub no_musicbrainz: bool,
+    /// Use this MusicBrainz release (ID or URL) instead of looking the disc up by DiscID
+    pub mb_release: Option<String>,
     /// Skip the AccurateRip database check
     pub no_accuraterip: bool,
 }
@@ -49,7 +51,27 @@ pub fn rip(opts: &RipOptions) -> Result<(), Error> {
     }
 
     // Step 2: MusicBrainz lookup (once — used for both folder naming and tags)
-    let mb: Option<ReleaseInfo> = if !opts.no_musicbrainz {
+    let mb: Option<ReleaseInfo> = if let Some(ref wanted) = opts.mb_release {
+        // The user picked the release explicitly: no DiscID guesswork, and no silent fallback.
+        let mbid = musicbrainz::parse_release_id(wanted)?;
+        if opts.progress_json { emit_step("Fetching the chosen MusicBrainz release..."); }
+        else { eprintln!("Fetching MusicBrainz release {}...", mbid); }
+
+        let audio_tracks = info.sessions.iter().flat_map(|s| s.tracks.iter())
+            .filter(|t| t.kind == TrackKind::Audio).count();
+        let (release, warning) = musicbrainz::lookup_release(
+            &mbid, info.discid.as_deref(), Some(audio_tracks), opts.debug,
+        )?;
+        if opts.progress_json {
+            emit_step(&format!("Using: {} — {}", release.album, release.album_artist));
+            if let Some(ref w) = warning { emit_step(&format!("Warning: {}", w)); }
+        } else {
+            eprintln!("Using: \"{}\" by \"{}\"{}", release.album, release.album_artist,
+                release.year.as_deref().map(|y| format!(" ({})", y)).unwrap_or_default());
+            if let Some(ref w) = warning { eprintln!("Warning: {}", w); }
+        }
+        Some(release)
+    } else if !opts.no_musicbrainz {
         if let Some(ref discid) = info.discid {
             if opts.progress_json { emit_step("Looking up metadata on MusicBrainz..."); }
             else { eprintln!("Looking up DiscID on MusicBrainz..."); }

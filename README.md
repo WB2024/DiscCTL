@@ -177,6 +177,7 @@ Format constraints are enforced **before** any hardware is touched, so you get a
 - **MusicBrainz metadata** — computes the MusicBrainz DiscID from the TOC and queries the MusicBrainz API to fetch album title, artist, release year, and per-track titles and recording IDs; embedded as tags in every encoded file
 - **Cover art** — downloads the front cover image from the [Cover Art Archive](https://coverartarchive.org) and saves it as `cover.jpg` (or `cover.png`) in the output directory; the image is also embedded directly into each audio file
 - **Auto-named output folder** — `--dir` creates `Artist - Album (Year)/` automatically from metadata; no need to name it yourself
+- **Manual release override** — if the DiscID isn't matched (or matches the wrong edition), pass `--mb-release <id or URL>` or paste it into the web UI and preview it first
 - **CD-Text fallback** — if the disc is not in MusicBrainz, CD-Text is read via cdrdao and used for tags instead
 - **Blue Book session-aware ripping** — extracts audio and data sessions independently into `audio/` and `data/` subdirectories
 - **Data session extraction** — xorriso extracts the ISO filesystem as a directory tree; ISO image output also supported
@@ -214,6 +215,10 @@ Want to look around first? `rustydisc serve --mock` simulates a drive, with no h
 **Disc & Rip** — scan the disc, see every session and track, get the MusicBrainz match and cover art, then rip with the format and options you choose. The rip destination is named from the metadata (`Artist - Album (Year)/`) unless you pick a name.
 
 <p align="center"><img src="Images/Screenshots/disc-scan.png" alt="Disc scan with MusicBrainz match" width="820"></p>
+
+**Wrong or missing MusicBrainz match?** Paste a release ID or URL from musicbrainz.org and preview it before you rip. Its tags, cover art and folder name replace the DiscID lookup.
+
+<p align="center"><img src="Images/Screenshots/musicbrainz-override.png" alt="Choosing a MusicBrainz release manually" width="820"></p>
 
 **Live progress** — jobs run on the server and stream their progress to every open browser. Close the tab and come back later; the job keeps going. A banner follows you around the app while the drive is busy. When the rip finishes its AccurateRip check, a per-track result table appears (the simulated rip in this screenshot shows a drive-offset match).
 
@@ -254,6 +259,8 @@ docker compose up -d --build     # http://<host>:8080
 ```
 
 The image bundles everything RustyDisc needs (`cdparanoia`, `cdrdao`, `xorriso`, `wodim`, `ffmpeg`, `eject`). `docker-compose.yml` passes `/dev/sr0` (and `/dev/sg0`, needed for burning) into the container, adds the `SYS_RAWIO` capability, and mounts `./rips` (your output) and `./media` (burn sources, read-only). Edit the device names and volume paths to match your machine.
+
+**Prebuilt image:** `wb20244/rustydisc` on Docker Hub. [`compose.dockge.yaml`](compose.dockge.yaml) is a ready-to-paste stack for Dockge (or any Compose host) that uses it instead of building.
 
 **On Proxmox:** Docker usually runs inside a VM or LXC, so pass the drive into that guest first. For a VM, use SATA or USB passthrough; for an LXC, allow and bind the `/dev/sr0` and `/dev/sg*` device nodes.
 
@@ -480,6 +487,7 @@ rustydisc rip [OPTIONS]
 | `--output <dir>` | Explicit output path — use this exact directory name |
 | `--format <fmt>` | Audio format: `wav`, `flac`, `alac`, `aiff`, `ogg`, `mp3`, `opus` (default: `flac`) |
 | `--archive` | Archive mode: store in `audio/` + `metadata/` subdirs; add `musicbrainz.json` + `checksums.json` |
+| `--mb-release <id\|url>` | Use this MusicBrainz release for tags, cover art and folder name instead of the DiscID lookup — see [Choosing the MusicBrainz release](#choosing-the-musicbrainz-release) |
 | `--no-musicbrainz` | Skip MusicBrainz lookup (for offline use or discs not in the database) |
 | `--no-accuraterip` | Skip the AccurateRip database check (for offline use) |
 | `--debug` | Verbose output including MusicBrainz and AccurateRip URLs, ffmpeg commands |
@@ -522,6 +530,17 @@ Artist - Album (Year)/
 ```
 
 **Metadata priority:** MusicBrainz > CD-Text > auto-generated defaults.
+
+#### Choosing the MusicBrainz release
+
+Discs are matched by DiscID, but plenty of pressings aren't attached to their MusicBrainz release yet (and some DiscIDs match the wrong edition). When that happens, look the release up on musicbrainz.org yourself and hand RustyDisc its ID or URL:
+
+```bash
+rustydisc rip --dir ~/rips --mb-release https://musicbrainz.org/release/bc8d517f-6ce0-4e45-b6d8-af0f29cdd1ea
+rustydisc rip --dir ~/rips --mb-release bc8d517f-6ce0-4e45-b6d8-af0f29cdd1ea
+```
+
+The release's title, artist, year, track titles, MusicBrainz IDs and cover art are used exactly as if the DiscID lookup had found it. For multi-disc releases the matching disc is chosen by DiscID, or by track count. If the release's track count doesn't match the disc you get a warning, and if you named a release that doesn't exist (or a multi-disc release with no matching disc) the rip stops before reading the disc rather than silently falling back. In the web UI, paste the ID or URL into *Use a MusicBrainz release I've found* on the Disc & Rip page to preview it before ripping.
 
 **Cover art embedding** is supported for FLAC, ALAC, MP3, and OGG Vorbis. The cover is also always saved as `cover.jpg` / `cover.png` in the output directory regardless of format.
 
