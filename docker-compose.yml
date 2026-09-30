@@ -16,6 +16,7 @@ services:
     volumes:
       - ./rips:/rips       # ripped albums land here (point at your music share)
       - ./media:/media:ro  # source files for burning
+      - ./config:/config   # settings (cover art sources, fanart.tv key, defaults)
     environment:
       RUSTYDISC_DEVICE: /dev/sr0
       # RUSTYDISC_MOCK: "1"   # simulate a drive, for trying the UI without hardware

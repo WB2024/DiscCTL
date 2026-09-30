@@ -56,7 +56,7 @@ main { padding: 22px 28px 60px; max-width: 1100px; width: 100%; }
 .btn.primary:hover:not(:disabled) { background: var(--accent2); border-color: var(--accent2); }
 .btn.danger { border-color: color-mix(in srgb, var(--err) 60%, var(--line)); color: var(--err); }
 .btn.small { padding: 3px 9px; font-size: 12.5px; }
-input[type=text], input[type=search], select, textarea { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; min-width: 0; }
+input[type=text], input[type=search], input[type=password], select, textarea { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; min-width: 0; }
 input:focus, select:focus, textarea:focus { outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent); outline-offset: 0; }
 textarea { width: 100%; font-family: var(--mono); font-size: 12.5px; resize: vertical; }
 label.field { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--muted); }
@@ -159,11 +159,12 @@ pre.json { background: var(--bg); border: 1px solid var(--line); border-radius: 
       RustyDisc
     </div>
     <nav id="nav">
-      <button data-page="disc">💿 Disc &amp; Rip</button>
+      <button data-page="disc">💿 Rip</button>
       <button data-page="burn">🔥 Burn</button>
       <button data-page="library">📚 Library</button>
       <button data-page="jobs">⚙️ Jobs <span class="count hidden" id="jobcount"></span></button>
       <button data-page="tools">🧰 Tools</button>
+      <button data-page="settings">🎛️ Settings</button>
     </nav>
     <div class="side-foot"><span id="ver"></span><br><span id="mockflag" class="badge warn hidden">MOCK MODE</span></div>
   </aside>
@@ -176,9 +177,9 @@ pre.json { background: var(--bg); border: 1px solid var(--line); border-radius: 
       <span class="muted">View →</span>
     </div>
 
-    <!-- ── Disc & Rip ─────────────────────────────── -->
+    <!-- ── Rip ─────────────────────────────── -->
     <section class="page" id="page-disc">
-      <div class="page-head"><h1>Disc &amp; Rip</h1><div class="muted">Inspect the disc in the drive and rip it to files.</div></div>
+      <div class="page-head"><h1>Rip</h1><div class="muted">Inspect the disc in the drive and rip it to files.</div></div>
 
       <div class="card">
         <div class="row">
@@ -332,6 +333,46 @@ pre.json { background: var(--bg); border: 1px solid var(--line); border-radius: 
       <div class="card"><h2>Required tools</h2><div id="deps"></div></div>
       <div class="card"><h2>Server</h2><div id="sysinfo" class="mono"></div></div>
     </section>
+    <!-- ── Settings ───────────────────────────────── -->
+    <section class="page" id="page-settings">
+      <div class="page-head"><h1>Settings</h1><div class="muted">Tune how RustyDisc behaves. Saved on the server in <span class="mono" id="cfg-file"></span>.</div></div>
+
+      <div class="card">
+        <h2>Cover art</h2>
+        <div class="muted" style="margin-bottom:10px">Sources are tried from the top; the first one that has an image is used. Tick a source to enable it and use the arrows to set the order.</div>
+        <div class="filelist" id="cover-sources"></div>
+
+        <label class="field" style="max-width:560px;margin-top:16px">fanart.tv API key
+          <div class="row" style="flex-wrap:nowrap">
+            <input type="password" id="fanart-key" class="grow" autocomplete="off" spellcheck="false" placeholder="Paste your fanart.tv API key">
+            <button class="btn" id="fanart-test">Test</button>
+            <button class="btn" id="fanart-remove">Remove</button>
+          </div>
+        </label>
+        <div class="muted" id="fanart-msg" style="margin-top:6px">A free key is available at <a href="https://fanart.tv/get-an-api-key/" target="_blank" rel="noopener">fanart.tv/get-an-api-key</a>. It is stored on the server and never shown again.</div>
+
+        <div style="display:flex;flex-direction:column;gap:12px;margin-top:18px">
+          <label class="check"><input type="checkbox" id="cover-save"><span>Save the cover next to the tracks<small><span class="mono">cover.jpg</span> or <span class="mono">cover.png</span> in the album folder</small></span></label>
+          <label class="check"><input type="checkbox" id="cover-embed"><span>Embed the cover in each audio file<small>FLAC, MP3, ALAC and OGG. AIFF, Opus and WAV files can't carry embedded art.</small></span></label>
+        </div>
+        <div class="notice warn hidden" id="cover-warn" style="margin-top:14px"></div>
+      </div>
+
+      <div class="card">
+        <h2>Rip defaults</h2>
+        <div class="muted" style="margin-bottom:12px">These pre-fill the options on the Rip page. You can still change them for each rip.</div>
+        <div class="grid2">
+          <label class="field">Audio format<select id="set-format"></select></label>
+          <div style="display:flex;flex-direction:column;gap:12px">
+            <label class="check"><input type="checkbox" id="set-archive"><span>Archive mode</span></label>
+            <label class="check"><input type="checkbox" id="set-nomb"><span>Skip the MusicBrainz lookup</span></label>
+            <label class="check"><input type="checkbox" id="set-noar"><span>Skip the AccurateRip check</span></label>
+          </div>
+        </div>
+      </div>
+
+      <div class="row"><button class="btn primary" id="settings-save">Save settings</button><span class="muted" id="settings-status"></span></div>
+    </section>
   </main>
 </div>
 <div id="toasts"></div>
@@ -369,7 +410,7 @@ const confirmBox = (msg) => window.confirm(msg);
 
 // ── Global state / navigation ───────────────────────────────────────────────
 let STATUS = null;
-const pages = ["disc", "burn", "library", "jobs", "tools"];
+const pages = ["disc", "burn", "library", "jobs", "tools", "settings"];
 
 function showPage(name) {
   if (!pages.includes(name)) name = "disc";
@@ -379,9 +420,21 @@ function showPage(name) {
   if (name === "library") loadLibrary();
   if (name === "jobs") loadJobs();
   if (name === "tools") renderTools();
+  if (name === "settings") loadSettings();
 }
 window.addEventListener("hashchange", () => showPage(location.hash.slice(1)));
 $("#nav").addEventListener("click", e => { const b = e.target.closest("button"); if (b) showPage(b.dataset.page); });
+
+// ── Cover art note shown in the job panel ──────────────────────────────────
+function coverNote(c) {
+  if (!c) return "";
+  const root = (STATUS.rips_dir || "").replace(/\/$/, "");
+  const rel = c.file && c.file.startsWith(root + "/") ? c.file.slice(root.length + 1) : null;
+  const how = [c.file ? "saved as a cover file" : null, c.embedded ? "embedded in the tracks" : null].filter(Boolean).join(" and ") || "not stored";
+  return `<div class="notice" style="margin-top:12px;display:flex;gap:14px;align-items:center">
+    ${rel ? `<img alt="" style="width:72px;height:72px;border-radius:6px;object-fit:cover" src="/files/rips/${encPath(rel)}">` : ""}
+    <div><b>Cover art</b> from ${esc(c.label || c.source)}<div class="muted">${esc(how)}</div></div></div>`;
+}
 
 // ── AccurateRip report ─────────────────────────────────────────────────────
 function arTable(r) {
@@ -408,6 +461,7 @@ function jobPanel(container, jobId, { onEnd } = {}) {
       <div class="bar"><i class="jp-bar"></i></div>
       <div class="stepline jp-step muted"></div>
       <div class="notice warn jp-input hidden" style="margin-top:10px"><div class="row"><span class="grow jp-input-msg"></span><button class="btn primary small jp-continue">Continue</button></div></div>
+      <div class="jp-cover"></div>
       <div class="jp-result"></div>
       <div class="notice err jp-error hidden" style="margin-top:10px"></div>
       <pre class="log jp-log"></pre>
@@ -438,7 +492,10 @@ function jobPanel(container, jobId, { onEnd } = {}) {
       case "log": addLog(ev.msg); break;
       case "input": q(".jp-input-msg").textContent = ev.msg; q(".jp-input").classList.remove("hidden"); break;
       case "status": setStatus(ev.status); break;
-      case "result": if (ev.name === "accuraterip") q(".jp-result").innerHTML = arTable(ev.data); break;
+      case "result":
+        if (ev.name === "accuraterip") q(".jp-result").innerHTML = arTable(ev.data);
+        if (ev.name === "cover") q(".jp-cover").innerHTML = coverNote(ev.data);
+        break;
       case "error": { const e = q(".jp-error"); e.classList.remove("hidden"); e.innerHTML = `<b>${esc(ev.error)}</b> — ${esc(ev.message).replace(/\n/g, "<br>")}${ev.recoverable ? "" : ""}`; break; }
     }
   };
@@ -489,7 +546,7 @@ async function refreshJobs() {
 $("#banner").onclick = () => { const j = lastJobs.find(j => !["done", "failed", "cancelled"].includes(j.status)); showPage("jobs"); if (j) openJob(j.id); };
 setInterval(refreshJobs, 2000);
 
-// ── Disc & Rip page ─────────────────────────────────────────────────────────
+// ── Rip page ─────────────────────────────────────────────────────────
 let CURRENT_DISC = null;
 
 function selectedDevice() {
@@ -547,6 +604,15 @@ function renderDisc(info) {
   if (info.discid) lookupMb(info.discid); else if (audioTracks.length) renderMb();
 }
 
+const coverQuery = r => `mbid=${encodeURIComponent(r.mb_release_id)}${r.mb_release_group_id ? "&rg=" + encodeURIComponent(r.mb_release_group_id) : ""}`;
+async function showCoverSource(r, sel) {
+  try {
+    const i = await api("/api/cover/info?" + coverQuery(r));
+    const el = $(sel);
+    if (el) el.textContent = i.source ? "Cover: " + i.label : "No cover found";
+  } catch {}
+}
+
 // MusicBrainz state: the automatic DiscID match and an optional user-chosen release.
 const MB = { discid: null, tracks: 0, auto: undefined, over: null, error: "" };
 
@@ -587,7 +653,7 @@ function renderMb() {
   let top = "";
   if (r) {
     top = `<div class="mb">
-      <img class="cover" alt="" src="/api/cover?mbid=${encodeURIComponent(r.mb_release_id)}" onerror="this.outerHTML='<div class=&quot;cover ph&quot;>♪</div>'">
+      <div style="flex:none;width:140px"><img class="cover" alt="" src="/api/cover?${coverQuery(r)}" onerror="this.outerHTML='<div class=&quot;cover ph&quot;>♪</div>'"><div class="muted" id="mb-cover-src" style="font-size:12px;margin-top:4px;text-align:center"></div></div>
       <div class="grow">
         <div class="muted">${chosen ? `<span class="badge accent">Release you chose</span>` : "MusicBrainz match"}${!chosen && r.total_releases > 1 ? ` <span class="badge">${r.total_releases} releases share this DiscID</span>` : ""}</div>
         <h1>${esc(r.album)}</h1>
@@ -616,6 +682,7 @@ function renderMb() {
     </details></div>`;
   $("#mb-override-go").onclick = applyMbOverride;
   $("#mb-find").onclick = openMbSearch;
+  if (r) showCoverSource(r, "#mb-cover-src");
   $("#mb-override-input").onkeydown = e => { if (e.key === "Enter") applyMbOverride(); };
   const clear = $("#mb-override-clear");
   if (clear) clear.onclick = () => { MB.over = null; MB.error = ""; renderMb(); };
@@ -698,7 +765,7 @@ function openMbSearch() {
       const r = await api("/api/musicbrainz?" + p);
       if (selected !== id) return;
       box.innerHTML = `<div class="mb">
-        <img class="cover" style="width:120px;height:120px" alt="" src="/api/cover?mbid=${encodeURIComponent(id)}&size=500" onerror="this.outerHTML='<div class=&quot;cover ph&quot; style=&quot;width:120px;height:120px&quot;>♪</div>'">
+        <img class="cover" style="width:120px;height:120px" alt="" src="/api/cover?${coverQuery(r)}" onerror="this.outerHTML='<div class=&quot;cover ph&quot; style=&quot;width:120px;height:120px&quot;>♪</div>'">
         <div class="grow"><h1 style="margin-top:0">${esc(r.album)}</h1><div>${esc(r.album_artist)}${r.year ? ` <span class="muted">· ${esc(r.year)}</span>` : ""}</div>
           <div class="muted" style="margin-top:4px">${r.tracks.length} tracks · <a href="https://musicbrainz.org/release/${encodeURIComponent(id)}" target="_blank" rel="noopener">view on musicbrainz.org ↗</a></div></div></div>
         ${r.warning ? `<div class="notice warn" style="margin-top:12px">${esc(r.warning)}</div>` : ""}
@@ -1002,6 +1069,109 @@ async function runRecover(blank) {
   } catch (e) { toast(e.message, "err", 8000); }
 }
 
+// ── Settings ────────────────────────────────────────────────────────────────
+let SET = null, SETINFO = null, SRC_ORDER = [];
+
+function applyRipDefaults() {
+  if (!SET) return;
+  $("#rip-format").value = SET.rip_format;
+  $("#rip-archive").checked = SET.rip_archive;
+  $("#rip-nomb").checked = SET.rip_skip_musicbrainz;
+  $("#rip-noar").checked = SET.rip_skip_accuraterip;
+}
+
+async function loadSettings(quiet) {
+  try {
+    SETINFO = await api("/api/settings");
+    SET = SETINFO.settings;
+  } catch (e) { if (!quiet) toast(e.message, "err"); return; }
+  applyRipDefaults();
+  if (quiet) return;
+  renderSettings();
+}
+
+function renderSettings() {
+  $("#cfg-file").textContent = SETINFO.config_file;
+  $("#set-format").innerHTML = STATUS.formats.map(f => `<option value="${f}">${f.toUpperCase()}${f === "flac" ? " (lossless)" : ""}</option>`).join("");
+  $("#set-format").value = SET.rip_format;
+  $("#set-archive").checked = SET.rip_archive;
+  $("#set-nomb").checked = SET.rip_skip_musicbrainz;
+  $("#set-noar").checked = SET.rip_skip_accuraterip;
+  $("#cover-save").checked = SET.cover_save_file;
+  $("#cover-embed").checked = SET.cover_embed;
+  $("#fanart-key").value = "";
+  $("#fanart-key").placeholder = SET.fanart_api_key_set ? `Key saved (${SET.fanart_api_key_hint}) — paste a new one to replace it` : "Paste your fanart.tv API key";
+  $("#fanart-remove").classList.toggle("hidden", !SET.fanart_api_key_set);
+  // Enabled sources first, in order, then the rest.
+  const enabled = SET.cover_sources.slice();
+  SRC_ORDER = [...enabled, ...SETINFO.sources.map(s => s.id).filter(id => !enabled.includes(id))];
+  drawSources(new Set(enabled));
+  coverWarning();
+}
+
+function drawSources(enabled) {
+  const box = $("#cover-sources");
+  box.innerHTML = "";
+  SRC_ORDER.forEach((id, i) => {
+    const src = SETINFO.sources.find(s => s.id === id);
+    const on = enabled.has(id);
+    const row = document.createElement("div"); row.className = "item";
+    row.innerHTML = `<span class="muted" style="width:22px;text-align:right">${on ? [...enabled].indexOf(id) + 1 : "–"}</span>
+      <label class="check grow" style="align-items:center"><input type="checkbox" ${on ? "checked" : ""}><span>${esc(src.label)}${src.needs_key ? ` <small style="display:inline">· needs an API key</small>` : ""}</span></label>
+      <button class="btn small" data-a="up" ${i ? "" : "disabled"}>↑</button><button class="btn small" data-a="down" ${i < SRC_ORDER.length - 1 ? "" : "disabled"}>↓</button>`;
+    $("input", row).onchange = e => { e.target.checked ? enabled.add(id) : enabled.delete(id); drawSources(reorderSet(enabled)); coverWarning(); };
+    row.onclick = e => {
+      const a = e.target.dataset?.a; if (!a) return;
+      const j = a === "up" ? i - 1 : i + 1;
+      [SRC_ORDER[i], SRC_ORDER[j]] = [SRC_ORDER[j], SRC_ORDER[i]];
+      drawSources(reorderSet(enabled)); coverWarning();
+    };
+    box.append(row);
+  });
+  box.__enabled = enabled;
+}
+// Keep the enabled set's iteration order equal to the visible order.
+function reorderSet(enabled) { return new Set(SRC_ORDER.filter(id => enabled.has(id))); }
+function enabledSources() { return SRC_ORDER.filter(id => $("#cover-sources").__enabled.has(id)); }
+
+function coverWarning() {
+  const w = $("#cover-warn"), src = enabledSources();
+  const keyTyped = $("#fanart-key").value.trim() !== "";
+  let msg = "";
+  if (!$("#cover-save").checked && !$("#cover-embed").checked) msg = "Both options are off, so cover art won't be fetched at all.";
+  else if (!src.length) msg = "No source is enabled, so cover art won't be fetched.";
+  else if (src.includes("fanart") && !SET.fanart_api_key_set && !keyTyped) msg = "fanart.tv is enabled but no API key is set, so it will be skipped and the next source used.";
+  w.textContent = msg; w.classList.toggle("hidden", !msg);
+}
+
+async function saveSettings(extra = {}) {
+  const body = {
+    rip_format: $("#set-format").value, rip_archive: $("#set-archive").checked,
+    rip_skip_musicbrainz: $("#set-nomb").checked, rip_skip_accuraterip: $("#set-noar").checked,
+    cover_sources: enabledSources(), cover_save_file: $("#cover-save").checked, cover_embed: $("#cover-embed").checked,
+    ...extra,
+  };
+  const typed = $("#fanart-key").value.trim();
+  if (typed && !("fanart_api_key" in extra)) body.fanart_api_key = typed;
+  const st = $("#settings-status");
+  try {
+    const r = await api("/api/settings", { method: "PUT", body });
+    SET = r.settings; renderSettings(); applyRipDefaults();
+    st.textContent = "Saved."; setTimeout(() => { if (st.textContent === "Saved.") st.textContent = ""; }, 3000);
+    toast("Settings saved", "ok", 2500);
+  } catch (e) { st.textContent = ""; toast(e.message, "err", 8000); }
+}
+
+async function testFanart() {
+  const msg = $("#fanart-msg"), btn = $("#fanart-test");
+  btn.disabled = true; msg.textContent = "Checking with fanart.tv…";
+  try {
+    const r = await api("/api/settings/test-fanart", { body: { key: $("#fanart-key").value.trim() } });
+    msg.innerHTML = `<span class="${r.ok ? "ar-ok" : "ar-bad"}">${r.ok ? "✔" : "✖"} ${esc(r.message)}</span>`;
+  } catch (e) { msg.innerHTML = `<span class="ar-bad">✖ ${esc(e.message)}</span>`; }
+  finally { btn.disabled = false; }
+}
+
 // ── Wire up ─────────────────────────────────────────────────────────────────
 async function init() {
   try { STATUS = await api("/api/status"); }
@@ -1011,10 +1181,7 @@ async function init() {
   $("#scenario-wrap").classList.toggle("hidden", !STATUS.mock);
   $("#rips-dir").textContent = STATUS.rips_dir;
   $("#rip-format").innerHTML = STATUS.formats.map(f => `<option value="${f}">${f.toUpperCase()}${f === "flac" ? " (lossless)" : ""}</option>`).join("");
-  $("#rip-format").value = store.get("rip-format", "flac");
-  $("#rip-format").onchange = e => store.set("rip-format", e.target.value);
-  $("#rip-archive").checked = store.get("rip-archive", "") === "1";
-  $("#rip-archive").onchange = e => store.set("rip-archive", e.target.checked ? "1" : "");
+  await loadSettings(true);
   fillDevices();
 
   $("#scan").onclick = scan;
@@ -1036,6 +1203,11 @@ async function init() {
   renderBurn();
 
   $("#lib-refresh").onclick = loadLibrary;
+  $("#settings-save").onclick = () => saveSettings();
+  $("#fanart-test").onclick = testFanart;
+  $("#fanart-remove").onclick = () => { if (confirmBox("Remove the saved fanart.tv API key?")) saveSettings({ fanart_api_key: "" }); };
+  $("#fanart-key").oninput = coverWarning;
+  $("#cover-save").onchange = $("#cover-embed").onchange = coverWarning;
   $("#recover-check").onclick = () => runRecover(null);
   $("#recover-blank").onclick = () => { if (confirmBox("Erase the CD-RW in the drive? All data on it will be lost.")) runRecover($("#blank-mode").value); };
 

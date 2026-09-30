@@ -20,6 +20,10 @@ pub struct ServeArgs {
     #[arg(long, env = "RUSTYDISC_MEDIA_DIR", default_value = "./media")]
     pub media_dir: String,
 
+    /// Where settings are stored (mount a volume here in Docker)
+    #[arg(long, env = "RUSTYDISC_CONFIG_DIR", default_value = "./config")]
+    pub config_dir: String,
+
     /// Simulate the drive (fake disc, fake rips/burns) — for trying the UI without hardware
     #[arg(long, env = "RUSTYDISC_MOCK", value_parser = clap::builder::BoolishValueParser::new())]
     pub mock: bool,
@@ -31,6 +35,7 @@ pub fn run(args: ServeArgs) -> Result<(), Error> {
         device: args.device,
         rips_dir: std::path::PathBuf::from(args.rips_dir),
         media_dir: std::path::PathBuf::from(args.media_dir),
+        config_dir: std::path::PathBuf::from(args.config_dir),
         mock: args.mock,
     };
     std::fs::create_dir_all(&cfg.media_dir)?;

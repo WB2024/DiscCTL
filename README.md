@@ -175,7 +175,7 @@ Format constraints are enforced **before** any hardware is touched, so you get a
 - **Seven audio output formats** — WAV, FLAC (level 8 compression), ALAC, AIFF, OGG Vorbis, MP3 (VBR best), Opus (320 kbps)
 - **Automatic disc detection** — `rustydisc info` and `rustydisc rip` auto-detect Red Book, Data CD, and Blue Book without needing to specify the type
 - **MusicBrainz metadata** — computes the MusicBrainz DiscID from the TOC and queries the MusicBrainz API to fetch album title, artist, release year, and per-track titles and recording IDs; embedded as tags in every encoded file
-- **Cover art** — downloads the front cover image from the [Cover Art Archive](https://coverartarchive.org) and saves it as `cover.jpg` (or `cover.png`) in the output directory; the image is also embedded directly into each audio file
+- **Cover art** — from [fanart.tv](https://fanart.tv) (with your API key) and/or the [Cover Art Archive](https://coverartarchive.org), in the priority order you choose (e.g. fanart.tv first, Cover Art Archive as the fallback). Save it as `cover.jpg`/`cover.png`, embed it in every audio file, or both
 - **Auto-named output folder** — `--dir` creates `Artist - Album (Year)/` automatically from metadata; no need to name it yourself
 - **Polite to MusicBrainz** — every API call is spaced to stay under MusicBrainz's 1 request/second limit (concurrent requests queue rather than fail), and 429/503 responses are retried with back-off, honouring `Retry-After`
 - **Manual release override** — if the DiscID isn't matched (or matches the wrong edition), pass `--mb-release <id or URL>`, or in the web UI paste it or search MusicBrainz with the built-in **Find…** browser and preview the release first
@@ -213,7 +213,7 @@ Want to look around first? `rustydisc serve --mock` simulates a drive, with no h
 
 ### A tour
 
-**Disc & Rip** — scan the disc, see every session and track, get the MusicBrainz match and cover art, then rip with the format and options you choose. The rip destination is named from the metadata (`Artist - Album (Year)/`) unless you pick a name.
+**Rip** — scan the disc, see every session and track, get the MusicBrainz match and cover art, then rip with the format and options you choose. The rip destination is named from the metadata (`Artist - Album (Year)/`) unless you pick a name.
 
 <p align="center"><img src="Images/Screenshots/disc-scan.png" alt="Disc scan with MusicBrainz match" width="820"></p>
 
@@ -243,6 +243,10 @@ Want to look around first? `rustydisc serve --mock` simulates a drive, with no h
 
 <p align="center"><img src="Images/Screenshots/jobs.png" alt="Jobs history and log" width="820"></p>
 
+**Settings** — tune how RustyDisc behaves, and keep it across restarts. Choose where cover art comes from and in what order (fanart.tv with your API key, the Cover Art Archive, or both with one as the fallback), whether to save `cover.jpg`/`cover.png`, embed the art in each file, or both, and set the defaults for the Rip page.
+
+<p align="center"><img src="Images/Screenshots/settings.png" alt="Settings: cover art sources and defaults" width="820"></p>
+
 The **Tools** page covers disc recovery and CD-RW blanking, and checks that the external programs RustyDisc relies on are installed.
 
 | Flag | Env var | Default | |
@@ -251,6 +255,7 @@ The **Tools** page covers disc recovery and CD-RW blanking, and checks that the 
 | `--device` | `RUSTYDISC_DEVICE` | `/dev/sr0` | default drive |
 | `--rips-dir` | `RUSTYDISC_RIPS_DIR` | `./rips` | rip output + library |
 | `--media-dir` | `RUSTYDISC_MEDIA_DIR` | `./media` | burn sources |
+| `--config-dir` | `RUSTYDISC_CONFIG_DIR` | `./config` | where settings are stored |
 | `--mock` | `RUSTYDISC_MOCK` | off | simulate a drive (no hardware needed) |
 
 There is **no authentication** — run it on a trusted network or behind a reverse proxy. Only one job may use the drive at a time; long jobs stream live progress to every open browser.
@@ -261,7 +266,7 @@ There is **no authentication** — run it on a trusted network or behind a rever
 docker compose up -d --build     # http://<host>:8080
 ```
 
-The image bundles everything RustyDisc needs (`cdparanoia`, `cdrdao`, `xorriso`, `wodim`, `ffmpeg`, `eject`). `docker-compose.yml` passes `/dev/sr0` (and `/dev/sg0`, needed for burning) into the container, adds the `SYS_RAWIO` capability, and mounts `./rips` (your output) and `./media` (burn sources, read-only). Edit the device names and volume paths to match your machine.
+The image bundles everything RustyDisc needs (`cdparanoia`, `cdrdao`, `xorriso`, `wodim`, `ffmpeg`, `eject`). `docker-compose.yml` passes `/dev/sr0` (and `/dev/sg0`, needed for burning) into the container, adds the `SYS_RAWIO` capability, and mounts `./rips` (your output), `./media` (burn sources, read-only) and `./config` (your settings, including the fanart.tv key). Edit the device names and volume paths to match your machine.
 
 **Prebuilt image:** `wb20244/rustydisc` on Docker Hub. [`compose.dockge.yaml`](compose.dockge.yaml) is a ready-to-paste stack for Dockge (or any Compose host) that uses it instead of building.
 
@@ -492,6 +497,10 @@ rustydisc rip [OPTIONS]
 | `--archive` | Archive mode: store in `audio/` + `metadata/` subdirs; add `musicbrainz.json` + `checksums.json` |
 | `--mb-release <id\|url>` | Use this MusicBrainz release for tags, cover art and folder name instead of the DiscID lookup — see [Choosing the MusicBrainz release](#choosing-the-musicbrainz-release) |
 | `--no-musicbrainz` | Skip MusicBrainz lookup (for offline use or discs not in the database) |
+| `--cover-sources <list>` | Where to get cover art, best first: `fanart`, `caa` (Cover Art Archive). Default `caa`, e.g. `fanart,caa` |
+| `--fanart-key <key>` | fanart.tv API key for the `fanart` source (or set `RUSTYDISC_FANART_KEY`, which keeps it off the command line) |
+| `--no-cover-file` | Don't save `cover.jpg` / `cover.png` next to the tracks |
+| `--no-cover-embed` | Don't embed the cover art in the audio files |
 | `--no-accuraterip` | Skip the AccurateRip database check (for offline use) |
 | `--debug` | Verbose output including MusicBrainz and AccurateRip URLs, ffmpeg commands |
 | `--progress-json` | Emit machine-readable JSON progress events to stdout |
@@ -532,6 +541,15 @@ Artist - Album (Year)/
     checksums.json      ← SHA256 + byte count per file
 ```
 
+#### Cover art sources
+
+```bash
+# fanart.tv first, Cover Art Archive as the fallback; embed only (no cover.jpg left behind)
+RUSTYDISC_FANART_KEY=your-key rustydisc rip --dir ~/rips --cover-sources fanart,caa --no-cover-file
+```
+
+Sources are tried in the order given and the first one with an image wins. fanart.tv needs a free personal API key ([get one here](https://fanart.tv/get-an-api-key/)) and finds albums by their MusicBrainz release group, so it works when the disc was matched (or chosen) on MusicBrainz. If the key is missing or rejected, that source is skipped and the next one is used. Embedding is supported for FLAC, MP3, ALAC and OGG; AIFF, Opus and WAV files can't carry embedded art, so use the cover file for those.
+
 **Metadata priority:** MusicBrainz > CD-Text > auto-generated defaults.
 
 #### Choosing the MusicBrainz release
@@ -543,7 +561,7 @@ rustydisc rip --dir ~/rips --mb-release https://musicbrainz.org/release/bc8d517f
 rustydisc rip --dir ~/rips --mb-release bc8d517f-6ce0-4e45-b6d8-af0f29cdd1ea
 ```
 
-The release's title, artist, year, track titles, MusicBrainz IDs and cover art are used exactly as if the DiscID lookup had found it. For multi-disc releases the matching disc is chosen by DiscID, or by track count. If the release's track count doesn't match the disc you get a warning, and if you named a release that doesn't exist (or a multi-disc release with no matching disc) the rip stops before reading the disc rather than silently falling back. In the web UI, open *Use a MusicBrainz release I've found* on the Disc & Rip page, then either paste the ID/URL or click **Find…** to search MusicBrainz and browse the candidates before ripping.
+The release's title, artist, year, track titles, MusicBrainz IDs and cover art are used exactly as if the DiscID lookup had found it. For multi-disc releases the matching disc is chosen by DiscID, or by track count. If the release's track count doesn't match the disc you get a warning, and if you named a release that doesn't exist (or a multi-disc release with no matching disc) the rip stops before reading the disc rather than silently falling back. In the web UI, open *Use a MusicBrainz release I've found* on the Rip page, then either paste the ID/URL or click **Find…** to search MusicBrainz and browse the candidates before ripping.
 
 **Cover art embedding** is supported for FLAC, ALAC, MP3, and OGG Vorbis. The cover is also always saved as `cover.jpg` / `cover.png` in the output directory regardless of format.
 

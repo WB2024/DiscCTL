@@ -95,6 +95,7 @@ pub fn release() -> ReleaseInfo {
                 mb_artist_id: None,
             })
             .collect(),
+        mb_release_group_id: Some("11111111-1111-4111-8111-111111111111".into()),
         total_releases: 1,
     }
 }
@@ -116,7 +117,7 @@ fn cancelled(job: &Job) {
     job.push(Event::Status { status: Status::Cancelled });
 }
 
-pub async fn rip(job: Arc<Job>, rips_dir: PathBuf, folder: Option<String>, archive: bool, format: String, no_mb: bool, no_ar: bool, mb_chosen: bool) {
+pub async fn rip(job: Arc<Job>, rips_dir: PathBuf, folder: Option<String>, archive: bool, format: String, no_mb: bool, no_ar: bool, mb_chosen: bool, cover: crate::rip::cover::CoverOptions) {
     job.push(Event::Step { msg: "Analysing disc...".into() });
     job.push(Event::Progress { pct: 0.0 });
     if work(&job, 700).await { return cancelled(&job); }
@@ -129,6 +130,15 @@ pub async fn rip(job: Arc<Job>, rips_dir: PathBuf, folder: Option<String>, archi
         job.push(Event::Step { msg: "Looking up metadata on MusicBrainz...".into() });
         if work(&job, 600).await { return cancelled(&job); }
         job.push(Event::Step { msg: format!("Found: {ALBUM} — {ARTIST}") });
+    }
+
+    if cover.wanted() {
+        job.push(Event::Step { msg: "Fetching cover art...".into() });
+        if work(&job, 500).await { return cancelled(&job); }
+        let source = cover.sources.first().copied().unwrap_or(crate::rip::cover::CoverSource::CoverArtArchive);
+        let what = match (cover.save_file, cover.embed) { (true, true) => "saved as cover file and embedded", (true, false) => "saved as cover file", _ => "embedded only" };
+        job.push(Event::Step { msg: format!("Cover art from {} (212 KB) — {}", source.label(), what) });
+        job.push(Event::Result { name: "cover".into(), data: json!({"type": "cover", "source": source.id(), "label": source.label(), "file": null, "embedded": cover.embed}) });
     }
 
     let name = folder.unwrap_or_else(|| format!("{ARTIST} - {ALBUM} (1999)"));

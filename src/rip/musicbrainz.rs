@@ -100,6 +100,9 @@ pub struct ReleaseInfo {
     /// 4-digit year extracted from `date`.
     pub year: Option<String>,
     pub tracks: Vec<MbTrackInfo>,
+    /// MusicBrainz release group this release belongs to (fanart.tv indexes albums by it).
+    #[serde(default)]
+    pub mb_release_group_id: Option<String>,
     /// How many releases share this DiscID (useful for logging).
     pub total_releases: usize,
 }
@@ -129,6 +132,13 @@ struct MbRelease {
     artist_credit: Vec<MbArtistCredit>,
     #[serde(default)]
     media: Vec<MbMedia>,
+    #[serde(rename = "release-group")]
+    release_group: Option<MbReleaseGroup>,
+}
+
+#[derive(Deserialize)]
+struct MbReleaseGroup {
+    id: String,
 }
 
 #[derive(Deserialize)]
@@ -228,7 +238,7 @@ pub fn fetch_cover_art_sized(mb_release_id: &str, size: Option<u32>, debug: bool
 /// Network or parse errors are returned as `Err`.
 pub fn lookup(discid: &str, debug: bool) -> Result<Option<ReleaseInfo>, Error> {
     let url = format!(
-        "{}/discid/{}?inc=recordings+artists&fmt=json",
+        "{}/discid/{}?inc=recordings+artists+release-groups&fmt=json",
         MB_API, discid
     );
 
@@ -325,7 +335,7 @@ pub fn lookup_release(
     audio_tracks: Option<usize>,
     debug: bool,
 ) -> Result<(ReleaseInfo, Option<String>), Error> {
-    let url = format!("{}/release/{}?inc=recordings+artist-credits+discids&fmt=json", MB_API, mbid);
+    let url = format!("{}/release/{}?inc=recordings+artist-credits+discids+release-groups&fmt=json", MB_API, mbid);
     if debug { eprintln!("MusicBrainz release lookup: {}", url); }
 
     let release: MbRelease = match mb_call(|| ureq::get(&url).set("User-Agent", USER_AGENT)) {
@@ -631,6 +641,7 @@ fn parse_release(r: &MbRelease, media: &[MbMedia], total_releases: usize) -> Rel
         date: r.date.clone(),
         year,
         tracks,
+        mb_release_group_id: r.release_group.as_ref().map(|g| g.id.clone()),
         total_releases,
     }
 }

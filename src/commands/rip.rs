@@ -38,6 +38,22 @@ pub struct RipArgs {
     #[arg(long, value_name = "ID_OR_URL", conflicts_with = "no_musicbrainz")]
     pub mb_release: Option<String>,
 
+    /// Where to get cover art, best first: comma-separated `fanart`, `caa` (Cover Art Archive)
+    #[arg(long, value_name = "LIST", default_value = "caa")]
+    pub cover_sources: String,
+
+    /// fanart.tv API key (needed for the `fanart` cover source)
+    #[arg(long, env = "RUSTYDISC_FANART_KEY", hide_env_values = true, value_name = "KEY")]
+    pub fanart_key: Option<String>,
+
+    /// Don't save cover.jpg / cover.png next to the tracks
+    #[arg(long)]
+    pub no_cover_file: bool,
+
+    /// Don't embed the cover art in the audio files
+    #[arg(long)]
+    pub no_cover_embed: bool,
+
     /// Skip the AccurateRip check (for offline use)
     #[arg(long)]
     pub no_accuraterip: bool,
@@ -80,6 +96,12 @@ pub fn run(args: RipArgs) -> Result<(), Error> {
         progress_json:  args.progress_json,
         no_musicbrainz: args.no_musicbrainz,
         mb_release:     args.mb_release,
+        cover: rip::cover::CoverOptions {
+            sources: rip::cover::parse_sources(&args.cover_sources).map_err(Error::validation)?,
+            fanart_key: args.fanart_key.filter(|k| !k.trim().is_empty()),
+            save_file: !args.no_cover_file,
+            embed: !args.no_cover_embed,
+        },
         no_accuraterip: args.no_accuraterip,
     };
 

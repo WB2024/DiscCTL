@@ -16,6 +16,7 @@ services:
     volumes:
       - /path/to/music/CDRips:/rips      # CHANGE ME: where ripped albums are saved
       - /path/to/burn-sources:/media:ro  # CHANGE ME: files you want to burn to disc
+      - ./config:/config                 # settings (cover art sources, fanart.tv key, defaults)
     environment:
       RUSTYDISC_DEVICE: /dev/sr0
       # RUSTYDISC_MOCK: "true"           # simulate a drive to try the UI without hardware

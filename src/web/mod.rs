@@ -7,6 +7,7 @@
 
 mod jobs;
 mod mock;
+mod settings;
 
 use std::{
     convert::Infallible,
@@ -30,7 +31,7 @@ use tower_http::services::ServeDir;
 use crate::{
     analyzer,
     error::{DiscError, Error},
-    rip::{self, encoder::AudioFormat, musicbrainz},
+    rip::{self, cover::{self, Cover}, encoder::AudioFormat, musicbrainz},
 };
 use jobs::{Event, Jobs};
 
@@ -43,12 +44,16 @@ pub struct Config {
     pub rips_dir: PathBuf,
     /// Where burn sources (audio files, data folders, playlists) are picked from.
     pub media_dir: PathBuf,
+    /// Where settings.json lives (mount a volume here in Docker).
+    pub config_dir: PathBuf,
     pub mock: bool,
 }
 
 struct AppState {
     cfg: Config,
     jobs: Jobs,
+    settings: settings::Store,
+    cover_cache: std::sync::Mutex<std::collections::HashMap<String, Option<Arc<Cover>>>>,
 }
 
 type S = State<Arc<AppState>>;
@@ -140,9 +145,15 @@ fn start_job(st: &Arc<AppState>, kind: &str, title: &str, exclusive: bool) -> Ap
 }
 
 fn spawn_cli(st: &Arc<AppState>, job: Arc<jobs::Job>, args: Vec<String>, cleanup: Option<PathBuf>) {
+    spawn_cli_env(st, job, args, cleanup, Vec::new());
+}
+
+/// Like `spawn_cli`, with extra environment variables for the child (used for secrets, so
+/// they don't appear on the command line).
+fn spawn_cli_env(st: &Arc<AppState>, job: Arc<jobs::Job>, args: Vec<String>, cleanup: Option<PathBuf>, envs: Vec<(String, String)>) {
     let exe = st.cfg.exe.clone();
     tokio::spawn(async move {
-        jobs::run_process(job, exe, args).await;
+        jobs::run_process(job, exe, args, envs).await;
         if let Some(p) = cleanup {
             let _ = std::fs::remove_file(p);
         }
@@ -167,7 +178,8 @@ pub async fn serve(cfg: Config, bind: SocketAddr) -> Result<(), Error> {
     std::fs::create_dir_all(&cfg.rips_dir)?;
     let rips_dir = cfg.rips_dir.clone();
     let media_dir = cfg.media_dir.clone();
-    let state = Arc::new(AppState { cfg, jobs: Jobs::default() });
+    let settings = settings::Store::load(&cfg.config_dir);
+    let state = Arc::new(AppState { cfg, jobs: Jobs::default(), settings, cover_cache: Default::default() });
 
     let app = Router::new()
         .route("/", get(|| async { Html(INDEX_HTML) }))
@@ -176,6 +188,9 @@ pub async fn serve(cfg: Config, bind: SocketAddr) -> Result<(), Error> {
         .route("/api/musicbrainz", get(musicbrainz_lookup))
         .route("/api/musicbrainz/search", get(musicbrainz_search))
         .route("/api/cover", get(cover))
+        .route("/api/cover/info", get(cover_info))
+        .route("/api/settings", get(get_settings).put(put_settings))
+        .route("/api/settings/test-fanart", post(test_fanart))
         .route("/api/eject", post(eject))
         .route("/api/browse", get(browse))
         .route("/api/library", get(library))
@@ -348,29 +363,163 @@ async fn musicbrainz_search(State(st): S, Query(p): Query<SearchParams>) -> ApiR
 #[derive(Deserialize)]
 struct CoverQuery {
     mbid: String,
-    /// Thumbnail width: 250, 500 or 1200. Omit for the full-size image.
+    /// MusicBrainz release group (fanart.tv indexes albums by it).
+    rg: Option<String>,
+    /// Thumbnail width: 250, 500 or 1200. Thumbnails always come from the Cover Art Archive.
     size: Option<u32>,
+}
+
+fn looks_like_mbid(s: &str) -> bool {
+    s.len() <= 40 && s.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
+}
+
+/// The cover the configured sources give for a release, cached briefly so the preview
+/// image and its "where did it come from" label cost one lookup.
+async fn best_cover(st: &Arc<AppState>, mbid: &str, rg: Option<&str>) -> Option<Arc<Cover>> {
+    let opts = st.settings.get().cover_options();
+    let key = format!(
+        "{mbid}|{}|{}|{}",
+        rg.unwrap_or(""),
+        opts.sources.iter().map(|s| s.id()).collect::<Vec<_>>().join(","),
+        opts.fanart_key.is_some()
+    );
+    if let Some(hit) = st.cover_cache.lock().unwrap().get(&key) {
+        return hit.clone();
+    }
+    let (m, r) = (mbid.to_string(), rg.map(str::to_string));
+    let found = tokio::task::spawn_blocking(move || cover::fetch(&m, r.as_deref(), &opts, false))
+        .await
+        .ok()
+        .flatten()
+        .map(Arc::new);
+    let mut cache = st.cover_cache.lock().unwrap();
+    if cache.len() >= 40 {
+        cache.clear();
+    }
+    cache.insert(key, found.clone());
+    found
 }
 
 async fn cover(State(st): S, Query(q): Query<CoverQuery>) -> Response {
     if st.cfg.mock {
         return ([(header::CONTENT_TYPE, "image/svg+xml")], mock::cover_svg()).into_response();
     }
-    if !q.mbid.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
+    if !looks_like_mbid(&q.mbid) || q.rg.as_deref().is_some_and(|r| !looks_like_mbid(r)) {
         return StatusCode::NOT_FOUND.into_response();
     }
-    let art = tokio::task::spawn_blocking(move || musicbrainz::fetch_cover_art_sized(&q.mbid, q.size.filter(|s| [250, 500, 1200].contains(s)), false))
-        .await
-        .ok()
-        .flatten();
-    match art {
-        Some((bytes, mime)) => (
-            [(header::CONTENT_TYPE, mime), (header::CACHE_CONTROL, "public, max-age=86400")],
-            bytes,
+    if let Some(px) = q.size.filter(|s| [250, 500, 1200].contains(s)) {
+        let mbid = q.mbid.clone();
+        let art = tokio::task::spawn_blocking(move || musicbrainz::fetch_cover_art_sized(&mbid, Some(px), false))
+            .await
+            .ok()
+            .flatten();
+        return match art {
+            Some((bytes, mime)) => (
+                [(header::CONTENT_TYPE, if mime == "png" { "image/png" } else { "image/jpeg" }), (header::CACHE_CONTROL, "public, max-age=86400")],
+                bytes,
+            )
+                .into_response(),
+            None => StatusCode::NOT_FOUND.into_response(),
+        };
+    }
+    match best_cover(&st, &q.mbid, q.rg.as_deref()).await {
+        Some(c) => (
+            [
+                (header::CONTENT_TYPE, c.mime()),
+                (header::CACHE_CONTROL, "private, max-age=300"),
+            ],
+            c.bytes.clone(),
         )
             .into_response(),
         None => StatusCode::NOT_FOUND.into_response(),
     }
+}
+
+/// Which source the preview image came from.
+async fn cover_info(State(st): S, Query(q): Query<CoverQuery>) -> Json<Value> {
+    if st.cfg.mock {
+        return Json(json!({"source": "mock", "label": "placeholder"}));
+    }
+    if !looks_like_mbid(&q.mbid) || q.rg.as_deref().is_some_and(|r| !looks_like_mbid(r)) {
+        return Json(json!({"source": null}));
+    }
+    match best_cover(&st, &q.mbid, q.rg.as_deref()).await {
+        Some(c) => Json(json!({"source": c.source.id(), "label": c.source.label(), "bytes": c.bytes.len()})),
+        None => Json(json!({"source": null})),
+    }
+}
+
+// ── Settings ─────────────────────────────────────────────────────────────────
+
+async fn get_settings(State(st): S) -> Json<Value> {
+    Json(json!({
+        "settings": st.settings.get().public(),
+        "config_file": path_str(st.settings.path()),
+        "sources": [
+            {"id": "fanart", "label": "fanart.tv", "needs_key": true},
+            {"id": "caa", "label": "Cover Art Archive (MusicBrainz)", "needs_key": false},
+        ],
+    }))
+}
+
+#[derive(Deserialize)]
+struct SettingsUpdate {
+    rip_format: String,
+    rip_archive: bool,
+    rip_skip_musicbrainz: bool,
+    rip_skip_accuraterip: bool,
+    cover_sources: Vec<String>,
+    cover_save_file: bool,
+    cover_embed: bool,
+    /// Omit to keep the stored key; send "" to remove it.
+    fanart_api_key: Option<String>,
+}
+
+async fn put_settings(State(st): S, Json(u): Json<SettingsUpdate>) -> ApiResult<Json<Value>> {
+    let current = st.settings.get();
+    let new = settings::Settings {
+        rip_format: u.rip_format,
+        rip_archive: u.rip_archive,
+        rip_skip_musicbrainz: u.rip_skip_musicbrainz,
+        rip_skip_accuraterip: u.rip_skip_accuraterip,
+        cover_sources: u.cover_sources,
+        cover_save_file: u.cover_save_file,
+        cover_embed: u.cover_embed,
+        fanart_api_key: u.fanart_api_key.unwrap_or(current.fanart_api_key),
+    }
+    .validate()
+    .map_err(ApiError::bad)?;
+    st.settings.set(new).map_err(|e| {
+        Error::backend(format!("Could not save settings to {}: {e}", st.settings.path().display()))
+    })?;
+    st.cover_cache.lock().unwrap().clear();
+    Ok(Json(json!({"settings": st.settings.get().public()})))
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct TestFanart {
+    /// Key to test; if empty, the saved key is used.
+    key: String,
+}
+
+async fn test_fanart(State(st): S, Json(b): Json<TestFanart>) -> ApiResult<Json<Value>> {
+    let key = if b.key.trim().is_empty() { st.settings.get().fanart_api_key } else { b.key.trim().to_string() };
+    if key.is_empty() {
+        return Err(ApiError::bad("Enter a fanart.tv API key first"));
+    }
+    if st.cfg.mock {
+        return Ok(Json(json!({"ok": true, "message": "Mock mode: key not actually checked"})));
+    }
+    let status = tokio::task::spawn_blocking(move || cover::test_fanart_key(&key))
+        .await
+        .map_err(|e| Error::backend(e.to_string()))?;
+    Ok(Json(match status {
+        cover::FanartStatus::Ok => json!({"ok": true, "message": "fanart.tv accepted the key"}),
+        cover::FanartStatus::BadKey => json!({"ok": false, "message": "fanart.tv rejected that API key"}),
+        cover::FanartStatus::NoArtwork => json!({"ok": true, "message": "fanart.tv accepted the key"}),
+        cover::FanartStatus::Error(e) => json!({"ok": false, "message": format!("Could not reach fanart.tv: {e}")}),
+    }))
 }
 
 #[derive(Deserialize)]
@@ -722,6 +871,15 @@ async fn start_rip(State(st): S, Json(req): Json<RipReq>) -> ApiResult<Json<Valu
     }
     // An explicit release wins over "skip MusicBrainz".
     let skip_mb = req.no_musicbrainz && mb_release.is_none();
+    let cfg = st.settings.get();
+    let cover_opts = cfg.cover_options();
+    args.extend(["--cover-sources".into(), cfg.cover_sources.join(",")]);
+    if !cfg.cover_save_file { args.push("--no-cover-file".into()); }
+    if !cfg.cover_embed { args.push("--no-cover-embed".into()); }
+    let mut envs: Vec<(String, String)> = Vec::new();
+    if let Some(key) = &cover_opts.fanart_key {
+        envs.push(("RUSTYDISC_FANART_KEY".into(), key.clone()));
+    }
     for (flag, on) in [("--archive", req.archive), ("--no-musicbrainz", skip_mb), ("--no-accuraterip", req.no_accuraterip), ("--debug", req.debug)] {
         if on {
             args.push(flag.into());
@@ -730,9 +888,9 @@ async fn start_rip(State(st): S, Json(req): Json<RipReq>) -> ApiResult<Json<Valu
 
     let job = start_job(&st, "rip", &format!("Rip {device} → {}", format.to_uppercase()), true)?;
     if st.cfg.mock {
-        tokio::spawn(mock::rip(job.clone(), st.cfg.rips_dir.clone(), folder, req.archive, format, skip_mb, req.no_accuraterip, mb_release.is_some()));
+        tokio::spawn(mock::rip(job.clone(), st.cfg.rips_dir.clone(), folder, req.archive, format, skip_mb, req.no_accuraterip, mb_release.is_some(), cover_opts));
     } else {
-        spawn_cli(&st, job.clone(), args, None);
+        spawn_cli_env(&st, job.clone(), args, None, envs);
     }
     Ok(Json(json!(job.summary())))
 }

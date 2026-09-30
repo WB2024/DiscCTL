@@ -231,9 +231,10 @@ impl Jobs {
 // ── Child-process runner ─────────────────────────────────────────────────────
 
 /// Run `rustydisc <args>` as a child process and feed its output into `job`.
-pub async fn run_process(job: Arc<Job>, exe: std::path::PathBuf, args: Vec<String>) {
+pub async fn run_process(job: Arc<Job>, exe: std::path::PathBuf, args: Vec<String>, envs: Vec<(String, String)>) {
     let mut cmd = Command::new(exe);
     cmd.args(&args)
+        .envs(envs)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -339,6 +340,10 @@ fn handle_stdout_line(job: &Job, line: &str) {
                     name: "accuraterip".into(),
                     data: v.get("report").cloned().unwrap_or(serde_json::Value::Null),
                 });
+                return;
+            }
+            Some("cover") => {
+                job.push(Event::Result { name: "cover".into(), data: v.clone() });
                 return;
             }
             Some("done") => return,

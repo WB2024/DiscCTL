@@ -16,9 +16,10 @@ COPY --from=build /src/target/release/rustydisc /usr/local/bin/rustydisc
 ENV RUSTYDISC_BIND=0.0.0.0:8080 \
     RUSTYDISC_DEVICE=/dev/sr0 \
     RUSTYDISC_RIPS_DIR=/rips \
-    RUSTYDISC_MEDIA_DIR=/media
+    RUSTYDISC_MEDIA_DIR=/media \
+    RUSTYDISC_CONFIG_DIR=/config
 
-VOLUME ["/rips", "/media"]
+VOLUME ["/rips", "/media", "/config"]
 EXPOSE 8080
 ENTRYPOINT ["rustydisc"]
 CMD ["serve"]

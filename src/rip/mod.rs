@@ -1,4 +1,5 @@
 pub mod accuraterip;
+pub mod cover;
 pub mod data;
 pub mod encoder;
 pub mod engine;
@@ -25,6 +26,8 @@ pub struct RipOptions {
     pub no_musicbrainz: bool,
     /// Use this MusicBrainz release (ID or URL) instead of looking the disc up by DiscID
     pub mb_release: Option<String>,
+    /// Where cover art comes from and what to do with it
+    pub cover: cover::CoverOptions,
     /// Skip the AccurateRip database check
     pub no_accuraterip: bool,
 }
@@ -119,34 +122,7 @@ pub fn rip(opts: &RipOptions) -> Result<(), Error> {
     }
 
     // Step 4: fetch cover art (before ripping so it's ready for embedding)
-    let cover_art_path: Option<String> = if let Some(ref release) = mb {
-        if opts.progress_json { emit_step("Fetching cover art..."); }
-        else { eprintln!("Fetching cover art..."); }
-
-        match musicbrainz::fetch_cover_art(&release.mb_release_id, opts.debug) {
-            Some((bytes, ext)) => {
-                let path = format!("{}/cover.{}", output_dir, ext);
-                match std::fs::write(&path, &bytes) {
-                    Ok(()) => {
-                        if !opts.progress_json {
-                            eprintln!("Cover art saved → cover.{} ({} KB)", ext, bytes.len() / 1024);
-                        }
-                        Some(path)
-                    }
-                    Err(e) => {
-                        if !opts.progress_json { eprintln!("Cover art save failed: {}", e); }
-                        None
-                    }
-                }
-            }
-            None => {
-                if !opts.progress_json { eprintln!("No cover art found in Cover Art Archive"); }
-                None
-            }
-        }
-    } else {
-        None
-    };
+    let (cover_art_path, _temp_cover) = prepare_cover(opts, &mb, &output_dir);
 
     match info.format {
         DiscFormat::RedBook  => rip_redbook(&info, &mb, opts, &output_dir, cover_art_path.as_deref()),
@@ -156,6 +132,81 @@ pub fn rip(opts: &RipOptions) -> Result<(), Error> {
             "Could not determine disc format. Insert a disc and try again.",
         )),
     }
+}
+
+
+/// Deletes a temporary file when dropped (the cover image used only for embedding).
+struct TempFile(Option<String>);
+
+impl Drop for TempFile {
+    fn drop(&mut self) {
+        if let Some(p) = &self.0 {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+}
+
+/// Fetch the cover art according to the user's source priorities. Returns the path to embed
+/// (None when embedding is off or nothing was found) and a guard for a temporary copy that
+/// exists only when the image is embedded but not kept as `cover.jpg`/`cover.png`.
+fn prepare_cover(opts: &RipOptions, mb: &Option<ReleaseInfo>, output_dir: &str) -> (Option<String>, TempFile) {
+    let none = (None, TempFile(None));
+    let Some(release) = mb else { return none };
+    if !opts.cover.wanted() {
+        if !opts.progress_json { eprintln!("Cover art: disabled in settings"); }
+        return none;
+    }
+
+    if opts.progress_json { emit_step("Fetching cover art..."); }
+    else { eprintln!("Fetching cover art..."); }
+
+    let Some(found) = cover::fetch(&release.mb_release_id, release.mb_release_group_id.as_deref(), &opts.cover, opts.debug) else {
+        let tried: Vec<&str> = opts.cover.sources.iter().map(|s| s.label()).collect();
+        let msg = format!("No cover art found ({})", tried.join(", "));
+        if opts.progress_json { emit_step(&msg); } else { eprintln!("{}", msg); }
+        return none;
+    };
+
+    let kb = found.bytes.len() / 1024;
+    let mut saved: Option<String> = None;
+    let mut temp = TempFile(None);
+    let mut embed_path: Option<String> = None;
+
+    if opts.cover.save_file {
+        let path = format!("{}/cover.{}", output_dir, found.ext);
+        match std::fs::write(&path, &found.bytes) {
+            Ok(()) => { saved = Some(path.clone()); embed_path = Some(path); }
+            Err(e) => eprintln!("Cover art save failed: {}", e),
+        }
+    }
+    if opts.cover.embed && embed_path.is_none() {
+        // Embedding without keeping a file: ffmpeg still needs one to read from.
+        let path = format!("/tmp/rustydisc_cover_{}.{}", std::process::id(), found.ext);
+        if std::fs::write(&path, &found.bytes).is_ok() {
+            temp = TempFile(Some(path.clone()));
+            embed_path = Some(path);
+        }
+    }
+
+    let what = match (saved.is_some(), opts.cover.embed) {
+        (true, true) => "saved as cover file and embedded",
+        (true, false) => "saved as cover file",
+        (false, true) => "embedded only",
+        (false, false) => "not stored",
+    };
+    let msg = format!("Cover art from {} ({} KB) — {}", found.source.label(), kb, what);
+    if opts.progress_json {
+        emit_step(&msg);
+        let event = serde_json::json!({
+            "type": "cover", "source": found.source.id(), "label": found.source.label(),
+            "file": saved, "embedded": opts.cover.embed,
+        });
+        println!("{}", event);
+    } else {
+        eprintln!("{}", msg);
+    }
+
+    (if opts.cover.embed { embed_path } else { None }, temp)
 }
 
 /// Resolve the final output directory from opts + MB metadata.
