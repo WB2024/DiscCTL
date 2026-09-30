@@ -98,19 +98,33 @@ pub fn append_data_session(
     }
 
     // ── Phase 2: write ISO to disc ────────────────────────────────────────────
+    write_iso_image(&iso_path, device, msinfo.is_some(), debug, progress_json, 45.0)
+}
+
+/// Write a finished ISO image to the disc in `device` with xorriso and delete the image.
+/// Progress is reported from `start_pct` up to 99 %.
+pub(crate) fn write_iso_image(
+    iso_path: &str,
+    device: &str,
+    multi: bool,
+    debug: bool,
+    progress_json: bool,
+    start_pct: f32,
+) -> Result<(), Error> {
     let mut write_cmd = stdbuf_cmd("xorriso");
     write_cmd
         .arg("-as").arg("cdrecord")
         .arg(format!("dev={}", device))
         .arg("-data");
 
-    if msinfo.is_some() {
+    if multi {
         write_cmd.arg("-multi");
     }
-    write_cmd.arg(&iso_path);
+    write_cmd.arg(iso_path);
 
     if debug { eprintln!("Running: {:?}", write_cmd); }
 
+    let span = 99.0 - start_pct;
     if progress_json {
         emit_step("Writing to disc...");
         write_cmd.stdout(Stdio::null());
@@ -125,12 +139,12 @@ pub fn append_data_session(
                     emit_step("Closing disc...");
                     emit_progress(99.0);
                 } else if let Some(pct) = parse_xorriso_pct(line) {
-                    emit_progress(45.0 + pct * 0.54);
+                    emit_progress(start_pct + pct * span / 100.0);
                 }
             });
         }
         let status = child.wait()?;
-        let _ = std::fs::remove_file(&iso_path);
+        let _ = std::fs::remove_file(iso_path);
         if !status.success() {
             return Err(Error::backend(format_xorriso_error(
                 "cdrecord", status.code(), &stderr_bytes,
@@ -138,7 +152,7 @@ pub fn append_data_session(
         }
     } else {
         let output = write_cmd.output()?;
-        let _ = std::fs::remove_file(&iso_path);
+        let _ = std::fs::remove_file(iso_path);
         if !output.status.success() {
             return Err(Error::backend(format_xorriso_error(
                 "cdrecord", output.status.code(), &output.stderr,
@@ -153,7 +167,7 @@ pub fn append_data_session(
 
 /// Build a Command wrapped in `stdbuf -eL` to force line-buffered stderr.
 /// Falls back to running the command directly if stdbuf is not available.
-fn stdbuf_cmd(program: &str) -> Command {
+pub(crate) fn stdbuf_cmd(program: &str) -> Command {
     if std::path::Path::new("/usr/bin/stdbuf").exists()
         || std::path::Path::new("/usr/local/bin/stdbuf").exists()
     {
@@ -168,7 +182,7 @@ fn stdbuf_cmd(program: &str) -> Command {
 /// Drain a pipe handle line by line using raw bytes so non-UTF-8 output never
 /// stops the reader early (avoiding a deadlock in child.wait()). Each complete
 /// line is passed to `on_line` for progress parsing.
-fn drain_with_progress<F>(reader: &mut impl Read, buf_out: &mut Vec<u8>, mut on_line: F)
+pub(crate) fn drain_with_progress<F>(reader: &mut impl Read, buf_out: &mut Vec<u8>, mut on_line: F)
 where
     F: FnMut(&str),
 {
@@ -200,7 +214,7 @@ where
     }
 }
 
-fn format_xorriso_error(phase: &str, code: Option<i32>, stderr: &[u8]) -> String {
+pub(crate) fn format_xorriso_error(phase: &str, code: Option<i32>, stderr: &[u8]) -> String {
     let stderr_msg = String::from_utf8_lossy(stderr);
     let detail = stderr_msg
         .lines()
@@ -214,17 +228,17 @@ fn format_xorriso_error(phase: &str, code: Option<i32>, stderr: &[u8]) -> String
     }
 }
 
-fn parse_xorriso_pct(line: &str) -> Option<f32> {
+pub(crate) fn parse_xorriso_pct(line: &str) -> Option<f32> {
     let pos = line.find('%')?;
     let before = line[..pos].trim();
     before.split_whitespace().last()?.parse::<f32>().ok()
 }
 
-fn emit_progress(pct: f32) {
+pub(crate) fn emit_progress(pct: f32) {
     println!("{{\"type\":\"progress\",\"pct\":{:.1}}}", pct);
 }
 
-fn emit_step(msg: &str) {
+pub(crate) fn emit_step(msg: &str) {
     let escaped = msg.replace('\\', "\\\\").replace('"', "\\\"");
     println!("{{\"type\":\"step\",\"msg\":\"{}\"}}", escaped);
 }

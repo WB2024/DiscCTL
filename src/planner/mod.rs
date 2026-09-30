@@ -29,7 +29,43 @@ pub fn validate_structure(graph: &DiscGraph) -> Result<(), Error> {
         DiscFormat::RedBook => validate_redbook_structure(graph),
         DiscFormat::DataCD => validate_datacd_structure(graph),
         DiscFormat::BlueBook => validate_bluebook_structure(graph),
+        DiscFormat::DataDvd => validate_datadvd_structure(graph),
+        DiscFormat::MusicDvd => validate_musicdvd_structure(graph),
     }
+}
+
+fn validate_datadvd_structure(graph: &DiscGraph) -> Result<(), Error> {
+    if graph.sessions.len() != 1 {
+        return Err(Error::validation(format!(
+            "A Data DVD requires exactly 1 data session, got {}",
+            graph.sessions.len()
+        )));
+    }
+    match &graph.sessions[0] {
+        Session::Data(_) => Ok(()),
+        Session::Audio(_) => Err(Error::validation("A Data DVD requires a data session")),
+    }
+}
+
+/// A Music DVD is one audio session (the tracks) and, if wanted, one data session (extra files).
+fn validate_musicdvd_structure(graph: &DiscGraph) -> Result<(), Error> {
+    match graph.sessions.as_slice() {
+        [Session::Audio(a)] | [Session::Audio(a), Session::Data(_)] => {
+            if a.tracks.is_empty() {
+                return Err(Error::validation("A Music DVD needs at least one audio track"));
+            }
+        }
+        [Session::Data(_), ..] => {
+            return Err(Error::validation("SESSION_ORDER_INVALID: a Music DVD lists its audio first, then any data"));
+        }
+        _ => {
+            return Err(Error::validation("A Music DVD needs an audio session, optionally followed by one data session"));
+        }
+    }
+    if let Some(opts) = &graph.dvd {
+        opts.validate().map_err(Error::validation)?;
+    }
+    Ok(())
 }
 
 fn validate_redbook_structure(graph: &DiscGraph) -> Result<(), Error> {
@@ -94,7 +130,11 @@ fn validate_files(graph: &DiscGraph) -> Result<(), Error> {
                     if !path.exists() {
                         return Err(Error::validation(format!("Track file not found: {}", track)));
                     }
+                    let dvd = graph.format.is_dvd();
                     match path.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase()).as_deref() {
+                        // A Music DVD re-encodes everything, so a WAV needn't be CD audio
+                        Some("wav") if dvd => {}
+                        Some("aiff") | Some("aif") | Some("ape") | Some("wv") if dvd => {}
                         Some("wav") => validate_wav_format(track)?,
                         // All formats below are converted to CDDA WAV by the backend via ffmpeg
                         Some("flac") | Some("mp3") | Some("m4a") | Some("aac")
@@ -220,6 +260,23 @@ fn dir_size(path: &std::path::Path) -> Result<u64, Error> {
 
 pub fn build_steps(graph: &DiscGraph) -> Result<Vec<BurnStep>, Error> {
     match graph.format {
+        DiscFormat::DataDvd => {
+            let filesystem = match &graph.sessions[0] {
+                Session::Data(d) => d.filesystem.to_string(),
+                _ => "iso9660".to_string(),
+            };
+            Ok(vec![
+                BurnStep::AppendDataSession { session_index: 0, filesystem },
+                BurnStep::FinalizeDisc,
+            ])
+        }
+        DiscFormat::MusicDvd => Ok(vec![
+            BurnStep::BurnMusicDvd {
+                audio_session_index: 0,
+                data_session_index: if graph.sessions.len() > 1 { Some(1) } else { None },
+            },
+            BurnStep::FinalizeDisc,
+        ]),
         DiscFormat::RedBook => Ok(vec![BurnStep::BurnAudioSession {
             session_index: 0,
             finalize: true,
@@ -284,6 +341,7 @@ mod tests {
             format,
             label: "Test".to_string(),
             sessions,
+            dvd: None,
         }
     }
 

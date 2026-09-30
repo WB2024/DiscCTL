@@ -160,7 +160,7 @@ Format constraints are enforced **before** any hardware is touched, so you get a
 ## Features
 
 ### Burning
-- **Three disc formats** — Red Book Audio, ISO9660 Data CD, Blue Book/CD Extra enhanced CD
+- **Five disc formats** — Red Book Audio, ISO9660 Data CD, Blue Book/CD Extra enhanced CD, **Data DVD** (also Blu-ray sizes) and **Enhanced Music DVD** (music that plays in any DVD player, plus a data folder on the same disc)
 - **Playlist support** — burn directly from an M3U or M3U8 playlist, durations read from `#EXTINF` tags
 - **FFmpeg transcoding** — convert any audio format to MP3, AAC, Opus, FLAC, or WAV before burning; stage and clean up automatically
 - **Multi-disc splitting** — automatically detects when content exceeds a single disc and prompts you to swap discs
@@ -227,7 +227,7 @@ Want to look around first? `rustydisc serve --mock` simulates a drive, with no h
 
 <p align="center"><img src="Images/Screenshots/rip-progress.png" alt="A rip in progress with live log" width="820"></p>
 
-**Burn** — build an Audio CD, Data CD or Enhanced (Blue Book) CD from files in the server's media folder. **Show plan** works out how many discs the job needs, and how full each will be, counting the size after any transcoding. Add individual files, a whole folder, or an `.m3u`/`.m3u8` playlist (previewed before you burn, with any skipped entries listed); reorder tracks, set CD-Text, transcode audio in a Data CD, and preview the execution plan before anything is written. Prefer to hand-write it? Paste a disc graph JSON and validate it.
+**Burn** — build an Audio CD, Data CD, Enhanced (Blue Book) CD, **Data DVD** or **Enhanced Music DVD** from files in the server's media folder. **Show plan** works out how many discs the job needs, and how full each will be, counting the size after any transcoding. Add individual files, a whole folder, or an `.m3u`/`.m3u8` playlist (previewed before you burn, with any skipped entries listed); reorder tracks, set CD-Text, transcode audio in a Data CD, and preview the execution plan before anything is written. Prefer to hand-write it? Paste a disc graph JSON and validate it.
 
 <p align="center"><img src="Images/Screenshots/burn.png" alt="Burn page with an Enhanced CD and its execution plan" width="820"></p>
 
@@ -286,6 +286,8 @@ The image bundles everything RustyDisc needs (`cdparanoia`, `cdrdao`, `xorriso`,
 | `xorriso` | ISO9660 generation, data burns, data extraction | Burn (data), Rip |
 | `cdrecord` / `wodim` | TOC reading, disc state detection | Burn, Rip |
 | `isoinfo` | Data session metadata (volume label, size) | Rip |
+| `genisoimage` | Builds the UDF disc images for DVDs | Burn (DVD) |
+| `dvdauthor` | Builds the DVD-Video structure of a Music DVD | Burn (Music DVD) |
 | `cdparanoia` | Secure audio ripping | Rip (audio) |
 | `ffmpeg` | Audio transcoding, encoding, cover art embedding | Burn (transcode), Rip (encode) |
 
@@ -299,7 +301,7 @@ sudo apt install cdrdao xorriso cdrecord
 sudo apt install cdparanoia ffmpeg
 
 # All at once
-sudo apt install cdrdao xorriso cdrecord cdparanoia ffmpeg
+sudo apt install cdrdao xorriso cdrecord cdparanoia ffmpeg genisoimage dvdauthor
 ```
 
 ### Install on Arch Linux
@@ -394,6 +396,50 @@ Audio files must be **44.1 kHz, 16-bit stereo WAV** (CDDA spec). Non-compliant f
 
 A single-session ISO9660 data disc with Joliet and Rock Ridge extensions. Supports up to **700 MB** of content. Built and burned with `xorriso`. Volume label is written as uppercase ISO9660 (max 32 characters).
 
+### Data DVD (`--format datadvd`)
+
+Like a Data CD, but on a DVD (or Blu-ray): files, a folder or a playlist, with the same multi-disc splitting and transcoding. The image is ISO 9660 + Joliet + Rock Ridge + **UDF**, so files over 4 GB and long names work. Choose the blank disc with `--disc-size`:
+
+| `--disc-size` | Disc | Capacity |
+|---|---|---|
+| `dvd` (default for DVDs) | DVD±R | 4.7 GB (4482 MiB) |
+| `dvd-dl` | DVD±R DL | 8.5 GB (8147 MiB) |
+| `bd` | BD-R | 25 GB (23866 MiB) |
+| `bd-dl` | BD-R DL | 50 GB (47732 MiB) |
+
+Any number of MB also works. A DVD keeps about 16 MB free. The plan counts converted sizes, so 2 GB of FLAC converted to MP3 320k shows as about 1.3 GB and one DVD instead of three CDs.
+
+```bash
+rustydisc plan --format datadvd --playlist "Magnum Opus.m3u8" --transcode mp3:320
+rustydisc burn --format datadvd --playlist "Magnum Opus.m3u8" --transcode mp3:320 --label "Magnum Opus"
+```
+
+<p align="center"><img src="Images/Screenshots/burn-data-dvd.png" alt="Data DVD plan: 120 FLAC files converted to MP3 fit on one DVD" width="820"></p>
+
+### Enhanced Music DVD (`--format musicdvd`)
+
+The DVD counterpart of an Enhanced CD: **music that plays in any DVD player, with a data folder on the same disc.** There is no Red Book audio on a DVD, so the music is authored as a **DVD-Video** disc:
+
+- every track is a **chapter** (next/previous work, and the disc starts playing as soon as it is inserted), shown over a still picture: the cover art next to the tracks, an image you choose (`--dvd-still`), or a plain background;
+- the audio is **Dolby Digital (AC-3) stereo** at 192, 256, 384 or 448 kbps (`--dvd-audio-kbps`, default 448) — lossy, but universally supported;
+- the picture standard is **PAL** (default) or **NTSC** (`--dvd-standard`);
+- an optional **data folder** (`--data`) goes in the root of the disc next to `VIDEO_TS`, so the same disc is a data DVD in a computer;
+- more than 99 tracks become several titles that play one after another (DVD-Video allows 99 chapters per title).
+
+Everything has to fit on **one** disc, and the plan tells you how full it is. As a guide, a track takes about 5 MB per minute at 448 kbps (including the picture), so a 4.7 GB DVD holds roughly 15 hours of music.
+
+```bash
+rustydisc burn --format musicdvd --playlist "Album.m3u8" --data ~/Bonus --label "My Album" --dvd-standard pal
+```
+
+<p align="center"><img src="Images/Screenshots/burn-music-dvd.png" alt="Enhanced Music DVD: tracks plus a data folder on one DVD" width="820"></p>
+
+Notes:
+
+- **Lossless audio is not offered** — DVD-Video allows uncompressed LPCM, but the tools that author it produced non-standard streams in testing, so only Dolby Digital is available for now. DVD-Audio (`AUDIO_TS`) discs are not supported.
+- The disc structure is verified against the DVD-Video layout (chapters, PAL/NTSC, AC-3, files in the image), but as with all burn features, check it on your own player and drive. The disc must be blank; a used DVD-RW has to be erased first.
+- **`--iso-out disc.iso`** builds the finished disc image into a file instead of burning it (for DVD formats). Handy to inspect the result, test in a media player, or burn later with another tool.
+
 ### Blue Book / CD Extra (`--format bluebook`)
 
 An enhanced CD with **two sessions**: Session 1 is a Red Book audio session (left open), Session 2 is appended as an ISO9660 data session, then the disc is finalized. Audio tracks play on any CD player; the data session is visible when inserted in a computer.
@@ -445,7 +491,7 @@ rustydisc burn [OPTIONS]
 
 | Flag | Description |
 |------|-------------|
-| `--format <fmt>` | Disc format: `redbook`, `datacd`, `bluebook` (default: `redbook`) |
+| `--format <fmt>` | Disc format: `redbook`, `datacd`, `bluebook`, `datadvd`, `musicdvd` (default: `redbook`) |
 | `--audio <files...>` | Audio track files or glob patterns (WAV/FLAC/MP3/M4A/OGG etc.) |
 | `--playlist <file>` | M3U or M3U8 playlist of audio tracks (Audio / Enhanced CD) or files (Data CD) |
 | `--data <dir>` | Data CD: the folder to burn (sub-folders are kept). Enhanced CD: the folder for the data session |
@@ -468,7 +514,11 @@ rustydisc burn [OPTIONS]
 | Flag | Description |
 |------|-------------|
 | `--transcode <spec>` | Data CD: convert audio before burning: `mp3:256`, `aac:320`, `opus:192`, `flac`, `wav` (only files that would shrink are converted) |
-| `--disc-size <MB>` | Blank disc size: `650` (74 min), `700` (80 min, default) or `800` (90 min) |
+| `--disc-size <size>` | Blank disc: a size in MB or a name — `cd650`, `cd700` (default for CDs), `cd800`, `dvd` (default for DVDs), `dvd-dl`, `bd`, `bd-dl` |
+| `--dvd-audio-kbps <n>` | Music DVD: Dolby Digital bitrate: 192, 256, 384 or 448 (default) |
+| `--dvd-standard <pal\|ntsc>` | Music DVD: picture standard (default `pal`) |
+| `--dvd-still <image>` | Music DVD: picture shown while the music plays (default: cover art beside the tracks) |
+| `--iso-out <file>` | DVD formats: save the disc image to a file instead of burning |
 | `--stage-dir <dir>` | Where to write converted files, one disc at a time (default: `/tmp`) |
 | `--keep-staged` | Keep staged files after burn (default: delete on exit) |
 

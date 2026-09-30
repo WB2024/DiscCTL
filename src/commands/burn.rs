@@ -33,9 +33,23 @@ pub struct BurnArgs {
     /// Individual files for a Data CD (they go in the disc root)
     #[arg(long, num_args = 1..)]
     pub files: Option<Vec<String>>,
-    /// Disc capacity in MB: 650 (74 min), 700 (80 min, default) or 800 (90 min)
-    #[arg(long, default_value_t = 700)]
-    pub disc_size: u64,
+    /// Blank disc size, in MB or by name: cd700 (default for CDs), cd650, cd800, dvd (default for
+    /// DVDs, 4.7 GB), dvd-dl (8.5 GB), bd (25 GB), bd-dl (50 GB)
+    #[arg(long)]
+    pub disc_size: Option<String>,
+    /// Music DVD: Dolby Digital bitrate in kbps (192, 256, 384 or 448)
+    #[arg(long, default_value_t = 448)]
+    pub dvd_audio_kbps: u32,
+    /// Music DVD: picture standard, pal or ntsc
+    #[arg(long, default_value = "pal")]
+    pub dvd_standard: String,
+    /// Music DVD: image to show while the music plays (default: the cover art beside the tracks)
+    #[arg(long)]
+    pub dvd_still: Option<String>,
+    /// DVD formats: save the finished disc image to this file instead of burning it
+    /// (a job that needs several discs writes name-disc1.iso, name-disc2.iso, ...)
+    #[arg(long)]
+    pub iso_out: Option<String>,
     /// Only accept playlist entries inside this folder (used by the web UI)
     #[arg(long, hide = true)]
     pub playlist_root: Option<String>,
@@ -78,10 +92,20 @@ pub fn run(args: BurnArgs) -> Result<(), Error> {
         return burn_graph(&graph, &args, None);
     }
 
-    let is_data = args.format == "datacd" || args.format == "data-cd" || args.format == "data";
+    let fmt = args.format.to_lowercase();
+    let is_data_dvd = matches!(fmt.as_str(), "datadvd" | "data-dvd" | "dvd");
+    let is_music_dvd = matches!(fmt.as_str(), "musicdvd" | "music-dvd" | "enhanceddvd" | "enhanced-dvd" | "dvd-video");
+    let is_data = matches!(fmt.as_str(), "datacd" | "data-cd" | "data") || is_data_dvd;
 
-    if is_data {
-        run_data(&args)
+    if args.iso_out.is_some() && !(is_data_dvd || is_music_dvd) {
+        return Err(Error::validation("--iso-out is only available for DVD formats (datadvd, musicdvd)"));
+    }
+    backend::dvd::set_iso_out(args.iso_out.clone());
+
+    if is_music_dvd {
+        run_music_dvd(&args)
+    } else if is_data {
+        run_data(&args, if is_data_dvd { "datadvd" } else { "datacd" })
     } else {
         run_audio(&args)
     }
@@ -90,7 +114,12 @@ pub fn run(args: BurnArgs) -> Result<(), Error> {
 // ── Data CD path ─────────────────────────────────────────────────────────────
 
 fn disc_size(args: &BurnArgs) -> Result<DiscSize, Error> {
-    let size = DiscSize::new(args.disc_size)?;
+    let dvd = matches!(args.format.to_lowercase().as_str(), "datadvd" | "data-dvd" | "dvd" | "musicdvd" | "music-dvd" | "enhanceddvd" | "enhanced-dvd" | "dvd-video");
+    let size = match args.disc_size.as_deref().filter(|s| !s.trim().is_empty()) {
+        Some(s) => DiscSize::parse(s)?,
+        None if dvd => DiscSize::new(4482)?,
+        None => DiscSize::default(),
+    };
     // Lets the ISO builder and validator refuse anything that can't fit this disc.
     backend::data::set_disc_capacity(size.capacity_bytes());
     Ok(size)
@@ -109,7 +138,7 @@ fn note(args: &BurnArgs, msg: &str) {
     }
 }
 
-fn run_data(args: &BurnArgs) -> Result<(), Error> {
+fn run_data(args: &BurnArgs, fmt: &str) -> Result<(), Error> {
     let size = disc_size(args)?;
     let spec = match args.transcode.as_deref().filter(|t| !t.trim().is_empty()) {
         Some(t) => Some(TranscodeSpec::parse(t)?),
@@ -174,11 +203,11 @@ fn run_data(args: &BurnArgs) -> Result<(), Error> {
                 (dir.clone(), Some(StagedDir::new(dir, false, true)))
             }
         };
-        let graph = parser::from_cli("datacd", None, None, Some(&dir), &args.label, false)?;
+        let graph = parser::from_cli(fmt, None, None, Some(&dir), &args.label, false)?;
         return burn_graph(&graph, args, None);
     }
 
-    burn_data_discs(args, size, spec, usable, est_discs.len())
+    burn_data_discs(args, fmt, size, spec, usable, est_discs.len())
 }
 
 /// A file waiting for a disc; `cached` is a copy that was already converted for an earlier
@@ -193,6 +222,7 @@ struct Queued {
 /// (not the estimate) decides when a disc is full.
 fn burn_data_discs(
     args: &BurnArgs,
+    fmt: &str,
     size: DiscSize,
     spec: Option<TranscodeSpec>,
     files: Vec<PlannedFile>,
@@ -231,7 +261,7 @@ fn burn_data_discs(
             let dir = Path::new(&front.file.rel_path).parent().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
             let new_dir = if dirs.contains(&dir) { 0 } else { 8 * 1024 };
             // The estimate says whether it is worth converting this file for this disc at all.
-            if count > 0 && used + discs::file_cost(front.file.est_bytes) + new_dir > usable {
+            if count > 0 && used + size.file_cost(front.file.est_bytes) + new_dir > usable {
                 break;
             }
             let item = queue.pop_front().expect("front exists");
@@ -261,7 +291,7 @@ fn burn_data_discs(
                 if item.file.transcode { item.file.est_bytes } else { std::fs::metadata(&source)?.len() }
             };
 
-            if count > 0 && used + discs::file_cost(actual) + new_dir > usable {
+            if count > 0 && used + size.file_cost(actual) + new_dir > usable {
                 // The estimate was too low and this file doesn't fit after all: it starts the next
                 // disc, and if it was already converted that result is kept for it.
                 let cached = if item.file.transcode && !args.dry_run {
@@ -278,7 +308,7 @@ fn burn_data_discs(
                 break;
             }
 
-            used += discs::file_cost(actual) + new_dir;
+            used += size.file_cost(actual) + new_dir;
             payload += actual;
             dirs.insert(dir);
             count += 1;
@@ -293,11 +323,15 @@ fn burn_data_discs(
         }
         let label = disc_label(&args.label, disc_num, expected);
 
-        if !args.dry_run {
+        if !args.dry_run && args.iso_out.is_none() {
             prompt_insert(disc_num, expected, &args.device, payload, count, None)?;
         }
 
-        let graph = parser::from_cli("datacd", None, None, Some(&stage), &label, false)?;
+        let graph = parser::from_cli(fmt, None, None, Some(&stage), &label, false)?;
+        // Saving images: each disc goes to its own file.
+        if let Some(base) = &args.iso_out {
+            backend::dvd::set_iso_out(Some(numbered_iso(base, disc_num, expected)));
+        }
         // A dry run doesn't convert anything, so the staged links point at the originals and
         // would look too big; the plan above already used the converted sizes.
         if args.dry_run {
@@ -309,7 +343,7 @@ fn burn_data_discs(
         }
         result?;
 
-        if !args.dry_run && !queue.is_empty() {
+        if !args.dry_run && args.iso_out.is_none() && !queue.is_empty() {
             eject(&args.device);
             eprintln!("Disc {} complete. Remove the disc.", disc_num);
         }
@@ -319,6 +353,68 @@ fn burn_data_discs(
         eprintln!("All {} disc{} burned successfully.", disc_num, if disc_num == 1 { "" } else { "s" });
     }
     Ok(())
+}
+
+/// `out.iso` → `out-disc2.iso` when a job needs several discs (the first stays `out.iso` if it is the only one).
+fn numbered_iso(base: &str, disc_num: usize, total: usize) -> String {
+    if total <= 1 && disc_num == 1 {
+        return base.to_string();
+    }
+    let p = Path::new(base);
+    let stem = p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "disc".into());
+    let ext = p.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
+    let name = format!("{stem}-disc{disc_num}{ext}");
+    match p.parent().filter(|d| !d.as_os_str().is_empty()) {
+        Some(dir) => dir.join(name).to_string_lossy().to_string(),
+        None => name,
+    }
+}
+
+// ── Music DVD ────────────────────────────────────────────────────────────────
+
+fn run_music_dvd(args: &BurnArgs) -> Result<(), Error> {
+    let size = disc_size(args)?;
+    let audio = args.audio.clone().unwrap_or_default();
+    if args.files.is_some() {
+        return Err(Error::validation("--files only applies to Data discs; use --audio or --playlist for the music"));
+    }
+
+    // Everything (the music as Dolby Digital plus any data folder) has to fit on one disc.
+    note(args, "Working out whether this fits on one disc...");
+    let planned = discs::plan_request(&discs::PlanRequest {
+        format: "musicdvd".into(),
+        audio: audio.clone(),
+        playlist: args.playlist.clone(),
+        data: args.data.clone(),
+        playlist_root: playlist_root(args),
+        disc_size_mb: Some(size.mb),
+        dvd_audio_kbps: Some(args.dvd_audio_kbps),
+        ..Default::default()
+    })?;
+    let plan = &planned["plan"];
+    if plan["fits"] == false {
+        return Err(Error::validation(plan["warnings"][0].as_str().unwrap_or("This won't fit on one disc").to_string()));
+    }
+    note(args, &format!(
+        "{} tracks ({}:{:02}), about {:.0} MB of {} MB on the disc",
+        plan["tracks"].as_array().map(|t| t.len()).unwrap_or(0),
+        plan["total_secs"].as_u64().unwrap_or(0) / 60,
+        plan["total_secs"].as_u64().unwrap_or(0) % 60,
+        plan["used_bytes"].as_u64().unwrap_or(0) as f64 / 1_048_576.0,
+        size.mb,
+    ));
+
+    let (items, _skipped) = discs::resolve_audio(&audio, args.playlist.as_deref(), playlist_root(args).as_deref())?;
+    let tracks: Vec<String> = items.into_iter().map(|i| i.path).collect();
+    let standard: parser::VideoStandardArg = args.dvd_standard.parse().map_err(Error::validation)?;
+
+    let mut graph = parser::from_cli("musicdvd", Some(&tracks), None, args.data.as_deref(), &args.label, false)?;
+    graph.dvd = Some(crate::model::disc::DvdOptions {
+        audio_kbps: args.dvd_audio_kbps,
+        standard: standard.0,
+        still: args.dvd_still.clone(),
+    });
+    burn_graph(&graph, args, None)
 }
 
 // ── Audio (Red Book / Blue Book) path ─────────────────────────────────────────
@@ -445,7 +541,7 @@ fn burn_graph(
         if args.progress_json {
             println!("{{\"type\":\"done\"}}");
         } else {
-            eprintln!("Disc burn complete.");
+            eprintln!("{}", if backend::dvd::writing_to_file() { "Disc image saved." } else { "Disc burn complete." });
         }
     } else {
         eprintln!("Dry run complete. No disc was written.");
@@ -586,7 +682,7 @@ mod tests {
     #[test]
     fn data_sources_are_exclusive() {
         let args = |files: Option<Vec<String>>, data: Option<String>| BurnArgs {
-            format: "datacd".into(), audio: None, playlist: None, data, files, playlist_root: None, disc_size: 700,
+            format: "datacd".into(), audio: None, playlist: None, data, files, playlist_root: None, disc_size: None, dvd_audio_kbps: 448, dvd_standard: "pal".into(), dvd_still: None, iso_out: None,
             label: "T".into(), input: None, device: "/dev/null".into(), debug: false, dry_run: true,
             cd_text: false, transcode: None, stage_dir: None, keep_staged: false, progress_json: false,
         };

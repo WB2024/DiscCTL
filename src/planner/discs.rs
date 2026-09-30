@@ -55,12 +55,58 @@ const ISO_DIR_BYTES: u64 = 8 * 1024;
 /// A second session (Enhanced CD) costs this many sectors of lead-out and lead-in.
 const SESSION_GAP_SECTORS: u64 = 11_400;
 
+/// The blank discs we know about.
+pub struct Preset {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub mb: u64,
+    /// "cd" or "dvd" (DVD and Blu-ray)
+    pub media: &'static str,
+}
+
+/// Capacities are what the disc really holds (sector counts), rounded down.
+pub const PRESETS: &[Preset] = &[
+    Preset { id: "cd700", label: "CD-R 700 MB · 80 min", mb: 700, media: "cd" },
+    Preset { id: "cd650", label: "CD-R 650 MB · 74 min", mb: 650, media: "cd" },
+    Preset { id: "cd800", label: "CD-R 800 MB · 90 min", mb: 800, media: "cd" },
+    Preset { id: "dvd5", label: "DVD±R 4.7 GB", mb: 4482, media: "dvd" },
+    Preset { id: "dvd9", label: "DVD±R DL 8.5 GB", mb: 8147, media: "dvd" },
+    Preset { id: "bd25", label: "BD-R 25 GB", mb: 23866, media: "dvd" },
+    Preset { id: "bd50", label: "BD-R DL 50 GB", mb: 47732, media: "dvd" },
+];
+
 impl DiscSize {
     pub fn new(mb: u64) -> Result<Self, Error> {
-        if !(100..=2000).contains(&mb) {
-            return Err(Error::validation(format!("Disc size {mb} MB is outside the supported range (100-2000)")));
+        if !(100..=200_000).contains(&mb) {
+            return Err(Error::validation(format!("Disc size {mb} MB is outside the supported range (100-200000)")));
         }
         Ok(DiscSize { mb })
+    }
+
+    /// A size in MB, or a name such as `dvd`, `dvd-dl`, `bd`, `bd-dl`, `cd700`.
+    pub fn parse(s: &str) -> Result<Self, Error> {
+        let t = s.trim().to_ascii_lowercase().replace(['-', '_', ' '], "");
+        if let Ok(mb) = t.parse::<u64>() {
+            return Self::new(mb);
+        }
+        let mb = match t.as_str() {
+            "cd" | "cd700" | "cd80" => 700,
+            "cd650" | "cd74" => 650,
+            "cd800" | "cd90" => 800,
+            "dvd" | "dvd5" | "dvd47" => 4482,
+            "dvddl" | "dvd9" | "dvd85" => 8147,
+            "bd" | "bd25" => 23866,
+            "bddl" | "bd50" => 47732,
+            _ => return Err(Error::validation(format!(
+                "Unknown disc size '{s}'. Use a size in MB or one of: cd700, cd650, cd800, dvd, dvd-dl, bd, bd-dl"
+            ))),
+        };
+        Self::new(mb)
+    }
+
+    /// DVD and Blu-ray discs (bigger than any CD) use UDF and need a little more room.
+    pub fn is_dvd_class(self) -> bool {
+        self.mb > 1000
     }
 
     /// Bytes on the whole disc (as marketed: 700 MB = 700 MiB).
@@ -68,7 +114,7 @@ impl DiscSize {
         self.mb * MIB
     }
 
-    /// Playing time of the matching audio disc.
+    /// Playing time of the matching audio CD.
     pub fn minutes(self) -> u64 {
         match self.mb {
             0..=650 => 74,
@@ -77,20 +123,39 @@ impl DiscSize {
         }
     }
 
-    /// Seconds of audio that safely fit (30 s kept free).
+    /// Seconds of audio that safely fit on a CD (30 s kept free).
     pub fn audio_capacity_secs(self) -> u64 {
         self.minutes() * 60 - 30
     }
 
-    /// Bytes of ISO 9660 content that safely fit on a Data CD.
+    fn safety_bytes(self) -> u64 {
+        if self.is_dvd_class() { 16 * MIB } else { SAFETY_BYTES }
+    }
+
+    /// Filesystem structures that exist once per disc.
+    pub fn iso_base(self) -> u64 {
+        if self.is_dvd_class() { 3 * MIB } else { ISO_BASE_BYTES }
+    }
+
+    /// Directory records per file (UDF adds a second set on DVDs).
+    fn record_bytes(self) -> u64 {
+        if self.is_dvd_class() { 1500 } else { ISO_RECORD_BYTES }
+    }
+
+    /// What a file costs on the disc: its data rounded up to whole 2048-byte sectors, plus records.
+    pub fn file_cost(self, bytes: u64) -> u64 {
+        bytes.div_ceil(2048) * 2048 + self.record_bytes()
+    }
+
+    /// Bytes of file content that safely fit on one disc.
     pub fn data_usable_bytes(self) -> u64 {
-        self.capacity_bytes().saturating_sub(SAFETY_BYTES + ISO_BASE_BYTES)
+        self.capacity_bytes().saturating_sub(self.safety_bytes() + self.iso_base())
     }
 }
 
-/// What a file costs on the disc: its data rounded up to whole 2048-byte sectors, plus records.
+/// What a file costs on a CD.
 pub fn file_cost(bytes: u64) -> u64 {
-    bytes.div_ceil(2048) * 2048 + ISO_RECORD_BYTES
+    DiscSize::default().file_cost(bytes)
 }
 
 // ── Reading durations ─────────────────────────────────────────────────────────
@@ -373,11 +438,12 @@ pub fn pack_data(files: &[PlannedFile], size: DiscSize) -> (Vec<DataDisc>, Vec<u
     let mut used = 0u64;
     let mut dirs: HashSet<String> = HashSet::new();
 
+    let base = size.iso_base();
     let close = |discs: &mut Vec<DataDisc>, items: &mut Vec<usize>, payload: &mut u64, used: &mut u64, dirs: &mut HashSet<String>| {
         if items.is_empty() {
             return;
         }
-        let total = *used + ISO_BASE_BYTES;
+        let total = *used + base;
         discs.push(DataDisc {
             number: discs.len() + 1,
             files: items.len(),
@@ -394,8 +460,8 @@ pub fn pack_data(files: &[PlannedFile], size: DiscSize) -> (Vec<DataDisc>, Vec<u
     for (i, f) in files.iter().enumerate() {
         let dir = Path::new(&f.rel_path).parent().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
         let new_dir = if dirs.contains(&dir) { 0 } else { ISO_DIR_BYTES };
-        let cost = file_cost(f.est_bytes) + new_dir;
-        if file_cost(f.est_bytes) + ISO_DIR_BYTES > usable {
+        let cost = size.file_cost(f.est_bytes) + new_dir;
+        if size.file_cost(f.est_bytes) + ISO_DIR_BYTES > usable {
             too_big.push(i);
             continue;
         }
@@ -404,7 +470,7 @@ pub fn pack_data(files: &[PlannedFile], size: DiscSize) -> (Vec<DataDisc>, Vec<u
         }
         let new_dir = if dirs.contains(&dir) { 0 } else { ISO_DIR_BYTES };
         dirs.insert(dir);
-        used += file_cost(f.est_bytes) + new_dir;
+        used += size.file_cost(f.est_bytes) + new_dir;
         payload += f.est_bytes;
         items.push(i);
     }
@@ -560,7 +626,7 @@ pub fn resolve_audio(
 
 #[derive(Default, Clone)]
 pub struct PlanRequest {
-    /// "redbook", "datacd" or "bluebook"
+    /// "redbook", "datacd", "bluebook", "datadvd" or "musicdvd"
     pub format: String,
     pub audio: Vec<String>,
     pub playlist: Option<String>,
@@ -569,13 +635,44 @@ pub struct PlanRequest {
     pub playlist_root: Option<PathBuf>,
     pub transcode: Option<String>,
     pub disc_size_mb: Option<u64>,
+    /// Music DVD: Dolby Digital bitrate (192, 256, 384 or 448; default 448)
+    pub dvd_audio_kbps: Option<u32>,
+}
+
+/// Roughly what the still picture and the DVD's packaging add to a track, in kbit/s (measured
+/// on real DVD-Video output).
+pub const DVD_OVERHEAD_KBPS: u64 = 260;
+
+/// Size of one track on a Music DVD: Dolby Digital audio plus the still picture and packaging.
+pub fn music_dvd_track_bytes(secs: u64, audio_kbps: u32) -> u64 {
+    let bytes = secs as f64 * (audio_kbps as f64 + DVD_OVERHEAD_KBPS as f64) * 125.0 * 1.02;
+    bytes as u64
+}
+
+#[derive(Debug, Serialize)]
+pub struct MusicDvdPlan {
+    pub disc_size_mb: u64,
+    pub capacity_bytes: u64,
+    pub tracks: Vec<AudioTrack>,
+    pub total_secs: u64,
+    pub audio_kbps: u32,
+    pub audio_bytes: u64,
+    pub data_bytes: u64,
+    pub data_files: usize,
+    pub used_bytes: u64,
+    pub percent: f32,
+    pub fits: bool,
+    pub skipped: Vec<Value>,
+    pub warnings: Vec<String>,
 }
 
 /// Work out the plan for a burn request. The result says how many discs are needed and what
 /// goes on each; `kind` is "data", "audio" or "enhanced".
 pub fn plan_request(req: &PlanRequest) -> Result<Value, Error> {
+    let is_dvd_format = matches!(req.format.to_lowercase().as_str(), "datadvd" | "data-dvd" | "dvd" | "musicdvd" | "music-dvd" | "enhanceddvd" | "enhanced-dvd" | "dvd-video");
     let size = match req.disc_size_mb {
         Some(mb) => DiscSize::new(mb)?,
+        None if is_dvd_format => DiscSize::new(4482)?,
         None => DiscSize::default(),
     };
     let spec = match req.transcode.as_deref().filter(|t| !t.trim().is_empty()) {
@@ -584,7 +681,7 @@ pub fn plan_request(req: &PlanRequest) -> Result<Value, Error> {
     };
 
     match req.format.to_lowercase().as_str() {
-        "datacd" | "data-cd" | "data" => {
+        "datacd" | "data-cd" | "data" | "datadvd" | "data-dvd" | "dvd" => {
             let resolved = resolve_data(&DataSpec {
                 playlist: req.playlist.clone(),
                 files: req.files.clone(),
@@ -633,7 +730,57 @@ pub fn plan_request(req: &PlanRequest) -> Result<Value, Error> {
                 "fits": fits,
             }))
         }
-        other => Err(Error::validation(format!("Unknown format: '{}'. Valid values: redbook, datacd, bluebook", other))),
+        "musicdvd" | "music-dvd" | "enhanceddvd" | "enhanced-dvd" | "dvd-video" => {
+            let kbps = req.dvd_audio_kbps.unwrap_or(448);
+            crate::model::disc::DvdOptions { audio_kbps: kbps, ..Default::default() }.validate().map_err(Error::validation)?;
+            let (items, skipped) = resolve_audio(&req.audio, req.playlist.as_deref(), req.playlist_root.as_deref())?;
+            let tracks: Vec<AudioTrack> = items.iter().map(|i| AudioTrack { path: i.path.clone(), secs: i.duration_secs }).collect();
+            let total_secs: u64 = tracks.iter().map(|t| t.secs).sum();
+            let audio_bytes: u64 = tracks.iter().map(|t| music_dvd_track_bytes(t.secs, kbps)).sum();
+
+            // The data folder is optional: it shares the disc with the music.
+            let (data_bytes, data_files) = match req.data.as_deref() {
+                Some(dir) => {
+                    let items = split::enumerate_dir(dir)?;
+                    (items.iter().map(|i| size.file_cost(i.size_bytes)).sum::<u64>() + ISO_DIR_BYTES, items.len())
+                }
+                None => (0, 0),
+            };
+            let used = audio_bytes + data_bytes + size.iso_base();
+            let usable = size.capacity_bytes().saturating_sub(size.safety_bytes());
+            let fits = used <= usable;
+            let percent = used as f32 / size.capacity_bytes() as f32 * 100.0;
+            let mut warnings = Vec::new();
+            if !fits {
+                warnings.push(format!(
+                    "This needs about {:.0} MB ({} of music + {}) but a {} MB disc holds {:.0} MB. Use fewer tracks, less data, a lower audio bitrate or a bigger disc.",
+                    used as f64 / MIB as f64,
+                    format!("{:.0} MB", audio_bytes as f64 / MIB as f64),
+                    format!("{:.0} MB of files", data_bytes as f64 / MIB as f64),
+                    size.mb,
+                    usable as f64 / MIB as f64,
+                ));
+            }
+            if tracks.len() > 99 {
+                warnings.push(format!("{} tracks: DVD-Video allows 99 chapters per title, so the disc will have {} titles that play one after the other.", tracks.len(), tracks.len().div_ceil(99)));
+            }
+            Ok(json!({"kind": "music_dvd", "plan": MusicDvdPlan {
+                disc_size_mb: size.mb,
+                capacity_bytes: size.capacity_bytes(),
+                tracks,
+                total_secs,
+                audio_kbps: kbps,
+                audio_bytes,
+                data_bytes,
+                data_files,
+                used_bytes: used,
+                percent,
+                fits,
+                skipped: skipped.iter().map(|s| json!({"entry": s.entry, "reason": s.reason})).collect(),
+                warnings,
+            }}))
+        }
+        other => Err(Error::validation(format!("Unknown format: '{}'. Valid values: redbook, datacd, bluebook, datadvd, musicdvd", other))),
     }
 }
 
@@ -771,5 +918,53 @@ mod tests {
         assert_eq!(plan.discs[0].tracks, 19);
         assert_eq!(plan.discs[1].tracks, 11);
         assert!(plan.discs[0].percent < 100.0);
+    }
+
+    #[test]
+    fn disc_sizes_by_name() {
+        assert_eq!(DiscSize::parse("dvd").unwrap().mb, 4482);
+        assert_eq!(DiscSize::parse("DVD-DL").unwrap().mb, 8147);
+        assert_eq!(DiscSize::parse("bd").unwrap().mb, 23866);
+        assert_eq!(DiscSize::parse("bd_dl").unwrap().mb, 47732);
+        assert_eq!(DiscSize::parse("cd650").unwrap().mb, 650);
+        assert_eq!(DiscSize::parse("1234").unwrap().mb, 1234);
+        assert!(DiscSize::parse("floppy").is_err());
+        assert!(DiscSize::new(4482).unwrap().is_dvd_class() && !DiscSize::new(700).unwrap().is_dvd_class());
+        // a DVD keeps a bit more free than a CD
+        let dvd = DiscSize::new(4482).unwrap();
+        assert!(dvd.data_usable_bytes() < dvd.capacity_bytes() - 16 * MIB);
+        assert!(dvd.data_usable_bytes() > dvd.capacity_bytes() - 30 * MIB);
+    }
+
+    /// Estimates are checked against real DVD-Video output: 20 s at 448 kbps came to 1.74 MB.
+    #[test]
+    fn music_dvd_track_size_estimate() {
+        let est = music_dvd_track_bytes(20, 448);
+        assert!((1_738_752..=1_950_000).contains(&est), "{est}");
+        assert!(music_dvd_track_bytes(20, 192) < music_dvd_track_bytes(20, 448));
+        // 4 hours of music at the top quality still fits a 4.7 GB DVD
+        assert!(music_dvd_track_bytes(4 * 3600, 448) < DiscSize::new(4482).unwrap().data_usable_bytes());
+    }
+
+    /// The case that prompted DVD support: FLAC that becomes MP3 320k fits one DVD, and it only
+    /// needs one disc even where the FLAC needs several CDs.
+    #[test]
+    fn a_dvd_holds_what_takes_several_cds() {
+        let items: Vec<DataItem> = (0..120)
+            .map(|i| DataItem { path: format!("/x/{i:03}.flac"), rel_path: format!("{i:03}.flac"), size_bytes: 35 * MIB })
+            .collect(); // 4.1 GiB of FLAC
+        let spec = mp3_320();
+        let convert = |size: DiscSize| {
+            let files: Vec<PlannedFile> = items
+                .iter()
+                .map(|i| {
+                    let d = decide(&i.path, i.size_bytes, Some(300.0), Some(&spec));
+                    PlannedFile { path: i.path.clone(), rel_path: final_rel_path(&i.rel_path, d.transcode, Some(&spec)), original_bytes: i.size_bytes, est_bytes: d.est_bytes, transcode: d.transcode }
+                })
+                .collect::<Vec<_>>();
+            pack_data(&files, size).0.len()
+        };
+        assert!(convert(DiscSize::default()) >= 3);            // CDs
+        assert_eq!(convert(DiscSize::new(4482).unwrap()), 1);  // one DVD
     }
 }

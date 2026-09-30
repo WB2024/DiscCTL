@@ -2,6 +2,7 @@ pub mod audio;
 pub mod convert;
 pub mod data;
 pub mod device;
+pub mod dvd;
 pub mod transcode;
 
 use crate::{
@@ -12,7 +13,41 @@ use crate::{
     },
 };
 
+/// DVD and Blu-ray discs: the media is checked with xorriso (CD tools don't understand DVDs)
+/// and images are built with genisoimage.
+fn execute_dvd(graph: &DiscGraph, plan: &BurnPlan, dev: &str, debug: bool, progress_json: bool) -> Result<(), Error> {
+    if !dvd::writing_to_file() {
+        device::check_device(dev)?;
+    }
+    for step in &plan.steps {
+        match step {
+            BurnStep::AppendDataSession { session_index, .. } => match graph.sessions.get(*session_index) {
+                Some(Session::Data(d)) => dvd::burn_data_dvd(d, dev, &graph.label, debug, progress_json)?,
+                _ => return Err(Error::backend("Expected a data session")),
+            },
+            BurnStep::BurnMusicDvd { audio_session_index, data_session_index } => {
+                let tracks = match graph.sessions.get(*audio_session_index) {
+                    Some(Session::Audio(a)) => a.tracks.clone(),
+                    _ => return Err(Error::backend("Expected an audio session")),
+                };
+                let data_dir = match data_session_index.and_then(|i| graph.sessions.get(i)) {
+                    Some(Session::Data(d)) => Some(d.source_dir.clone()),
+                    _ => None,
+                };
+                let opts = graph.dvd.clone().unwrap_or_default();
+                dvd::burn_music_dvd(&tracks, data_dir.as_deref(), &opts, dev, &graph.label, debug, progress_json)?;
+            }
+            BurnStep::FinalizeDisc => {} // the write closes the disc
+            BurnStep::BurnAudioSession { .. } => return Err(Error::backend("CD audio sessions can't be burned to a DVD")),
+        }
+    }
+    Ok(())
+}
+
 pub fn execute(graph: &DiscGraph, plan: &BurnPlan, dev: &str, debug: bool, progress_json: bool) -> Result<(), Error> {
+    if graph.format.is_dvd() {
+        return execute_dvd(graph, plan, dev, debug, progress_json);
+    }
     device::check_device(dev)?;
 
     // Pre-flight disc state check
@@ -95,6 +130,9 @@ pub fn execute(graph: &DiscGraph, plan: &BurnPlan, dev: &str, debug: bool, progr
                     }
                     _ => return Err(Error::backend("Expected data session")),
                 }
+            }
+            BurnStep::BurnMusicDvd { .. } => {
+                return Err(Error::backend("A Music DVD can't be burned as a CD"));
             }
             BurnStep::FinalizeDisc => {
                 // xorriso cdrecord (without -multi) finalizes and ejects the disc

@@ -57,6 +57,7 @@ pub fn from_cli(
         format,
         label: label.to_string(),
         sessions,
+        dvd: None,
     })
 }
 
@@ -65,8 +66,10 @@ fn parse_format(s: &str) -> Result<DiscFormat, Error> {
         "redbook" | "red-book" | "audio" => Ok(DiscFormat::RedBook),
         "datacd" | "data-cd" | "data" => Ok(DiscFormat::DataCD),
         "bluebook" | "blue-book" | "cdextra" | "cd-extra" => Ok(DiscFormat::BlueBook),
+        "datadvd" | "data-dvd" | "dvd" => Ok(DiscFormat::DataDvd),
+        "musicdvd" | "music-dvd" | "enhanceddvd" | "enhanced-dvd" | "dvd-video" => Ok(DiscFormat::MusicDvd),
         other => Err(Error::validation(format!(
-            "Unknown format: '{}'. Valid values: redbook, datacd, bluebook",
+            "Unknown format: '{}'. Valid values: redbook, datacd, bluebook, datadvd, musicdvd",
             other
         ))),
     }
@@ -97,4 +100,14 @@ fn expand_audio_patterns(patterns: &[String]) -> Result<Vec<String>, Error> {
         }
     }
     Ok(tracks)
+}
+
+/// A picture standard given on the command line.
+pub struct VideoStandardArg(pub crate::model::disc::VideoStandard);
+
+impl std::str::FromStr for VideoStandardArg {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, String> {
+        s.parse().map(VideoStandardArg)
+    }
 }

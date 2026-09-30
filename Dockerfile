@@ -8,7 +8,7 @@ RUN cargo build --release --locked
 # ── Runtime ──────────────────────────────────────────────────────────────────
 FROM debian:trixie-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        cdparanoia cdrdao xorriso wodim genisoimage ffmpeg eject ca-certificates \
+        cdparanoia cdrdao xorriso wodim genisoimage ffmpeg eject dvdauthor ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /src/target/release/rustydisc /usr/local/bin/rustydisc

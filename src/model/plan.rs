@@ -11,6 +11,12 @@ pub enum BurnStep {
         session_index: usize,
         filesystem: String,
     },
+    /// Author a DVD-Video disc from an audio session (plus an optional data session) and write it.
+    BurnMusicDvd {
+        audio_session_index: usize,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        data_session_index: Option<usize>,
+    },
     FinalizeDisc,
 }
 

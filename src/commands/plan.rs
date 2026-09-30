@@ -30,9 +30,13 @@ pub struct PlanArgs {
     /// Data CD only: convert audio first, e.g. mp3:320 — the plan counts the converted sizes
     #[arg(long)]
     pub transcode: Option<String>,
-    /// Disc capacity in MB: 650 (74 min), 700 (80 min, default) or 800 (90 min)
-    #[arg(long, default_value_t = 700)]
-    pub disc_size: u64,
+    /// Blank disc size, in MB or by name: cd700 (default for CDs), cd650, cd800, dvd (default for
+    /// DVDs), dvd-dl, bd, bd-dl
+    #[arg(long)]
+    pub disc_size: Option<String>,
+    /// Music DVD: Dolby Digital bitrate in kbps (192, 256, 384 or 448)
+    #[arg(long, default_value_t = 448)]
+    pub dvd_audio_kbps: u32,
     /// Only accept playlist entries inside this folder (used by the web UI)
     #[arg(long, hide = true)]
     pub playlist_root: Option<String>,
@@ -58,7 +62,8 @@ pub fn run(args: PlanArgs) -> Result<(), Error> {
         data: args.data.clone(),
         playlist_root: args.playlist_root.clone().map(std::path::PathBuf::from),
         transcode: args.transcode.clone(),
-        disc_size_mb: Some(args.disc_size),
+        disc_size_mb: args.disc_size.as_deref().map(planner::discs::DiscSize::parse).transpose()?.map(|s| s.mb),
+        dvd_audio_kbps: Some(args.dvd_audio_kbps),
     })?;
 
     // The burn steps for one disc, when they can be worked out from the flags alone.

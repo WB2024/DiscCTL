@@ -228,12 +228,14 @@ pre.json { background: var(--bg); border: 1px solid var(--line); border-radius: 
 
     <!-- ── Burn ───────────────────────────────────── -->
     <section class="page" id="page-burn">
-      <div class="page-head"><h1>Burn</h1><div class="muted">Author Audio CDs, Data CDs and Enhanced (Blue Book) CDs from files on the server.</div></div>
+      <div class="page-head"><h1>Burn</h1><div class="muted">Author Audio CDs, Data CDs, Enhanced (Blue Book) CDs, Data DVDs and Enhanced Music DVDs from files on the server.</div></div>
 
       <div class="tabs" id="burn-tabs">
         <button data-fmt="redbook" class="active">🎵 Audio CD</button>
         <button data-fmt="datacd">💾 Data CD</button>
         <button data-fmt="bluebook">✨ Enhanced CD</button>
+        <button data-fmt="datadvd">📀 Data DVD</button>
+        <button data-fmt="musicdvd">🎶 Enhanced Music DVD</button>
         <button data-fmt="graph">{ } Disc graph JSON</button>
       </div>
 
@@ -282,7 +284,7 @@ pre.json { background: var(--bg); border: 1px solid var(--line); border-radius: 
             <label class="field" id="label-wrap">Disc label<input type="text" id="burn-label" placeholder="Untitled">
               <small id="label-help">Filled in from the playlist's name; change it if you like. Jobs that need several discs are labelled “… - Disc 1”, “… - Disc 2” and so on.</small></label>
             <label class="field" id="discsize-wrap">Blank disc
-              <select id="burn-discsize"><option value="700">700 MB · 80 min (standard CD-R)</option><option value="650">650 MB · 74 min</option><option value="800">800 MB · 90 min</option></select>
+              <select id="burn-discsize"></select>
             </label>
             <label class="field" id="transcode-wrap">Transcode the audio files first<small>Shrinks audio files so more fits on the disc</small>
               <select id="burn-transcode">
@@ -293,6 +295,19 @@ pre.json { background: var(--bg); border: 1px solid var(--line); border-radius: 
             </label>
           </div>
           <div style="display:flex;flex-direction:column;gap:12px">
+            <div id="dvd-options" class="hidden" style="display:flex;flex-direction:column;gap:12px">
+              <label class="field">Audio quality
+                <small>Dolby Digital stereo, which every DVD player supports. Higher is better; the disc has plenty of room.</small>
+                <select id="dvd-kbps"><option value="448">448 kbps · best</option><option value="384">384 kbps</option><option value="256">256 kbps</option><option value="192">192 kbps · smallest</option></select>
+              </label>
+              <label class="field">TV standard
+                <small>PAL for the UK, Europe and most of the world; NTSC for North America and Japan.</small>
+                <select id="dvd-standard"><option value="pal">PAL</option><option value="ntsc">NTSC</option></select>
+              </label>
+              <div class="field">Picture while the music plays
+                <div class="row"><span id="dvd-still-name" class="muted grow">Cover art from the tracks' folder, or a plain background</span><button class="btn small" id="dvd-still-pick">Choose image…</button><button class="btn small hidden" id="dvd-still-clear">Reset</button></div>
+              </div>
+            </div>
             <label class="check" id="cdtext-wrap"><input type="checkbox" id="burn-cdtext"><span>Write CD-Text<small>title and artist read from the audio files' tags</small></span></label>
             <label class="check"><input type="checkbox" id="burn-dry"><span>Dry run<small>plan and validate without touching the drive</small></span></label>
             <label class="check"><input type="checkbox" id="burn-debug"><span>Debug output</span></label>
@@ -840,7 +855,7 @@ async function startRip() {
 
 // ── File picker modal ───────────────────────────────────────────────────────
 // mode: "files" (multi-select audio files), "anyfiles" (multi-select any files),
-//       "folder", "audiofolder" (all audio in a folder), "playlist"
+//       "folder", "audiofolder" (all audio in a folder), "playlist", "image"
 function pickPath({ mode, title }) {
   return new Promise(resolve => {
     let cwd = "", chosen = new Set();
@@ -855,7 +870,7 @@ function pickPath({ mode, title }) {
     const multi = mode === "files" || mode === "anyfiles";
     let entries = [];
     const join = n => cwd ? cwd + "/" + n : n;
-    const okFile = e => !e.is_dir && (mode === "files" ? audioRe.test(e.name) : mode === "anyfiles" ? true : mode === "playlist" ? /\.m3u8?$/i.test(e.name) : false);
+    const okFile = e => !e.is_dir && (mode === "files" ? audioRe.test(e.name) : mode === "anyfiles" ? true : mode === "playlist" ? /\.m3u8?$/i.test(e.name) : mode === "image" ? /\.(jpe?g|png)$/i.test(e.name) : false);
 
     async function load(p) {
       try {
@@ -916,7 +931,7 @@ function pickPath({ mode, title }) {
 // ── Burn page ───────────────────────────────────────────────────────────────
 // Audio discs: `audio` files or an `playlist`. Data CD: one of `data` (folder),
 // `dfiles` (individual files) or `dplaylist`. Enhanced CD: audio plus a `data` folder.
-const burn = { fmt: "redbook", audio: [], playlist: null, data: null, dfiles: [], dplaylist: null };
+const burn = { fmt: "redbook", audio: [], playlist: null, data: null, dfiles: [], dplaylist: null, still: null };
 const PL_CACHE = {};
 
 const fmtSecs = s => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
@@ -965,34 +980,55 @@ function playlistLabel(path) {
 }
 function syncAutoLabel() {
   const input = $("#burn-label");
-  const active = burn.fmt === "datacd" ? burn.dplaylist : burn.fmt === "graph" ? null : burn.playlist;
+  const active = (burn.fmt === "datacd" || burn.fmt === "datadvd") ? burn.dplaylist : burn.fmt === "graph" ? null : burn.playlist;
   const untouched = !input.value.trim() || input.value.trim() === autoLabel;
   if (!untouched) { autoLabel = ""; return; }   // the user has typed their own
   autoLabel = active ? playlistLabel(active) : "";
   input.value = autoLabel;
 }
 
+// Disc-size choices depend on the kind of disc: CD-R, or DVD and Blu-ray.
+function fillDiscSizes(family) {
+  const sel = $("#burn-discsize");
+  if (sel.dataset.family === family) return;
+  const presets = (STATUS.media_presets || []).filter(p => p.media === family);
+  sel.innerHTML = presets.map(p => `<option value="${p.mb}">${esc(p.label)}</option>`).join("");
+  sel.dataset.family = family;
+  const saved = store.get("burn-discsize-" + family, "");
+  if (presets.some(p => String(p.mb) === saved)) sel.value = saved;
+}
+
 function renderBurn() {
-  const f = burn.fmt, isGraph = f === "graph", isData = f === "datacd", isEnh = f === "bluebook";
+  const f = burn.fmt, isGraph = f === "graph";
+  const isDataDisc = f === "datacd" || f === "datadvd";       // files, a folder or a playlist
+  const isMusic = f === "musicdvd", isEnh = f === "bluebook";
+  const isDvd = f === "datadvd" || isMusic;
+  const hasAudio = f === "redbook" || isEnh || isMusic;
+  const folderOnly = isEnh || isMusic;                        // the data part is a single folder
   syncAutoLabel();
   $$("#burn-tabs button").forEach(b => b.classList.toggle("active", b.dataset.fmt === f));
-  $("#burn-audio-block").classList.toggle("hidden", isGraph || isData);
-  $("#burn-data-block").classList.toggle("hidden", isGraph || f === "redbook");
+  $("#burn-audio-block").classList.toggle("hidden", isGraph || !hasAudio);
+  $("#burn-data-block").classList.toggle("hidden", isGraph || !(isDataDisc || isEnh || isMusic));
   $("#burn-graph-block").classList.toggle("hidden", !isGraph);
   $("#label-wrap").classList.toggle("hidden", isGraph);
   $("#discsize-wrap").classList.toggle("hidden", isGraph);
-  $("#transcode-wrap").classList.toggle("hidden", !isData);
-  $("#cdtext-wrap").classList.toggle("hidden", isGraph || isData);
+  if (!isGraph) fillDiscSizes(isDvd ? "dvd" : "cd");
+  $("#transcode-wrap").classList.toggle("hidden", !isDataDisc);
+  $("#cdtext-wrap").classList.toggle("hidden", isGraph || !(f === "redbook" || isEnh));
+  $("#dvd-options").classList.toggle("hidden", !isMusic);
+  $("#dvd-still-name").textContent = burn.still ? burn.still : "Cover art from the tracks' folder, or a plain background";
+  $("#dvd-still-clear").classList.toggle("hidden", !burn.still);
   $("#source-help").classList.toggle("hidden", isGraph);
-  $("#audio-title").textContent = isEnh ? "Session 1 — Audio tracks" : "Audio tracks";
-  $("#data-title").textContent = isEnh ? "Session 2 — Data folder" : "Files for the disc";
-  // An Enhanced CD's data session is a folder; a Data CD can be built from files, a folder or a playlist.
-  $("#add-data-files").classList.toggle("hidden", isEnh);
-  $("#add-data-playlist").classList.toggle("hidden", isEnh);
-  $("#pick-data").textContent = isEnh ? "📁 Choose folder…" : "📁 Choose folder…";
-  $("#source-help").textContent = isData
+  $("#audio-title").textContent = isEnh ? "Session 1 — Audio tracks" : isMusic ? "Music — plays in any DVD player" : "Audio tracks";
+  $("#data-title").textContent = isEnh ? "Session 2 — Data folder" : isMusic ? "Data files (optional)" : "Files for the disc";
+  // A data session next to audio is a folder; a Data CD/DVD can be built from files, a folder or a playlist.
+  $("#add-data-files").classList.toggle("hidden", folderOnly);
+  $("#add-data-playlist").classList.toggle("hidden", folderOnly);
+  $("#source-help").textContent = isDataDisc
     ? "Use one source: individual files, a whole folder (its sub-folders are kept), or a playlist. Files and playlist entries go in the root of the disc. Playlist paths can be relative to the playlist's own folder; everything must be inside the server's media folder."
-    : "Playlists can be .m3u or .m3u8. Relative paths are resolved from the playlist's own folder, and everything must be inside the server's media folder. Adding a folder adds its audio files in track order.";
+    : isMusic
+      ? "Each track becomes a chapter on a DVD-Video disc that plays in any DVD player, over a picture. A data folder is optional: its files are added to the disc next to the music, so it doubles as a data disc in a computer. Everything has to fit on one disc."
+      : "Playlists can be .m3u or .m3u8. Relative paths are resolved from the playlist's own folder, and everything must be inside the server's media folder. Adding a folder adds its audio files in track order.";
 
   // Audio side
   const alist = $("#audio-list"), apl = $("#pl-preview-audio");
@@ -1009,8 +1045,8 @@ function renderBurn() {
   const dlist = $("#data-list"), dpl = $("#pl-preview-data");
   dpl.innerHTML = "";
   let dsum = "";
-  if (isEnh || (!burn.dfiles.length && !burn.dplaylist)) {
-    dlist.innerHTML = burn.data === null ? `<div class="empty">${isEnh ? "No folder chosen." : "Nothing chosen yet — add files, choose a folder, or use a playlist."}</div>` : "";
+  if (folderOnly || (!burn.dfiles.length && !burn.dplaylist)) {
+    dlist.innerHTML = burn.data === null ? `<div class="empty">${isMusic ? "No folder chosen — the disc will hold just the music." : isEnh ? "No folder chosen." : "Nothing chosen yet — add files, choose a folder, or use a playlist."}</div>` : "";
     if (burn.data !== null) { dlist.innerHTML = `<div class="item">📁 <span class="grow">/${esc(burn.data)}</span><button class="btn small" data-a="clear">Remove</button></div>`; $("[data-a=clear]", dlist).onclick = () => { burn.data = null; renderBurn(); }; }
   } else if (burn.dplaylist) {
     playlistRow(dlist, burn.dplaylist, () => { burn.dplaylist = null; renderBurn(); });
@@ -1030,15 +1066,17 @@ function burnBody() {
     return { graph, dry_run: $("#burn-dry").checked, debug: $("#burn-debug").checked, device: selectedDevice() };
   }
   const common = { format: f, disc_size_mb: +$("#burn-discsize").value, label: $("#burn-label").value.trim() || null, dry_run: $("#burn-dry").checked, debug: $("#burn-debug").checked, device: selectedDevice() };
-  if (f === "datacd") {
+  if (f === "datacd" || f === "datadvd") {
     if (!burn.data && !burn.dfiles.length && !burn.dplaylist) throw new Error("Choose what to put on the disc: files, a folder or a playlist");
     return { ...common, data: burn.dplaylist || burn.dfiles.length ? null : burn.data, files: burn.dplaylist ? [] : burn.dfiles,
       playlist: burn.dplaylist, transcode: $("#burn-transcode").value || null };
   }
   if (!burn.playlist && !burn.audio.length) throw new Error("Add at least one audio track, a folder, or a playlist");
   if (f === "bluebook" && burn.data === null) throw new Error("Choose a data folder for the second session");
-  return { ...common, audio: burn.playlist ? [] : burn.audio, playlist: burn.playlist, data: f === "bluebook" ? burn.data : null,
-    cd_text: $("#burn-cdtext").checked };
+  const body = { ...common, audio: burn.playlist ? [] : burn.audio, playlist: burn.playlist, data: (f === "bluebook" || f === "musicdvd") ? burn.data : null,
+    cd_text: $("#burn-cdtext").checked && f !== "musicdvd" };
+  if (f === "musicdvd") { body.dvd_audio_kbps = +$("#dvd-kbps").value; body.dvd_standard = $("#dvd-standard").value; body.dvd_still = burn.still; }
+  return body;
 }
 
 const fmtMB = b => b >= 1024 ** 3 ? (b / 1024 ** 3).toFixed(1) + " GB" : Math.max(1, Math.round(b / 1024 ** 2)) + " MB";
@@ -1083,6 +1121,11 @@ function renderPlan(res) {
     body = discCards(p, "data");
     if (p.too_big.length) foot += noticeList("Too big for a disc", p.too_big.map(x => `<li class="mono">${esc(x)}</li>`), "err");
     foot += `<div class="muted" style="margin-top:10px">${converted ? "Converted sizes are estimates (bitrate × length); the burn measures the real files as it converts and moves on to the next disc when one is full. " : ""}Each disc keeps a little room free. You'll be asked to insert each blank disc in turn.</div>`;
+  } else if (kind === "music_dvd") {
+    head = `<div style="font-size:20px;font-weight:700">${p.fits ? "Fits on one disc" : "Does not fit on one disc"}</div>
+      <div class="muted" style="margin-top:4px">${p.tracks.length} track${p.tracks.length === 1 ? "" : "s"} (${fmtSecs(p.total_secs)}) as Dolby Digital ${p.audio_kbps} kbps ≈ ${fmtMB(p.audio_bytes)}${p.data_files ? ` + ${p.data_files} data file${p.data_files === 1 ? "" : "s"} ≈ ${fmtMB(p.data_bytes)}` : ""} · about <b>${p.percent < 1 ? "under 1" : Math.round(p.percent)}%</b> of the ${fmtMB(p.capacity_bytes)} disc</div>
+      <div style="margin-top:8px">${fillBar(p.percent)}</div>`;
+    foot += `<div class="muted" style="margin-top:10px">The disc plays in any DVD player: each track is a chapter over a still picture. The audio is re-encoded as Dolby Digital, so the sizes are estimates.</div>`;
   } else if (kind === "audio") {
     head = `<div style="font-size:20px;font-weight:700">${n} disc${n === 1 ? "" : "s"} needed</div>
       <div class="muted" style="margin-top:4px">${p.tracks.length} track${p.tracks.length === 1 ? "" : "s"} · ${fmtSecs(p.total_secs)} in total · ${fmtSecs(p.capacity_secs)} fits on each disc</div>`;
@@ -1119,6 +1162,7 @@ async function burnStart() {
       const res = await api("/api/plan", { body });
       const n = res.plan?.disc_count || 1;
       if (res.kind === "enhanced" && !res.fits) throw new Error(res.plan.warnings[0] || "This won't fit on one disc");
+      if (res.kind === "music_dvd" && !res.plan.fits) throw new Error(res.plan.warnings[0] || "This won't fit on one disc");
       if (n > 1) msg = `This job needs ${n} discs.\n\nYou'll be asked to insert a blank disc for each one, one after another.\n\nStart burning disc 1 in ${body.device}?`;
     }
     if (!body.dry_run && !confirmBox(msg)) return;
@@ -1379,8 +1423,9 @@ async function init() {
     try { const graph = JSON.parse($("#graph-text").value); await api("/api/validate", { body: { graph } }); toast("Disc graph is valid", "ok"); }
     catch (e) { toast(e.message, "err", 8000); }
   };
-  try { $("#burn-discsize").value = store.get("burn-discsize", "700"); } catch {}
-  $("#burn-discsize").onchange = e => store.set("burn-discsize", e.target.value);
+  $("#burn-discsize").onchange = e => store.set("burn-discsize-" + e.target.dataset.family, e.target.value);
+  $("#dvd-still-pick").onclick = async () => { const r = await pickPath({ mode: "image", title: "Choose the picture" }); if (r?.[0]) { burn.still = r[0]; renderBurn(); } };
+  $("#dvd-still-clear").onclick = () => { burn.still = null; renderBurn(); };
   $("#burn-plan").onclick = burnPlan;
   $("#burn-start").onclick = burnStart;
   renderBurn();

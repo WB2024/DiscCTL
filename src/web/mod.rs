@@ -262,6 +262,7 @@ async fn status(State(st): S) -> Json<Value> {
         "rips_dir": path_str(&st.cfg.rips_dir),
         "media_dir": path_str(&st.cfg.media_dir),
         "formats": ["flac", "wav", "alac", "aiff", "ogg", "mp3", "opus"],
+        "media_presets": crate::planner::discs::PRESETS.iter().map(|p| json!({"id": p.id, "label": p.label, "mb": p.mb, "media": p.media})).collect::<Vec<_>>(),
         "deps": deps,
         "busy_job": st.jobs.busy().map(|j| j.summary()),
     }))
@@ -722,8 +723,14 @@ struct BurnReq {
     dry_run: bool,
     debug: bool,
     device: Option<String>,
-    /// Disc capacity in MB: 650, 700 (default) or 800.
+    /// Disc capacity in MB (see the presets in /api/status).
     disc_size_mb: Option<u64>,
+    /// Music DVD: Dolby Digital bitrate in kbps.
+    dvd_audio_kbps: Option<u32>,
+    /// Music DVD: "pal" or "ntsc".
+    dvd_standard: Option<String>,
+    /// Music DVD: picture to show, relative to the media directory.
+    dvd_still: Option<String>,
     /// Full disc graph (overrides every source option).
     graph: Option<Value>,
 }
@@ -740,10 +747,11 @@ fn burn_args(cmd: &str, req: &BurnReq, cfg: &Config) -> ApiResult<(Vec<String>, 
         tmp = Some(p);
     } else {
         let format = req.format.as_deref().unwrap_or("redbook");
-        if !["redbook", "datacd", "bluebook"].contains(&format) {
-            return Err(ApiError::bad(format!("Unknown format '{format}' (use redbook, datacd or bluebook)")));
+        if !["redbook", "datacd", "bluebook", "datadvd", "musicdvd"].contains(&format) {
+            return Err(ApiError::bad(format!("Unknown format '{format}' (use redbook, datacd, bluebook, datadvd or musicdvd)")));
         }
-        let is_data_cd = format == "datacd";
+        // Data CD and Data DVD take files, a folder or a playlist; the other formats take audio.
+        let is_data_cd = matches!(format, "datacd" | "datadvd");
         a.extend(["--format".into(), format.into()]);
 
         if is_burn || !is_data_cd {
@@ -775,13 +783,27 @@ fn burn_args(cmd: &str, req: &BurnReq, cfg: &Config) -> ApiResult<(Vec<String>, 
         if let Some(l) = req.label.as_deref().filter(|l| !l.trim().is_empty()) {
             a.extend(["--label".into(), l.into()]);
         }
-        if req.cd_text && !is_data_cd {
+        if req.cd_text && matches!(format, "redbook" | "bluebook") {
             a.push("--cd-text".into());
         }
         if is_burn && is_data_cd {
-            // Audio CDs are always converted to CD audio; transcoding only shrinks audio inside a Data CD.
+            // Audio discs are always converted for the disc; transcoding only shrinks audio inside a Data disc.
             if let Some(t) = req.transcode.as_deref().filter(|t| !t.is_empty()) {
                 a.extend(["--transcode".into(), t.into()]);
+            }
+        }
+        if is_burn && format == "musicdvd" {
+            if let Some(k) = req.dvd_audio_kbps {
+                a.extend(["--dvd-audio-kbps".into(), k.to_string()]);
+            }
+            if let Some(st) = req.dvd_standard.as_deref().filter(|s| !s.is_empty()) {
+                if !["pal", "ntsc"].contains(&st) {
+                    return Err(ApiError::bad("dvd_standard must be pal or ntsc"));
+                }
+                a.extend(["--dvd-standard".into(), st.into()]);
+            }
+            if let Some(img) = req.dvd_still.as_deref().filter(|s| !s.is_empty()) {
+                a.extend(["--dvd-still".into(), path_str(&safe_join(&cfg.media_dir, img)?)]);
             }
         }
     }
@@ -850,7 +872,7 @@ fn rip_plan_request(
     media: &Path,
     join_all: &dyn Fn(&[String]) -> ApiResult<Vec<String>>,
 ) -> ApiResult<crate::planner::discs::PlanRequest> {
-    let is_data_cd = format == "datacd";
+    let is_data_cd = matches!(format, "datacd" | "datadvd");
     let opt_path = |p: &Option<String>| -> ApiResult<Option<String>> {
         p.as_deref().map(|p| safe_join(media, p).map(|j| path_str(&j))).transpose()
     };
@@ -863,6 +885,7 @@ fn rip_plan_request(
         playlist_root: Some(media.to_path_buf()),
         transcode: if is_data_cd { req.transcode.clone() } else { None },
         disc_size_mb: req.disc_size_mb,
+        dvd_audio_kbps: req.dvd_audio_kbps,
     })
 }
 
