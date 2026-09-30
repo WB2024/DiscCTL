@@ -1486,6 +1486,7 @@ function renderStickSources() {
   $("#st-src-summary").textContent = [n("folder") && `${n("folder")} folder${n("folder") > 1 ? "s" : ""}`, n("file") && `${n("file")} file${n("file") > 1 ? "s" : ""}`, n("playlist") && `${n("playlist")} playlist${n("playlist") > 1 ? "s" : ""}`].filter(Boolean).join(" · ");
 }
 
+const short0 = d => (d || "").split("/").pop();
 function fsBadge(t) {
   const names = { vfat: "FAT32", exfat: "exFAT", ntfs: "NTFS", ntfs3: "NTFS", fuseblk: "NTFS/exFAT", ext4: "ext4", ext3: "ext3", ext2: "ext2", btrfs: "Btrfs", xfs: "XFS" };
   return names[t.fs_type] || t.fs_type || "?";
@@ -1511,10 +1512,21 @@ function renderStickTargets() {
     $$(".target", box).forEach(el => el.onclick = () => { STICK.target = el.dataset.mp; renderStickTargets(); replanSoon(); identifyStick(); });
   }
   const un = $("#st-unmounted");
-  un.innerHTML = STICK.unmounted.length ? `<div class="muted" style="margin:10px 0 6px">Found but not mounted:</div>` + STICK.unmounted.map(u => `
-    <div class="row" style="padding:6px 0"><span>💾</span><span class="grow">${esc(u.label || u.device)} <span class="muted">${esc(u.model)} · ${fmtMB(u.size_bytes)} · ${esc(u.fs_type)} · ${esc(u.device)}</span></span>
-    <button class="btn small" data-dev="${esc(u.device)}">Mount</button></div>`).join("") : "";
-  $$("#st-unmounted button").forEach(b => b.onclick = async () => {
+  const disks = {};
+  STICK.unmounted.forEach(u => (disks[u.disk || u.device] ||= []).push(u));
+  un.innerHTML = STICK.unmounted.length ? `<div class="muted" style="margin:10px 0 6px">Found but not mounted:</div>` + Object.entries(disks).map(([disk, parts]) => `
+    <div style="padding:6px 0;border-top:1px solid var(--line)">
+      <div class="row"><span>💾</span><span class="grow"><b>${esc(parts[0].model || disk)}</b> <span class="muted mono">${esc(disk)} · ${fmtMB(parts[0].disk_size_bytes)}${parts.length > 1 ? ` · ${parts.length} partitions` : ""}</span></span>
+        <button class="btn small danger" data-fmt="${esc(disk)}">Format whole stick…</button></div>
+      ${parts.map(u => `<div class="row" style="padding:3px 0 3px 26px"><span class="grow">${esc(u.label || short0(u.device))} <span class="muted">${fmtMB(u.size_bytes)} · ${esc(u.fs_type || "no filesystem")} · ${esc(u.device)}</span></span><button class="btn small" data-dev="${esc(u.device)}">Mount</button></div>`).join("")}
+      <div class="fmt-slot" data-slot="${esc(disk)}"></div></div>`).join("") : "";
+  $$("#st-unmounted button[data-fmt]").forEach(b => b.onclick = () => {
+    const parts = disks[b.dataset.fmt], slot = $(`.fmt-slot[data-slot="${CSS.escape(b.dataset.fmt)}"]`);
+    if (slot.innerHTML) { slot.innerHTML = ""; return; }
+    const main = parts.slice().sort((x, y) => y.size_bytes - x.size_bytes)[0];
+    openFormatForm(slot, { device: main.device, disk: b.dataset.fmt, partitions: parts.map(p => ({ device: p.device, size_bytes: p.size_bytes })), name: main.label || "", size: main.size_bytes, fs: main.fs_type, files: 0, filesystems: STICK.meta.filesystems, done: r => { STICK.target = r.mount_point || null; STICK.identified = null; return loadStick(); } });
+  });
+  $$("#st-unmounted button[data-dev]").forEach(b => b.onclick = async () => {
     b.disabled = true; b.textContent = "Mounting…";
     try { const r = await api("/api/stick/mount", { body: { device: b.dataset.dev } }); toast("Mounted at " + r.mount_point, "ok"); loadStick(); }
     catch (e) { toast(e.message, "err", 10000); b.disabled = false; b.textContent = "Mount"; }
@@ -1591,28 +1603,47 @@ function renderExistingHint() {
 function showFormatForm() {
   const i = STICK.info, t = i.target, wrap = $("#id-format-form");
   if (wrap.innerHTML) { wrap.innerHTML = ""; return; }
-  const short = (t.device || "").split("/").pop();
-  const cur = i.facts.fs_type === "vfat" ? "fat32" : i.facts.fs_type;
-  const opts = i.filesystems.map(f => `<option value="${f.id}" ${f.available ? "" : "disabled"} ${f.id === (["fat32", "exfat", "ext4", "ntfs"].includes(cur) ? cur : "exfat") ? "selected" : ""}>${f.label}${f.available ? "" : " (not installed)"}</option>`).join("");
+  openFormatForm(wrap, {
+    device: t.device, disk: i.disk?.device || null, partitions: i.disk?.partitions || [], name: i.facts.label || t.label, size: t.total_bytes,
+    fs: i.facts.fs_type, files: i.content.audio_files + i.content.other_files, filesystems: i.filesystems,
+    done: r => { STICK.target = r.mount_point || null; STICK.identified = null; return loadStick(); },
+  });
+}
+
+// The reformat form, for a mounted stick (in the Identify panel) or an unmounted one (in the list).
+function openFormatForm(wrap, d) {
+  const short = (dev) => (dev || "").split("/").pop();
+  const multi = d.partitions.length > 1;
+  const cur = d.fs === "vfat" ? "fat32" : d.fs;
+  const opts = d.filesystems.map(f => `<option value="${f.id}" ${f.available ? "" : "disabled"} ${f.id === (["fat32", "exfat", "ext4", "ntfs"].includes(cur) ? cur : "exfat") ? "selected" : ""}>${f.label}${f.available ? "" : " (not installed)"}</option>`).join("");
   wrap.innerHTML = `<div class="notice err" style="margin-top:14px">
-    <div style="font-weight:700">Reformat ${esc(t.label)} (${esc(t.device)}, ${fmtMB(t.total_bytes)})</div>
-    <div style="margin-top:4px">This <b>erases everything</b> on the stick${i.content.audio_files || i.content.other_files ? ` — ${nf(i.content.audio_files + i.content.other_files)} files` : ""} — and can't be undone.</div>
+    <div style="font-weight:700">Reformat ${esc(d.name || short(d.device))}</div>
+    ${d.disk ? `<div class="mono" style="margin-top:4px">${esc(d.disk)}${d.partitions.length ? " — " + d.partitions.map(p => `${esc(short(p.device))} ${fmtMB(p.size_bytes)}`).join(", ") : ""}</div>` : ""}
+    ${d.disk ? `<div style="margin-top:8px"><label class="check"><input type="radio" name="fmt-scope" value="disk" ${multi ? "checked" : ""}><span>The whole stick<small>removes ${multi ? `all ${d.partitions.length} partitions` : "the partition table"} and makes one new partition using all the space</small></span></label>
+      <label class="check"><input type="radio" name="fmt-scope" value="part" ${multi ? "" : "checked"}><span>Only ${esc(short(d.device))} (${fmtMB(d.size)})<small>leaves the other partitions alone</small></span></label></div>` : ""}
+    <div style="margin-top:6px">This <b>erases everything</b> ${d.files ? `— ${nf(d.files)} files —` : ""} and can't be undone.</div>
     <div class="row" style="margin-top:10px;align-items:flex-end">
       <label class="field">New filesystem<select id="fmt-fs">${opts}</select></label>
-      <label class="field">Name<input id="fmt-label" value="${esc((i.facts.label || t.label || "MUSIC").replace(/[^A-Za-z0-9 _-]/g, "").slice(0, 11))}" style="width:160px"></label>
-      <label class="field">Type “${esc(short)}” to confirm<input id="fmt-confirm" autocomplete="off" style="width:120px"></label>
+      <label class="field">Name<input id="fmt-label" value="${esc((d.name || "MUSIC").replace(/[^A-Za-z0-9 _-]/g, "").slice(0, 11))}" style="width:160px"></label>
+      <label class="field" id="fmt-table-wrap">Partition table<select id="fmt-table"><option value="dos">MBR (most compatible)</option><option value="gpt">GPT</option></select></label>
+      <label class="field"><span id="fmt-confirm-label"></span><input id="fmt-confirm" autocomplete="off" style="width:120px"></label>
       <button class="btn danger" id="fmt-go">Erase and format</button>
     </div>
     <div class="muted" id="fmt-note" style="margin-top:6px"></div></div>`;
-  const note = () => { const f = i.filesystems.find(f => f.id === $("#fmt-fs").value); $("#fmt-note").textContent = f ? f.note : ""; };
-  $("#fmt-fs").onchange = note; note();
+  const scope = () => (d.disk && $('input[name="fmt-scope"]:checked', wrap)?.value === "disk") ? "disk" : "part";
+  const confirmName = () => scope() === "disk" ? short(d.disk) : short(d.device);
+  const refresh = () => {
+    const f = d.filesystems.find(f => f.id === $("#fmt-fs").value); $("#fmt-note").textContent = f ? f.note : "";
+    $("#fmt-confirm-label").textContent = `Type “${confirmName()}” to confirm`;
+    $("#fmt-table-wrap").classList.toggle("hidden", scope() !== "disk");
+  };
+  $("#fmt-fs").onchange = refresh; $$('input[name="fmt-scope"]', wrap).forEach(r => r.onchange = refresh); refresh();
   $("#fmt-go").onclick = async () => {
     const btn = $("#fmt-go"); btn.disabled = true; btn.textContent = "Formatting…";
     try {
-      const r = await api("/api/stick/format", { body: { device: t.device, fs: $("#fmt-fs").value, label: $("#fmt-label").value, confirm: $("#fmt-confirm").value } });
+      const r = await api("/api/stick/format", { body: { device: d.device, fs: $("#fmt-fs").value, label: $("#fmt-label").value, confirm: $("#fmt-confirm").value, whole_disk: scope() === "disk", table: $("#fmt-table").value } });
       toast(r.mount_point ? "Formatted and ready" : "Formatted — press Mount to use it", "ok");
-      STICK.target = r.mount_point || null; STICK.identified = null;
-      await loadStick();
+      wrap.innerHTML = ""; await d.done(r);
     } catch (e) { toast(e.message, "err", 10000); btn.disabled = false; btn.textContent = "Erase and format"; }
   };
 }

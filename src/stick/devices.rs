@@ -43,6 +43,9 @@ pub struct Unmounted {
     pub size_bytes: u64,
     pub fs_type: String,
     pub model: String,
+    /// The whole disk this partition is on (e.g. /dev/sdk for /dev/sdk1).
+    pub disk: String,
+    pub disk_size_bytes: u64,
 }
 
 // ── /proc/self/mountinfo ──────────────────────────────────────────────────────
@@ -184,6 +187,37 @@ pub fn is_usb_device(device: &str) -> bool {
         return false;
     }
     std::fs::read_to_string(format!("/sys/class/block/{name}/dev")).map(|mm| is_usb_or_removable(mm.trim())).unwrap_or(false)
+}
+
+/// The whole disk a partition lives on (`/dev/sdk1` → `/dev/sdk`); a disk is its own parent.
+pub fn parent_disk(device: &str) -> Option<String> {
+    let name = device.rsplit('/').next().filter(|n| !n.is_empty() && !n.contains(".."))?;
+    let real = std::fs::canonicalize(format!("/sys/class/block/{name}")).ok()?;
+    if real.join("partition").exists() {
+        let parent = real.parent()?.file_name()?.to_string_lossy().to_string();
+        Some(format!("/dev/{parent}"))
+    } else {
+        Some(format!("/dev/{name}"))
+    }
+}
+
+/// Partitions of a disk: (device, size in bytes).
+pub fn partitions_of(disk: &str) -> Vec<(String, u64)> {
+    let name = disk.rsplit('/').next().unwrap_or("");
+    let mut out: Vec<(String, u64)> = std::fs::read_dir(format!("/sys/class/block/{name}"))
+        .map(|rd| {
+            rd.filter_map(|e| e.ok())
+                .filter(|e| e.path().join("partition").exists())
+                .map(|e| {
+                    let n = e.file_name().to_string_lossy().to_string();
+                    let sectors: u64 = std::fs::read_to_string(e.path().join("size")).ok().and_then(|s| s.trim().parse().ok()).unwrap_or(0);
+                    (format!("/dev/{n}"), sectors * 512)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    out.sort();
+    out
 }
 
 /// Does this device have partitions of its own (so it shouldn't be formatted as a whole)?
@@ -402,6 +436,8 @@ pub fn list_unmounted() -> Vec<Unmounted> {
                 size_bytes,
                 fs_type: fs,
                 model: model.clone(),
+                disk: disk["path"].as_str().unwrap_or("").to_string(),
+                disk_size_bytes: disk["size"].as_u64().or_else(|| disk["size"].as_str().and_then(|s| s.parse().ok())).unwrap_or(0),
             });
         }
     }

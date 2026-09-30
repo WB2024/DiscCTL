@@ -82,7 +82,10 @@ pub async fn targets(State(st): S) -> ApiResult<Json<Value>> {
     let st2 = st.clone();
     let (targets, unmounted) = tokio::task::spawn_blocking(move || {
         let unmounted = if st2.cfg.mock {
-            vec![devices::Unmounted { device: "/dev/sdz2".into(), label: "BACKUP_STICK".into(), size_bytes: 16_000_000_000, fs_type: "vfat".into(), model: "Mock Drive".into() }]
+            vec![
+                devices::Unmounted { device: "/dev/sdx1".into(), label: "BACKUP_STICK".into(), size_bytes: 15_900_000_000, fs_type: "vfat".into(), model: "Mock Drive".into(), disk: "/dev/sdx".into(), disk_size_bytes: 16_000_000_000 },
+                devices::Unmounted { device: "/dev/sdx2".into(), label: "".into(), size_bytes: 33_554_432, fs_type: "".into(), model: "Mock Drive".into(), disk: "/dev/sdx".into(), disk_size_bytes: 16_000_000_000 },
+            ]
         } else {
             devices::list_unmounted()
         };
@@ -405,14 +408,18 @@ pub async fn identify(State(st): S, Json(req): Json<IdentifyReq>) -> ApiResult<J
     let root = PathBuf::from(&target.mount_point);
     let tracks = cached_existing(&st, root.clone()).await;
     let (t2, tracks2, mock) = (target.clone(), tracks.clone(), st.cfg.mock);
-    let (content, detected, facts) = tokio::task::spawn_blocking(move || {
+    let (content, detected, facts, disk_info) = tokio::task::spawn_blocking(move || {
         let content = existing::summarize(&root, &tracks2);
         let detected = existing::detect_layout(&tracks2);
         let facts = match (&t2.device, mock) {
             (Some(d), false) => devices::device_facts(d),
             _ => devices::DeviceFacts { fs_type: t2.fs_type.clone(), label: t2.label.clone(), ..Default::default() },
         };
-        (content, detected, facts)
+        let disk_info = t2.device.as_deref().filter(|_| !mock).and_then(devices::parent_disk).map(|d| {
+            let parts: Vec<Value> = devices::partitions_of(&d).into_iter().map(|(p, sz)| json!({"device": p, "size_bytes": sz})).collect();
+            json!({"device": d, "partitions": parts})
+        });
+        (content, detected, facts, disk_info)
     })
     .await
     .map_err(|e| Error::backend(e.to_string()))?;
@@ -426,6 +433,7 @@ pub async fn identify(State(st): S, Json(req): Json<IdentifyReq>) -> ApiResult<J
         "target": target,
         "fs_name": fs_name(&target.fs_type),
         "facts": facts,
+        "disk": disk_info,
         "limits": fs_limits(&target),
         "content": content,
         "detected_layout": detected,
@@ -441,15 +449,22 @@ pub struct FormatReq {
     device: String,
     fs: String,
     label: String,
-    /// Must be the device's short name, e.g. "sdb1".
+    /// Must be the device's short name, e.g. "sdb1" (or "sdb" when formatting the whole stick).
     confirm: String,
+    /// Wipe the whole stick (every partition) instead of just this partition.
+    #[serde(default)]
+    whole_disk: bool,
+    /// Partition table for a whole-stick format: "dos" (default, most compatible) or "gpt".
+    #[serde(default)]
+    table: Option<String>,
 }
 
 pub async fn format(State(st): S, Json(req): Json<FormatReq>) -> ApiResult<Json<Value>> {
     if st.jobs.all().iter().any(|j| j.kind == "stick" && !j.status().is_terminal()) {
         return Err(ApiError::bad("A stick job is running; wait for it to finish first"));
     }
-    let short = req.device.rsplit('/').next().unwrap_or("").to_string();
+    let disk = devices::parent_disk(&req.device).unwrap_or_else(|| req.device.clone());
+    let short = if req.whole_disk && !st.cfg.mock { disk.rsplit('/').next().unwrap_or("") } else { req.device.rsplit('/').next().unwrap_or("") }.to_string();
     if req.confirm.trim() != short {
         return Err(ApiError::bad(format!("Type “{short}” to confirm erasing this stick")));
     }
@@ -457,7 +472,7 @@ pub async fn format(State(st): S, Json(req): Json<FormatReq>) -> ApiResult<Json<
 
     if st.cfg.mock {
         let base = st.cfg.config_dir.join("mock-usb");
-        let target = mock_targets(&st).into_iter().find(|t| t.device.as_deref() == Some(req.device.as_str())).ok_or_else(|| ApiError::not_found("No such stick"))?;
+        let target = mock_targets(&st).into_iter().find(|t| t.device.as_deref() == Some(req.device.as_str())).ok_or_else(|| ApiError::not_found("No such stick (the mock sdx drive can't be formatted)"))?;
         let name = std::path::Path::new(&target.mount_point).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
         let dir = PathBuf::from(&target.mount_point);
         for e in std::fs::read_dir(&dir).map_err(Error::from)?.filter_map(|e| e.ok()) {
@@ -482,12 +497,19 @@ pub async fn format(State(st): S, Json(req): Json<FormatReq>) -> ApiResult<Json<
     if !known {
         return Err(ApiError::bad("That isn't one of the USB sticks that were found"));
     }
-    let (device, fs, confirm) = (req.device.clone(), req.fs.clone(), req.confirm.clone());
-    tokio::task::spawn_blocking(move || stick_format::format_device(&device, &fs, &label, &confirm))
-        .await
-        .map_err(|e| Error::backend(e.to_string()))??;
+    let (device, fs, confirm, whole, table) = (req.device.clone(), req.fs.clone(), req.confirm.clone(), req.whole_disk, req.table.clone().unwrap_or_default());
+    let disk2 = disk.clone();
+    let new_part = tokio::task::spawn_blocking(move || {
+        if whole {
+            stick_format::format_disk(&disk2, &fs, &label, &table, &confirm)
+        } else {
+            stick_format::format_device(&device, &fs, &label, &confirm).map(|_| device)
+        }
+    })
+    .await
+    .map_err(|e| Error::backend(e.to_string()))??;
     // Mount the fresh, empty stick again so it can be used straight away.
-    let device = req.device.clone();
+    let device = new_part;
     let mounted = tokio::task::spawn_blocking(move || devices::mount_device(&device).ok()).await.ok().flatten();
     Ok(Json(json!({"ok": true, "mount_point": mounted})))
 }
