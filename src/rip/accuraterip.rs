@@ -299,6 +299,42 @@ fn verify_track(y: &[u32], first: bool, last: bool, entries: &[(u8, u32)]) -> (u
     (v1, v2, None)
 }
 
+/// Find the shift at which a track matches a v2 database checksum.
+///
+/// v2 can't be searched with prefix sums like v1, so shifts are tried one by one, nearest
+/// to zero first (real drive offsets are usually small) and spread over several threads.
+/// `y` is the track with MAX_SHIFT samples of context on each side.
+fn find_shift_v2(y: &[u32], first: bool, last: bool, targets: &[u32]) -> Option<i32> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let r = MAX_SHIFT;
+    let n = y.len() - 2 * r;
+    let order: Vec<i32> = (1..=r as i32).flat_map(|d| [d, -d]).collect();
+    let next = AtomicUsize::new(0);
+    let best = AtomicUsize::new(usize::MAX);
+    let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).min(8);
+    // Long tracks make every shift expensive; don't let a hopeless search hold up the rip.
+    let deadline = std::time::Instant::now() + Duration::from_secs(45);
+
+    std::thread::scope(|scope| {
+        for _ in 0..threads {
+            scope.spawn(|| loop {
+                let i = next.fetch_add(1, Ordering::Relaxed);
+                if i >= order.len() || i >= best.load(Ordering::Relaxed) || std::time::Instant::now() > deadline {
+                    break;
+                }
+                let start = (r as i32 + order[i]) as usize;
+                if targets.contains(&checksum_v2(&y[start..start + n], first, last)) {
+                    best.fetch_min(i, Ordering::Relaxed);
+                }
+            });
+        }
+    });
+
+    let i = best.load(Ordering::Relaxed);
+    order.get(i).copied()
+}
+
 // ── WAV access ───────────────────────────────────────────────────────────────
 
 struct Wav {
@@ -470,9 +506,29 @@ fn verify_disc(toc: &Toc, responses: &[Response], wavs: &[(usize, String)], debu
     }
 
     // The drive's read offset is the same for the whole disc, so a shift found on some
-    // tracks is tried on the others. This also rescues tracks whose database entry holds
-    // a v2 checksum, which cannot be searched across shifts.
-    if let Some(shift) = consensus_shift(&tracks) {
+    // tracks is tried on the others. If no track matched (typically a database entry that
+    // holds v2 checksums, which can't be searched cheaply), look for the shift on one or
+    // two short tracks first.
+    let mut shift_hint = consensus_shift(&tracks);
+    if shift_hint.is_none() && tracks.iter().all(|t| t.status != "verified") {
+        let mut candidates: Vec<usize> = (0..total).filter(|&i| tracks[i].status == "not_verified").collect();
+        if total > 2 {
+            candidates.retain(|&i| i != 0 && i + 1 != total); // edges are partly excluded from the checksum
+        }
+        let len_of = |i: usize| wav_for(toc.audio[i].0).and_then(|p| open_wav(p).ok()).map(|w| w.words).unwrap_or(usize::MAX);
+        candidates.sort_by_key(|&i| len_of(i));
+        for idx in candidates.into_iter().take(2) {
+            if let Ok(Some(y)) = load_context(idx) {
+                let targets: Vec<u32> = entries_for(idx).iter().map(|e| e.1).collect();
+                if let Some(s) = find_shift_v2(&y, idx == 0, idx + 1 == total, &targets) {
+                    if debug { eprintln!("AccurateRip: track {} matched a v2 checksum at a {:+} sample shift", idx + 1, s); }
+                    shift_hint = Some(s);
+                    break;
+                }
+            }
+        }
+    }
+    if let Some(shift) = shift_hint {
         for idx in 0..total {
             if tracks[idx].status != "not_verified" {
                 continue;
@@ -795,5 +851,39 @@ mod tests {
         assert_eq!(report[1].version, Some(2)); // matched through the consensus shift
         assert_eq!(report[0].confidence, Some(30));
         assert_eq!(detected_shift(&report), Some(-6));
+    }
+
+    // Database entries that only hold v2 checksums, from a drive with a read offset: no
+    // track matches at shift 0 and v1 can't find them, so the shift must be discovered.
+    #[test]
+    fn verify_disc_discovers_the_offset_for_v2_only_databases() {
+        let lens = [9000usize, 12000, 15000, 10000];
+        let disc = noise(lens.iter().sum(), 555);
+        let mut starts = vec![0usize];
+        for l in &lens { starts.push(starts.last().unwrap() + l); }
+        let n = lens.len();
+        let entries: Vec<(u8, u32)> = (0..n)
+            .map(|i| (9, checksum_v2(&disc[starts[i]..starts[i + 1]], i == 0, i == n - 1)))
+            .collect();
+
+        let shift = 42usize;
+        let mut ripped: Vec<u32> = disc[shift..].to_vec();
+        ripped.extend(std::iter::repeat(0).take(shift));
+
+        let dir = std::env::temp_dir().join(format!("rustydisc_ar_test_v2_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let wavs: Vec<(usize, String)> = (0..n)
+            .map(|i| {
+                let path = dir.join(format!("track{:02}.cdda.wav", i + 1));
+                write_wav(&path, &ripped[starts[i]..starts[i + 1]]);
+                (i + 1, path.to_string_lossy().to_string())
+            })
+            .collect();
+        let toc = toc_from_lengths(&[400, 400, 400, 400], 0, 0);
+        let report = verify_disc(&toc, &[Response { tracks: entries }], &wavs, false);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(report.iter().all(|t| t.status == "verified"), "{:?}", report.iter().map(|t| &t.status).collect::<Vec<_>>());
+        assert!(report.iter().all(|t| t.version == Some(2) && t.shift_samples == Some(-(shift as i32))));
     }
 }

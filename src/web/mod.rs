@@ -826,7 +826,7 @@ async fn job_events(
     State(st): S,
     UrlPath(id): UrlPath<u64>,
     Query(q): Query<EventsQuery>,
-) -> ApiResult<Sse<impl Stream<Item = Result<sse::Event, Infallible>>>> {
+) -> ApiResult<impl IntoResponse> {
     let job = find_job(&st, id)?;
     let rx = job.subscribe();
 
@@ -857,5 +857,6 @@ async fn job_events(
     )
     .flat_map(futures_util::stream::iter);
 
-    Ok(Sse::new(stream).keep_alive(sse::KeepAlive::default()))
+    // X-Accel-Buffering stops nginx-style reverse proxies from holding events back.
+    Ok(([("x-accel-buffering", "no")], Sse::new(stream).keep_alive(sse::KeepAlive::default())))
 }

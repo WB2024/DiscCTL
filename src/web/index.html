@@ -436,9 +436,18 @@ function jobPanel(container, jobId, { onEnd } = {}) {
     es = new EventSource(`/api/jobs/${jobId}/events?from=${count}`);
     es.onmessage = m => { count++; fails = 0; handle(JSON.parse(m.data)); };
     es.addEventListener("end", () => { ended = true; es.close(); refreshJobs(); onEnd?.(); });
-    es.onerror = () => {
+    es.onerror = async () => {
       es.close(); if (ended) return;
-      if (++fails > 6) { ended = true; addLog("⚠ Lost connection to the server (job may no longer exist).", "step"); return; }
+      // The stream dropped (proxy, network blip, sleeping tab). Catch up from the plain JSON
+      // endpoint so nothing is lost, then either finish or reconnect.
+      try {
+        const d = await api(`/api/jobs/${jobId}`);
+        d.events.slice(count).forEach(ev => { count++; handle(ev); });
+        if (["done", "failed", "cancelled"].includes(d.job.status)) { ended = true; refreshJobs(); onEnd?.(); return; }
+        fails = 0;
+      } catch (e) {
+        if (e.status === 404 || ++fails > 30) { ended = true; addLog("⚠ Lost connection to the server (job may no longer exist).", "step"); return; }
+      }
       setTimeout(open, 1500);
     };
   };
