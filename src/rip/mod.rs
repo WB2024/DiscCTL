@@ -38,6 +38,8 @@ pub struct RipOptions {
     pub quality: Option<String>,
     /// Measure loudness after ripping and write ReplayGain tags.
     pub replaygain: bool,
+    /// Measure dynamic range (DR) after ripping and write DR tags.
+    pub dynamic_range: bool,
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
@@ -629,6 +631,27 @@ fn post_rip(opts: &RipOptions, outputs: &[String]) {
     say(&format!("Quality: {}{}{}", s.description, rate, kind));
     if opts.progress_json {
         println!("{}", serde_json::json!({"type": "quality", "summary": s}));
+    }
+
+    if opts.dynamic_range {
+        say("Measuring dynamic range (DR)...");
+        let mut rows: Vec<audioinfo::TrackDrRow> = Vec::new();
+        let mut measured: Vec<crate::library::dynrange::TrackDr> = Vec::new();
+        for (p, f) in outputs.iter().zip(facts.iter()) {
+            if let Ok(t) = crate::library::dynrange::measure(Path::new(p), f.channels.unwrap_or(2) as usize, f.sample_rate.unwrap_or(44_100) as usize) {
+                rows.push(audioinfo::TrackDrRow { path: p.clone(), dr: t.dr });
+                measured.push(t);
+            }
+        }
+        if let Some(album) = crate::library::dynrange::album_dr(&measured) {
+            for r in &rows {
+                let _ = crate::library::dynrange::write_tags(Path::new(&r.path), r.dr, album);
+            }
+            say(&format!("Dynamic range: DR{album} — {}", crate::library::dynrange::verdict(album)));
+            if opts.progress_json {
+                println!("{}", serde_json::json!({"type": "dynamic_range", "album_dr": album, "verdict": crate::library::dynrange::verdict(album), "tracks": measured.iter().map(|t| t.dr).collect::<Vec<_>>()}));
+            }
+        }
     }
 
     if opts.replaygain {

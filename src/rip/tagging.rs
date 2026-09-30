@@ -57,7 +57,7 @@ pub(crate) fn set_many(tag: &mut Tag, key: ItemKey, values: &[String]) {
 }
 
 /// A field lofty has no name for: (Vorbis name, ID3 description, MP4 freeform name).
-fn custom(tag: &mut Tag, names: (&str, &str), value: &Option<String>) {
+pub(crate) fn custom(tag: &mut Tag, names: (&str, &str), value: &Option<String>) {
     let Some(v) = value.as_deref().filter(|v| !v.trim().is_empty()) else { return };
     let native = match tag.tag_type() {
         TagType::VorbisComments => names.0.to_string(),

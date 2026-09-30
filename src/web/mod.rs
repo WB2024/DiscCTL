@@ -246,6 +246,7 @@ pub async fn serve(cfg: Config, bind: SocketAddr) -> Result<(), Error> {
         .route("/api/library/{name}/quality", get(quality::facts))
         .route("/api/library/{name}/quality/integrity", post(quality::integrity))
         .route("/api/library/{name}/quality/loudness", post(quality::loudness))
+        .route("/api/library/{name}/quality/dynamic-range", post(quality::dynamic_range))
         .route("/api/library/{name}/spectrogram", get(quality::spectrogram))
         .route("/api/library/{name}/tags", get(library_edit::tags).put(library_edit::save_tags))
         .route("/api/library/{name}/cover", post(library_edit::set_cover).layer(axum::extract::DefaultBodyLimit::max(library_edit::MAX_IMAGE)))
@@ -538,6 +539,7 @@ struct SettingsUpdate {
     rip_skip_accuraterip: bool,
     rip_quality: Option<String>,
     rip_replaygain: Option<bool>,
+    rip_dynamic_range: Option<bool>,
     cover_sources: Vec<String>,
     cover_save_file: bool,
     cover_embed: bool,
@@ -579,6 +581,7 @@ async fn put_settings(State(st): S, Json(u): Json<SettingsUpdate>) -> ApiResult<
         rip_skip_accuraterip: u.rip_skip_accuraterip,
         rip_quality: u.rip_quality.unwrap_or(current.rip_quality.clone()),
         rip_replaygain: u.rip_replaygain.unwrap_or(current.rip_replaygain),
+        rip_dynamic_range: u.rip_dynamic_range.unwrap_or(current.rip_dynamic_range),
         cover_sources: u.cover_sources,
         cover_save_file: u.cover_save_file,
         cover_embed: u.cover_embed,
@@ -1166,11 +1169,12 @@ struct RipReq {
     /// Encoder quality for the format (empty = the best).
     quality: Option<String>,
     replaygain: bool,
+    dynamic_range: bool,
 }
 
 impl Default for RipReq {
     fn default() -> Self {
-        RipReq { device: None, format: None, archive: false, no_musicbrainz: false, no_accuraterip: false, debug: false, mb_release: None, folder: None, cover_upload: None, quality: None, replaygain: false }
+        RipReq { device: None, format: None, archive: false, no_musicbrainz: false, no_accuraterip: false, debug: false, mb_release: None, folder: None, cover_upload: None, quality: None, replaygain: false, dynamic_range: false }
     }
 }
 
@@ -1228,6 +1232,7 @@ async fn start_rip(State(st): S, Json(req): Json<RipReq>) -> ApiResult<Json<Valu
         args.extend(["--quality".into(), q.clone()]);
     }
     if req.replaygain { args.push("--replaygain".into()); }
+    if req.dynamic_range { args.push("--dynamic-range".into()); }
     let mut envs: Vec<(String, String)> = Vec::new();
     if let Some(key) = &cover_opts.fanart_key {
         envs.push(("RUSTYDISC_FANART_KEY".into(), key.clone()));
@@ -1240,7 +1245,7 @@ async fn start_rip(State(st): S, Json(req): Json<RipReq>) -> ApiResult<Json<Valu
 
     let job = start_job(&st, "rip", &format!("Rip {device} → {}", format.to_uppercase()), true)?;
     if st.cfg.mock {
-        tokio::spawn(mock::rip(job.clone(), st.cfg.rips_dir.clone(), folder, req.archive, format, skip_mb, req.no_accuraterip, mb_release.is_some(), cover_opts, cover_file, quality.clone(), req.replaygain));
+        tokio::spawn(mock::rip(job.clone(), st.cfg.rips_dir.clone(), folder, req.archive, format, skip_mb, req.no_accuraterip, mb_release.is_some(), cover_opts, cover_file, quality.clone(), req.replaygain, req.dynamic_range));
     } else {
         spawn_cli_env(&st, job.clone(), args, None, envs);
     }

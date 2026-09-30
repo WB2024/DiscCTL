@@ -15,6 +15,12 @@ use serde_json::Value;
 
 use crate::rip::tagging::set;
 
+/// A track's path and its measured DR (used while ripping).
+pub struct TrackDrRow {
+    pub path: String,
+    pub dr: u32,
+}
+
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct AudioFacts {
     pub codec: String,

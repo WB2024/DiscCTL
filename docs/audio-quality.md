@@ -31,3 +31,14 @@ In the **Library**, every rip has an **Audio quality** card:
 - **Spectrogram** draws any track's frequencies over time. Real CD audio fills the picture up to 20 kHz and beyond; a sharp ceiling around 16 kHz means the "lossless" file was once an MP3 (or similar) and only the wrapper is lossless.
 
 RustyDisc's own numbers come from `ffprobe` and `ffmpeg` (EBU R128 loudness), the same tools that encode the audio.
+
+## Dynamic range (DR)
+
+The [Dynamic Range Database](https://dr.loudness-war.info/) lists a "DR" number for albums: how far the peaks rise above the loud parts of the music. A high number (14 and up) is natural and dynamic; a low one (under 8) is a loudness-war master squashed to be as loud as possible. Different pressings of the same album often score very differently, so it's the number to check when choosing an edition.
+
+RustyDisc measures it itself, with the published DR method (3-second blocks per channel, the second-highest peak against the RMS of the loudest 20% of blocks, averaged over the channels; an album's DR is the average of its tracks'). A value can differ from a listed one by a point, because this is a reimplementation of the meter, not the meter itself.
+
+- **In the Library:** the **Dynamic range** button on the Audio quality card shows each track's DR, peak and RMS, the album's DR with what it means, and lets you **save DR as tags** (`DYNAMIC RANGE` and `ALBUM DYNAMIC RANGE`, the names the desktop DR meters use), **download a DR log** in the usual layout, and **compare on the Dynamic Range DB**, which opens the database's listing for that artist.
+- **When ripping:** tick **Measure dynamic range (DR)** (or make it a default in Settings) and the job reports the album's DR and writes the tags. On the command line: `rustydisc rip --dynamic-range`.
+
+The database has no public API or export, so RustyDisc links to it instead of reading it.

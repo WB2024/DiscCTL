@@ -119,7 +119,7 @@ fn cancelled(job: &Job) {
     job.push(Event::Status { status: Status::Cancelled });
 }
 
-pub async fn rip(job: Arc<Job>, rips_dir: PathBuf, folder: Option<String>, archive: bool, format: String, no_mb: bool, no_ar: bool, mb_chosen: bool, cover: crate::rip::cover::CoverOptions, cover_file: Option<PathBuf>, quality: Option<String>, replaygain: bool) {
+pub async fn rip(job: Arc<Job>, rips_dir: PathBuf, folder: Option<String>, archive: bool, format: String, no_mb: bool, no_ar: bool, mb_chosen: bool, cover: crate::rip::cover::CoverOptions, cover_file: Option<PathBuf>, quality: Option<String>, replaygain: bool, dynamic_range: bool) {
     job.push(Event::Step { msg: "Analysing disc...".into() });
     job.push(Event::Progress { pct: 0.0 });
     if work(&job, 700).await { return cancelled(&job); }
@@ -192,6 +192,12 @@ pub async fn rip(job: Arc<Job>, rips_dir: PathBuf, folder: Option<String>, archi
             "files": TRACKS.len(), "description": desc, "uniform": true, "lossless": lossless, "cd_quality": cd,
             "avg_bitrate_kbps": avg, "min_bitrate_kbps": avg - 12.0, "max_bitrate_kbps": avg + 9.0, "total_bytes": 0, "notes": [],
         }) });
+        if dynamic_range {
+            job.push(Event::Step { msg: "Measuring dynamic range (DR)...".into() });
+            if work(&job, 700).await { return cancelled(&job); }
+            job.push(Event::Step { msg: "Dynamic range: DR11 — Good: natural dynamics".into() });
+            job.push(Event::Result { name: "dynamic_range".into(), data: json!({"type": "dynamic_range", "album_dr": 11, "verdict": "Good: natural dynamics", "tracks": [12, 11, 10, 12, 11]}) });
+        }
         if replaygain {
             job.push(Event::Step { msg: "Measuring loudness for ReplayGain...".into() });
             if work(&job, 700).await { return cancelled(&job); }

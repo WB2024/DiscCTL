@@ -166,3 +166,64 @@ pub async fn spectrogram(State(st): S, UrlPath(name): UrlPath<String>, Query(q):
     let bytes = tokio::fs::read(&png).await.map_err(Error::from)?;
     Ok(([(header::CONTENT_TYPE, "image/png"), (header::CACHE_CONTROL, "private, max-age=3600")], bytes).into_response())
 }
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+pub struct DrReq {
+    /// Write DR tags into the files.
+    write_tags: bool,
+}
+
+/// Dynamic range (DR) of each track and the album, with a log in the usual layout.
+pub async fn dynamic_range(State(st): S, UrlPath(name): UrlPath<String>, Json(req): Json<DrReq>) -> ApiResult<Json<Value>> {
+    use crate::library::{dynrange, tags};
+    let dir = rip_dir(&st, &name)?;
+    let out = tokio::task::spawn_blocking(move || -> Result<Value, String> {
+        let files = audio_files(&dir);
+        if files.is_empty() {
+            return Err("There's no audio in this rip".into());
+        }
+        let first = tags::read(&files[0]);
+        let artist = first.vars.get("albumartist").or_else(|| first.vars.get("artist")).cloned().unwrap_or_default();
+        let album = first.vars.get("album").cloned().unwrap_or_else(|| name.clone());
+        let mut rows: Vec<(String, dynrange::TrackDr)> = Vec::new();
+        let mut json_rows: Vec<Value> = Vec::new();
+        let mut facts_first = None;
+        for p in &files {
+            let f = audioinfo::facts(p)?;
+            let title = tags::read(p).vars.get("title").cloned().unwrap_or_else(|| p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default());
+            match dynrange::measure(p, f.channels.unwrap_or(2) as usize, f.sample_rate.unwrap_or(44_100) as usize) {
+                Ok(t) => {
+                    json_rows.push(json!({"path": rel(&dir, p), "title": title, "dr": t.dr, "dr_exact": t.dr_exact, "peak_db": t.peak_db, "rms_db": t.rms_db, "seconds": t.seconds}));
+                    rows.push((title, t));
+                }
+                Err(e) => json_rows.push(json!({"path": rel(&dir, p), "title": title, "error": e})),
+            }
+            facts_first.get_or_insert(f);
+        }
+        let tracks: Vec<dynrange::TrackDr> = rows.iter().map(|r| r.1.clone()).collect();
+        let album_dr = dynrange::album_dr(&tracks).ok_or("None of the tracks could be measured")?;
+        let mut written = 0usize;
+        if req.write_tags {
+            for (p, r) in files.iter().zip(json_rows.iter()) {
+                if let Some(dr) = r.get("dr").and_then(Value::as_u64) {
+                    if dynrange::write_tags(p, dr as u32, album_dr).is_ok() {
+                        written += 1;
+                    }
+                }
+            }
+            if written > 0 {
+                super::library_edit::refresh_manifest(&dir);
+            }
+        }
+        Ok(json!({
+            "tracks": json_rows, "album_dr": album_dr, "verdict": dynrange::verdict(album_dr), "written": written,
+            "log": dynrange::log_text(&artist, &album, &rows, facts_first.as_ref()),
+            "database_url": dynrange::database_url(&artist), "artist": artist, "album": album,
+        }))
+    })
+    .await
+    .map_err(|e| Error::backend(e.to_string()))?
+    .map_err(ApiError::bad)?;
+    Ok(Json(out))
+}

@@ -228,6 +228,7 @@ pre.json { background: var(--bg); border: 1px solid var(--line); border-radius: 
               <small id="rip-quality-note">Lossless formats keep every bit of the disc's audio. Lossy ones let you trade size for quality.</small>
             </label>
             <label class="check"><input type="checkbox" id="rip-replaygain"><span>Add ReplayGain tags<small>measures loudness so players can level tracks and albums without changing the audio</small></span></label>
+            <label class="check"><input type="checkbox" id="rip-dr"><span>Measure dynamic range (DR)<small>the loudness-war number listed on dr.loudness-war.info; also saved as a tag</small></span></label>
             <label class="check"><input type="checkbox" id="rip-archive"><span>Archive mode<small>audio/ + metadata/ folders with disc.json, cdtext.json, musicbrainz.json and SHA-256 checksums</small></span></label>
             <label class="check"><input type="checkbox" id="rip-nomb"><span>Skip MusicBrainz lookup<small>for offline use or discs that aren't in the database</small></span></label>
             <label class="check"><input type="checkbox" id="rip-noar"><span>Skip AccurateRip check<small>don't compare the rip with the AccurateRip database</small></span></label>
@@ -559,6 +560,7 @@ pre.json { background: var(--bg); border: 1px solid var(--line); border-radius: 
           </div>
           <div style="display:flex;flex-direction:column;gap:12px">
             <label class="check"><input type="checkbox" id="set-replaygain"><span>Add ReplayGain tags</span></label>
+            <label class="check"><input type="checkbox" id="set-dr"><span>Measure dynamic range (DR)</span></label>
             <label class="check"><input type="checkbox" id="set-archive"><span>Archive mode</span></label>
             <label class="check"><input type="checkbox" id="set-nomb"><span>Skip the MusicBrainz lookup</span></label>
             <label class="check"><input type="checkbox" id="set-noar"><span>Skip the AccurateRip check</span></label>
@@ -792,6 +794,7 @@ function jobPanel(container, jobId, { onEnd } = {}) {
         if (ev.name === "accuraterip") q(".jp-result").innerHTML = arTable(ev.data);
         if (ev.name === "cover") q(".jp-cover").innerHTML = coverNote(ev.data);
         if (ev.name === "quality") q(".jp-quality").innerHTML = qualityNote(ev.data);
+        if (ev.name === "dynamic_range") q(".jp-quality").innerHTML += `<div class="notice" style="margin-top:8px"><b>Dynamic range</b> <span class="badge ${ev.data.album_dr >= 11 ? "ok" : ev.data.album_dr <= 7 ? "err" : ""}">DR${ev.data.album_dr}</span> ${esc(ev.data.verdict)}</div>`;
         if (ev.name === "replaygain") q(".jp-quality").innerHTML += `<div class="notice" style="margin-top:8px"><b>ReplayGain</b> written to ${ev.data.files} file${ev.data.files === 1 ? "" : "s"} · album gain ${ev.data.album_gain_db >= 0 ? "+" : ""}${(+ev.data.album_gain_db).toFixed(2)} dB · loudness ${(+ev.data.album_lufs).toFixed(1)} LUFS</div>`;
         if (ev.name === "stick") q(".jp-stick").innerHTML = stickDone(ev.data);
         if (ev.name === "import") q(".jp-import").innerHTML = importDone(ev.data);
@@ -1155,7 +1158,7 @@ async function startRip() {
   const folder = $('input[name=dest]:checked').value === "custom" ? $("#rip-folder").value.trim() : "";
   if ($('input[name=dest]:checked').value === "custom" && !folder) return toast("Enter a folder name or choose auto-naming", "err");
   const body = {
-    device: selectedDevice(), format: $("#rip-format").value, quality: $("#rip-quality").value || null, replaygain: $("#rip-replaygain").checked, archive: $("#rip-archive").checked,
+    device: selectedDevice(), format: $("#rip-format").value, quality: $("#rip-quality").value || null, replaygain: $("#rip-replaygain").checked, dynamic_range: $("#rip-dr").checked, archive: $("#rip-archive").checked,
     no_musicbrainz: $("#rip-nomb").checked, mb_release: MB.over ? MB.over.input : null, no_accuraterip: $("#rip-noar").checked, debug: $("#rip-debug").checked, folder: folder || null,
     cover_upload: RIPCOVER.token,
   };
@@ -1553,8 +1556,8 @@ async function openRip(name) {
         ${d.accuraterip_report ? arTable(d.accuraterip_report) : ""}
       </div>
       ${audio.length ? `<div class="card" id="lib-quality"><div class="row"><h2 class="grow" style="margin:0">Audio quality</h2>
-          <button class="btn small" id="q-integrity">Test the audio</button><button class="btn small" id="q-loud">Measure loudness</button></div>
-        <div id="q-body" class="muted" style="margin-top:10px">Reading the files…</div><div id="q-extra"></div><div id="q-loudness"></div></div>` : ""}
+          <button class="btn small" id="q-integrity">Test the audio</button><button class="btn small" id="q-loud">Measure loudness</button><button class="btn small" id="q-dr">Dynamic range</button></div>
+        <div id="q-body" class="muted" style="margin-top:10px">Reading the files…</div><div id="q-extra"></div><div id="q-loudness"></div><div id="q-drout"></div></div>` : ""}
       ${audio.length ? `<div class="card"><h2>Audio</h2><table><tbody>${audio.map((f, i) => `
         <tr><td style="width:28px" class="muted">${i + 1}</td><td>${esc(titleFor(f, i) || f.path.split("/").pop())}<div class="muted mono">${esc(f.path)}</div></td>
         <td class="num muted" style="width:80px">${fmtBytes(f.size)}</td>
@@ -1604,6 +1607,26 @@ async function wireQuality(name) {
         : `<div class="notice" style="margin-top:10px"><span class="ar-ok">✔</span> All ${r.results.length} file${r.results.length === 1 ? "" : "s"} decode cleanly, start to finish.</div>`;
     } catch (e) { toast(e.message, "err", 8000); }
     btn.disabled = false; btn.textContent = "Test the audio";
+  };
+  $("#q-dr").onclick = async () => {
+    const btn = $("#q-dr"), out = $("#q-drout"); btn.disabled = true; btn.textContent = "Measuring…";
+    try {
+      const r = await api(base + "/quality/dynamic-range", { body: {} });
+      const cls = r.album_dr >= 11 ? "ok" : r.album_dr <= 7 ? "err" : "";
+      out.innerHTML = `<div class="notice" style="margin-top:10px"><div class="row"><b class="grow">Dynamic range</b><span class="badge ${cls}" style="font-size:15px">DR${r.album_dr}</span></div>
+        <div style="margin-top:4px">${esc(r.verdict)}. The higher the number, the more natural the dynamics; heavily compressed masters score low.</div>
+        <table style="margin-top:8px"><thead><tr><th style="text-align:left">Track</th><th class="num">DR</th><th class="num">Peak</th><th class="num">RMS</th></tr></thead><tbody>${r.tracks.map(t => t.error ? `<tr><td>${esc(t.title)}</td><td colspan="3" class="ar-bad">${esc(t.error)}</td></tr>` : `<tr><td>${esc(t.title)}</td><td class="num"><b>DR${t.dr}</b></td><td class="num">${t.peak_db.toFixed(2)} dB</td><td class="num">${t.rms_db.toFixed(2)} dB</td></tr>`).join("")}</tbody></table>
+        <div class="row" style="margin-top:10px;gap:8px"><button class="btn small primary" id="dr-tags">Save DR as tags</button><button class="btn small" id="dr-log">Download DR log</button>
+          <a class="btn small" href="${esc(r.database_url)}" target="_blank" rel="noopener">Compare on the Dynamic Range DB ↗</a><span class="muted" id="dr-note"></span></div>
+        <div class="muted" style="margin-top:8px;font-size:12.5px">Measured with the published DR method (3-second blocks; loudest 20%); a value can differ from a listed one by a point. The database lists other pressings of ${esc(r.artist || "this artist")}, which is the way to find the least-compressed edition.</div></div>`;
+      $("#dr-log").onclick = () => { const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([r.log], { type: "text/plain" })); a.download = `dr-${(r.album || name).replace(/[^\w.-]+/g, "_")}.txt`; a.click(); };
+      $("#dr-tags").onclick = async () => {
+        $("#dr-tags").disabled = true;
+        try { const w = await api(base + "/quality/dynamic-range", { body: { write_tags: true } }); $("#dr-note").textContent = `Saved to ${w.written} file${w.written === 1 ? "" : "s"}.`; }
+        catch (e) { toast(e.message, "err", 8000); $("#dr-tags").disabled = false; }
+      };
+    } catch (e) { toast(e.message, "err", 8000); }
+    btn.disabled = false; btn.textContent = "Dynamic range";
   };
   $("#q-loud").onclick = async () => {
     const btn = $("#q-loud"); btn.disabled = true; btn.textContent = "Measuring…";
@@ -2339,6 +2362,7 @@ function applyRipDefaults() {
   $("#rip-format").value = SET.rip_format;
   fillQuality($("#rip-quality"), SET.rip_format, SET.rip_quality);
   $("#rip-replaygain").checked = !!SET.rip_replaygain;
+  $("#rip-dr").checked = !!SET.rip_dynamic_range;
   $("#rip-archive").checked = SET.rip_archive;
   $("#rip-nomb").checked = SET.rip_skip_musicbrainz;
   $("#rip-noar").checked = SET.rip_skip_accuraterip;
@@ -2361,6 +2385,7 @@ function renderSettings() {
   fillQuality($("#set-quality"), SET.rip_format, SET.rip_quality);
   $("#set-format").onchange = () => fillQuality($("#set-quality"), $("#set-format").value, "");
   $("#set-replaygain").checked = !!SET.rip_replaygain;
+  $("#set-dr").checked = !!SET.rip_dynamic_range;
   $("#set-archive").checked = SET.rip_archive;
   $("#set-nomb").checked = SET.rip_skip_musicbrainz;
   $("#set-noar").checked = SET.rip_skip_accuraterip;
@@ -2592,7 +2617,7 @@ async function loadCacheUsage() {
 
 async function saveSettings(extra = {}) {
   const body = {
-    rip_format: $("#set-format").value, rip_quality: $("#set-quality").value, rip_replaygain: $("#set-replaygain").checked, rip_archive: $("#set-archive").checked,
+    rip_format: $("#set-format").value, rip_quality: $("#set-quality").value, rip_replaygain: $("#set-replaygain").checked, rip_dynamic_range: $("#set-dr").checked, rip_archive: $("#set-archive").checked,
     rip_skip_musicbrainz: $("#set-nomb").checked, rip_skip_accuraterip: $("#set-noar").checked,
     cover_sources: enabledSources(), cover_save_file: $("#cover-save").checked, cover_embed: $("#cover-embed").checked,
     stick_extra_folders: $("#set-stick-folders").value.split("\n").map(l => l.trim()).filter(Boolean),

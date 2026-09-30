@@ -54,6 +54,10 @@ pub struct RipArgs {
     #[arg(long)]
     pub replaygain: bool,
 
+    /// Measure dynamic range (DR, as listed on dr.loudness-war.info) after ripping and write DR tags
+    #[arg(long)]
+    pub dynamic_range: bool,
+
     /// Use this picture (JPEG or PNG) as the cover instead of looking one up
     #[arg(long, value_name = "FILE")]
     pub cover_file: Option<String>,
@@ -118,6 +122,7 @@ pub fn run(args: RipArgs) -> Result<(), Error> {
         cover_file:     args.cover_file,
         quality:        args.quality.filter(|q| !q.trim().is_empty()),
         replaygain:     args.replaygain,
+        dynamic_range:  args.dynamic_range,
     };
 
     rip::rip(&opts)?;

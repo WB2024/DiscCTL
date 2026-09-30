@@ -7,7 +7,7 @@
 **Rip, burn and archive CDs and DVDs — and fill USB sticks — from your browser.**<br>
 Built in Rust for Linux. Runs headless in Docker, so the drive can live in a server and you drive it from anywhere.
 
-[![Version](https://img.shields.io/badge/version-1.0-e8743b?style=flat-square)](https://github.com/WB2024/DiscCTL)
+[![Version](https://img.shields.io/badge/version-1.1-e8743b?style=flat-square)](https://github.com/WB2024/DiscCTL)
 [![Docker pulls](https://img.shields.io/docker/pulls/wb20244/rustydisc?style=flat-square&logo=docker&logoColor=white&color=2496ED)](https://hub.docker.com/r/wb20244/rustydisc)
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange?style=flat-square&logo=rust)](docs/install.md)
 [![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](#license)
@@ -42,7 +42,7 @@ Built in Rust for Linux. Runs headless in Docker, so the drive can live in a ser
 ### 💿 Rip
 - Secure extraction with error correction
 - **FLAC, ALAC, WAV, AIFF, MP3, AAC, Opus, OGG**, each with quality choices (best by default)
-- **Quality report:** bit depth, sample rate and bitrate after ripping, plus an integrity test, **loudness / ReplayGain** and **spectrograms** that expose fake lossless
+- **Quality report:** bit depth, sample rate and bitrate after ripping, plus an integrity test, **loudness / ReplayGain**, **dynamic range (DR)** and **spectrograms** that expose fake lossless
 - **Every MusicBrainz tag** on every file: IDs, sort names, disc, label, ISRCs, credits
 - MusicBrainz **search** when the match is wrong
 - Cover art from Cover Art Archive and/or fanart.tv, or **upload your own**
@@ -155,7 +155,7 @@ Scan the disc, see every track, and rip. Results are checked against AccurateRip
 
 ### 🎚 Audiophile tools
 
-Pick the quality when you rip (the best is the default), and see exactly what you got: **bit depth, sample rate and bitrate** for every file, an integrity test that decodes each track, and **loudness with ReplayGain** you can write to the files. [More →](docs/audio-quality.md)
+Pick the quality when you rip (the best is the default), and see exactly what you got: **bit depth, sample rate and bitrate** for every file, an integrity test that decodes each track, **loudness with ReplayGain** you can write to the files, and the album's **dynamic range (DR)**, the loudness-war number, with a link to compare pressings on the Dynamic Range DB. [More →](docs/audio-quality.md)
 
 <p align="center"><img src="Images/Screenshots/library-quality.png" alt="The audio quality card: format, bit depth, bitrate, integrity test and loudness" width="900"></p>
 
@@ -317,7 +317,7 @@ Cover art sources in the order you want, rip defaults (format, quality, ReplayGa
 | MusicBrainz tags + cover art | ✅ | CDDB | — | ✅ | ✅ |
 | AccurateRip verification | ✅ | — | — | — | ✅ |
 | Archive mode with checksums | ✅ | — | — | — | rip log |
-| Quality choices, ReplayGain, spectrograms | ✅ | — | — | ✅ | — |
+| Quality choices, ReplayGain, dynamic range, spectrograms | ✅ | — | — | ✅ | — |
 | Import into a library (Picard scripts, Lidarr) | ✅ | — | — | — | — |
 | Edit tags and covers after ripping | ✅ | ✅ | — | — | — |
 | Write music to USB sticks | ✅ | — | — | — | — |

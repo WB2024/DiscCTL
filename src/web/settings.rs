@@ -24,6 +24,8 @@ pub struct Settings {
     pub rip_quality: String,
     /// Add ReplayGain tags after ripping.
     pub rip_replaygain: bool,
+    /// Measure dynamic range (DR) after ripping.
+    pub rip_dynamic_range: bool,
 
     // Cover art
     /// Enabled sources, best first: "fanart" and/or "caa".
@@ -97,6 +99,7 @@ impl Default for Settings {
             rip_skip_accuraterip: false,
             rip_quality: String::new(),
             rip_replaygain: false,
+            rip_dynamic_range: false,
             cover_sources: vec!["caa".into()],
             cover_save_file: true,
             cover_embed: true,
