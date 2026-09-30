@@ -119,7 +119,7 @@ fn cancelled(job: &Job) {
     job.push(Event::Status { status: Status::Cancelled });
 }
 
-pub async fn rip(job: Arc<Job>, rips_dir: PathBuf, folder: Option<String>, archive: bool, format: String, no_mb: bool, no_ar: bool, mb_chosen: bool, cover: crate::rip::cover::CoverOptions) {
+pub async fn rip(job: Arc<Job>, rips_dir: PathBuf, folder: Option<String>, archive: bool, format: String, no_mb: bool, no_ar: bool, mb_chosen: bool, cover: crate::rip::cover::CoverOptions, cover_file: Option<PathBuf>) {
     job.push(Event::Step { msg: "Analysing disc...".into() });
     job.push(Event::Progress { pct: 0.0 });
     if work(&job, 700).await { return cancelled(&job); }
@@ -139,8 +139,9 @@ pub async fn rip(job: Arc<Job>, rips_dir: PathBuf, folder: Option<String>, archi
         if work(&job, 500).await { return cancelled(&job); }
         let source = cover.sources.first().copied().unwrap_or(crate::rip::cover::CoverSource::CoverArtArchive);
         let what = match (cover.save_file, cover.embed) { (true, true) => "saved as cover file and embedded", (true, false) => "saved as cover file", _ => "embedded only" };
-        job.push(Event::Step { msg: format!("Cover art from {} (212 KB) — {}", source.label(), what) });
-        job.push(Event::Result { name: "cover".into(), data: json!({"type": "cover", "source": source.id(), "label": source.label(), "file": null, "embedded": cover.embed}) });
+        let (sid, slabel) = if cover_file.is_some() { ("upload", "your upload") } else { (source.id(), source.label()) };
+        job.push(Event::Step { msg: format!("Cover art from {} (212 KB) — {}", slabel, what) });
+        job.push(Event::Result { name: "cover".into(), data: json!({"type": "cover", "source": sid, "label": slabel, "file": null, "embedded": cover.embed}) });
     }
 
     let name = folder.unwrap_or_else(|| format!("{ARTIST} - {ALBUM} (1999)"));
@@ -148,6 +149,13 @@ pub async fn rip(job: Arc<Job>, rips_dir: PathBuf, folder: Option<String>, archi
     let audio_dir = if archive { out.join("audio") } else { out.clone() };
     if let Err(e) = std::fs::create_dir_all(&audio_dir) {
         return fail(&job, "IO_ERROR", &e.to_string(), false);
+    }
+
+    if let (Some(src), true) = (&cover_file, cover.save_file) {
+        if let Ok(bytes) = std::fs::read(src) {
+            let ext = crate::rip::cover::sniff_ext(&bytes).unwrap_or("jpg");
+            let _ = std::fs::write(out.join(format!("cover.{ext}")), bytes);
+        }
     }
 
     job.push(Event::Step { msg: "Ripping audio tracks from disc...".into() });

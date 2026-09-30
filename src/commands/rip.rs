@@ -46,6 +46,10 @@ pub struct RipArgs {
     #[arg(long, env = "RUSTYDISC_FANART_KEY", hide_env_values = true, value_name = "KEY")]
     pub fanart_key: Option<String>,
 
+    /// Use this picture (JPEG or PNG) as the cover instead of looking one up
+    #[arg(long, value_name = "FILE")]
+    pub cover_file: Option<String>,
+
     /// Don't save cover.jpg / cover.png next to the tracks
     #[arg(long)]
     pub no_cover_file: bool,
@@ -103,6 +107,7 @@ pub fn run(args: RipArgs) -> Result<(), Error> {
             embed: !args.no_cover_embed,
         },
         no_accuraterip: args.no_accuraterip,
+        cover_file:     args.cover_file,
     };
 
     rip::rip(&opts)?;

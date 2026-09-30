@@ -82,3 +82,13 @@ rustydisc import --rip ~/rips/A --rip ~/rips/B --library /music --script-file my
 ```
 
 `--mode move|copy|hardlink`, `--no-cover`, `--include-other`, `--delete-leftovers`, `--on-conflict skip|replace|higher-quality|lower-quality|newer|keep-both`, `--plan` (print the plan as JSON), `--dry-run`.
+
+## Covers and tags in the Library
+
+Open a rip in the **Library** to fix it up after the fact:
+
+- **Add / change cover art**: choose a JPEG or PNG in your browser (up to 25 MB). Choose whether to **embed** it in every audio file (replacing any picture already inside) and whether to **save** it as `cover.jpg` / `cover.png` in the album folder (replacing the current one). On the **Rip** page you can do the same before ripping: **Upload cover art** is used instead of looking one up, and honours the same save/embed settings.
+- **Edit album tags** writes the fields you change to every track; fields you leave alone stay as they are, and clearing a field removes it.
+- **Tags** on each track shows and edits that file's tags: title, artist, track and disc numbers, dates, genre, label, sort names, credits and all the MusicBrainz IDs, plus a list of every tag in the file (edit, remove, or add your own).
+
+Editing changes tags only: file names, and the saved `metadata/musicbrainz.json` of an archive rip, stay as they were. Pictures can't be embedded in WAV files.

@@ -101,6 +101,18 @@ impl Cover {
     }
 }
 
+/// "jpg" or "png" if these bytes are one of those images, judged by the file's own header
+/// (never by its name).
+pub fn sniff_ext(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some("jpg")
+    } else if bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]) {
+        Some("png")
+    } else {
+        None
+    }
+}
+
 /// Try each source in order and return the first image found.
 pub fn fetch(release_id: &str, release_group_id: Option<&str>, opts: &CoverOptions, debug: bool) -> Option<Cover> {
     for &source in &opts.sources {
@@ -269,5 +281,14 @@ mod tests {
         // nothing is found.
         let o = CoverOptions { sources: vec![CoverSource::Fanart], fanart_key: None, ..Default::default() };
         assert!(fetch("rel", Some("rg"), &o, false).is_none());
+    }
+
+    #[test]
+    fn pictures_are_recognised_by_their_header_not_their_name() {
+        assert_eq!(sniff_ext(&[0xFF, 0xD8, 0xFF, 0xE0, 0, 0]), Some("jpg"));
+        assert_eq!(sniff_ext(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0]), Some("png"));
+        assert_eq!(sniff_ext(b"GIF89a"), None);
+        assert_eq!(sniff_ext(b"<svg></svg>"), None);
+        assert_eq!(sniff_ext(&[]), None);
     }
 }

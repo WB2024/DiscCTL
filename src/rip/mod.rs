@@ -32,6 +32,8 @@ pub struct RipOptions {
     pub cover: cover::CoverOptions,
     /// Skip the AccurateRip database check
     pub no_accuraterip: bool,
+    /// A picture the user supplied: used instead of looking one up.
+    pub cover_file: Option<String>,
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
@@ -157,25 +159,43 @@ impl Drop for TempFile {
     }
 }
 
+/// The picture chosen for this rip, wherever it came from.
+struct UsedCover {
+    bytes: Vec<u8>,
+    ext: &'static str,
+    id: &'static str,
+    label: &'static str,
+}
+
 /// Fetch the cover art according to the user's source priorities. Returns the path to embed
 /// (None when embedding is off or nothing was found) and a guard for a temporary copy that
 /// exists only when the image is embedded but not kept as `cover.jpg`/`cover.png`.
 fn prepare_cover(opts: &RipOptions, mb: &Option<ReleaseInfo>, output_dir: &str) -> (Option<String>, TempFile) {
     let none = (None, TempFile(None));
-    let Some(release) = mb else { return none };
     if !opts.cover.wanted() {
         if !opts.progress_json { eprintln!("Cover art: disabled in settings"); }
         return none;
     }
 
-    if opts.progress_json { emit_step("Fetching cover art..."); }
-    else { eprintln!("Fetching cover art..."); }
-
-    let Some(found) = cover::fetch(&release.mb_release_id, release.mb_release_group_id.as_deref(), &opts.cover, opts.debug) else {
-        let tried: Vec<&str> = opts.cover.sources.iter().map(|s| s.label()).collect();
-        let msg = format!("No cover art found ({})", tried.join(", "));
-        if opts.progress_json { emit_step(&msg); } else { eprintln!("{}", msg); }
-        return none;
+    // A picture the user uploaded beats anything we could look up.
+    let uploaded = opts.cover_file.as_deref().and_then(|p| {
+        let bytes = std::fs::read(p).ok()?;
+        let ext = cover::sniff_ext(&bytes)?;
+        Some((bytes, ext))
+    });
+    let found = if let Some((bytes, ext)) = uploaded {
+        UsedCover { bytes, ext, id: "upload", label: "your upload" }
+    } else {
+        let Some(release) = mb else { return none };
+        if opts.progress_json { emit_step("Fetching cover art..."); }
+        else { eprintln!("Fetching cover art..."); }
+        let Some(f) = cover::fetch(&release.mb_release_id, release.mb_release_group_id.as_deref(), &opts.cover, opts.debug) else {
+            let tried: Vec<&str> = opts.cover.sources.iter().map(|s| s.label()).collect();
+            let msg = format!("No cover art found ({})", tried.join(", "));
+            if opts.progress_json { emit_step(&msg); } else { eprintln!("{}", msg); }
+            return none;
+        };
+        UsedCover { bytes: f.bytes, ext: f.ext, id: f.source.id(), label: f.source.label() }
     };
 
     let kb = found.bytes.len() / 1024;
@@ -205,11 +225,11 @@ fn prepare_cover(opts: &RipOptions, mb: &Option<ReleaseInfo>, output_dir: &str) 
         (false, true) => "embedded only",
         (false, false) => "not stored",
     };
-    let msg = format!("Cover art from {} ({} KB) — {}", found.source.label(), kb, what);
+    let msg = format!("Cover art from {} ({} KB) — {}", found.label, kb, what);
     if opts.progress_json {
         emit_step(&msg);
         let event = serde_json::json!({
-            "type": "cover", "source": found.source.id(), "label": found.source.label(),
+            "type": "cover", "source": found.id, "label": found.label,
             "file": saved, "embedded": opts.cover.embed,
         });
         println!("{}", event);

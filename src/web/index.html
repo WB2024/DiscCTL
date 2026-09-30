@@ -235,6 +235,14 @@ pre.json { background: var(--bg); border: 1px solid var(--line); border-radius: 
             <input type="text" id="rip-folder" placeholder="Artist - Album (Year)" disabled>
           </div>
         </div>
+        <div class="row" style="margin-top:16px;gap:12px" id="rip-cover-row">
+          <img id="rip-cover-thumb" class="hidden" style="width:56px;height:56px;border-radius:6px;object-fit:cover;border:1px solid var(--line)" alt="">
+          <div class="grow"><div><b>Cover art</b> <span class="muted" id="rip-cover-note">— looked up automatically; or use your own picture</span></div>
+            <div class="muted" style="font-size:12.5px" id="rip-cover-detail"></div></div>
+          <input type="file" id="rip-cover-file" accept="image/jpeg,image/png" class="hidden">
+          <button class="btn small" id="rip-cover-pick">Upload cover art…</button>
+          <button class="btn small hidden" id="rip-cover-clear">Remove</button>
+        </div>
         <div class="row" style="margin-top:16px">
           <button class="btn primary" id="rip-start">Start rip</button>
           <span class="muted" id="rip-hint"></span>
@@ -1085,12 +1093,51 @@ async function scan() {
   } finally { btn.disabled = false; btn.textContent = "Scan disc"; }
 }
 
+// A picture chosen in the browser is sent to the server straight away, and used for the next rip.
+const RIPCOVER = { token: null, url: null };
+const MAX_COVER = 25 * 1024 * 1024;
+
+async function uploadPicture(file) {
+  if (!file) return null;
+  if (!/^image\/(jpeg|png)$/.test(file.type) && !/\.(jpe?g|png)$/i.test(file.name)) throw new Error("Choose a JPEG or PNG picture");
+  if (file.size > MAX_COVER) throw new Error("That picture is over 25 MB");
+  const res = await fetch("/api/cover/upload", { method: "POST", body: file });
+  const data = await res.json().catch(() => null);
+  if (!res.ok) throw new Error(data?.message || "Upload failed");
+  return data;
+}
+
+function initRipCover() {
+  const pick = $("#rip-cover-pick"), file = $("#rip-cover-file");
+  if (!pick || pick.dataset.ready) return; pick.dataset.ready = "1";
+  const clear = () => {
+    RIPCOVER.token = null; if (RIPCOVER.url) URL.revokeObjectURL(RIPCOVER.url); RIPCOVER.url = null; file.value = "";
+    $("#rip-cover-thumb").classList.add("hidden"); $("#rip-cover-clear").classList.add("hidden"); pick.textContent = "Upload cover art…";
+    $("#rip-cover-note").textContent = "— looked up automatically; or use your own picture"; $("#rip-cover-detail").textContent = "";
+  };
+  pick.onclick = () => file.click();
+  $("#rip-cover-clear").onclick = clear;
+  file.onchange = async () => {
+    const f = file.files[0]; if (!f) return;
+    try {
+      const r = await uploadPicture(f);
+      RIPCOVER.token = r.token; RIPCOVER.url = URL.createObjectURL(f);
+      $("#rip-cover-thumb").src = RIPCOVER.url; $("#rip-cover-thumb").classList.remove("hidden");
+      $("#rip-cover-clear").classList.remove("hidden"); pick.textContent = "Choose another…";
+      $("#rip-cover-note").textContent = `— using ${f.name}`;
+      const save = SET?.cover_save_file !== false, embed = SET?.cover_embed !== false;
+      $("#rip-cover-detail").textContent = [save && `saved as cover.${r.ext} in the album folder`, embed && "embedded in every track"].filter(Boolean).join(" and ") || "Cover saving and embedding are both off in Settings, so it won't be stored.";
+    } catch (e) { toast(e.message, "err", 6000); file.value = ""; }
+  };
+}
+
 async function startRip() {
   const folder = $('input[name=dest]:checked').value === "custom" ? $("#rip-folder").value.trim() : "";
   if ($('input[name=dest]:checked').value === "custom" && !folder) return toast("Enter a folder name or choose auto-naming", "err");
   const body = {
     device: selectedDevice(), format: $("#rip-format").value, archive: $("#rip-archive").checked,
     no_musicbrainz: $("#rip-nomb").checked, mb_release: MB.over ? MB.over.input : null, no_accuraterip: $("#rip-noar").checked, debug: $("#rip-debug").checked, folder: folder || null,
+    cover_upload: RIPCOVER.token,
   };
   try {
     const job = await api("/api/jobs/rip", { body });
@@ -1474,19 +1521,26 @@ async function openRip(name) {
             ${d.archive ? `<span class="badge accent">archive</span>` : ""}${d.has_data ? `<span class="badge">data session</span>` : ""}</div>
           <div class="row" style="margin-top:12px">
             <button class="btn primary" id="verify" ${d.archive ? "" : "disabled title='Only archive-mode rips have checksums'"}>Verify checksums</button>
+            <button class="btn" id="lib-cover-pick">${d.cover ? "Change cover…" : "Add cover art…"}</button>
+            <button class="btn" id="lib-edit-album">Edit album tags</button>
+            <input type="file" id="lib-cover-file" accept="image/jpeg,image/png" class="hidden">
           </div>
         </div></div>
+        <div id="lib-cover-panel"></div>
+        <div id="lib-album-editor"></div>
         <div id="verify-job"></div>
         ${d.accuraterip_report ? arTable(d.accuraterip_report) : ""}
       </div>
       ${audio.length ? `<div class="card"><h2>Audio</h2><table><tbody>${audio.map((f, i) => `
         <tr><td style="width:28px" class="muted">${i + 1}</td><td>${esc(titleFor(f, i) || f.path.split("/").pop())}<div class="muted mono">${esc(f.path)}</div></td>
         <td class="num muted" style="width:80px">${fmtBytes(f.size)}</td>
-        <td style="width:40%"><audio controls preload="none" src="${url(f.path)}"></audio></td>
-        <td style="width:40px"><a href="${url(f.path)}" download title="Download">⬇</a></td></tr>`).join("")}</tbody></table></div>` : ""}
+        <td style="width:36%"><audio controls preload="none" src="${url(f.path)}"></audio></td>
+        <td style="width:70px"><button class="btn small tag-toggle" data-path="${esc(f.path)}">Tags</button> <a href="${url(f.path)}" download title="Download">⬇</a></td></tr>
+        <tr class="hidden tag-row" data-path="${esc(f.path)}"><td colspan="5"><div class="tag-editor"></div></td></tr>`).join("")}</tbody></table></div>` : ""}
       ${other.length ? `<div class="card"><h2>Other files</h2><table><tbody>${other.map(f => `
         <tr><td><a href="${url(f.path)}" target="_blank" style="color:var(--accent2)">${esc(f.path)}</a></td><td class="num muted">${fmtBytes(f.size)}</td></tr>`).join("")}</tbody></table></div>` : ""}`;
     $("#back").onclick = loadLibrary;
+    wireRipEditing(name, d);
     $("#verify").onclick = async () => {
       try {
         const job = await api("/api/jobs/verify", { body: { name } });
@@ -1494,6 +1548,131 @@ async function openRip(name) {
       } catch (e) { toast(e.message, "err"); }
     };
   } catch (e) { box.innerHTML = `<div class="notice err">${esc(e.message)}</div>`; }
+}
+
+// ── Library: change the cover, inspect and edit tags ────────────────────────
+let ALBUMTAGS = null;   // { fields, files: [{path, tags}] } for the open rip
+
+async function loadAlbumTags(name, force) {
+  if (!ALBUMTAGS || ALBUMTAGS.name !== name || force) { const r = await api("/api/library/" + encodeURIComponent(name) + "/tags"); ALBUMTAGS = { ...r, name }; }
+  return ALBUMTAGS;
+}
+
+function wireRipEditing(name, d) {
+  // ── cover
+  const file = $("#lib-cover-file"), panel = $("#lib-cover-panel");
+  $("#lib-cover-pick").onclick = () => file.click();
+  file.onchange = () => {
+    const f = file.files[0]; if (!f) return;
+    if (!/\.(jpe?g|png)$/i.test(f.name) && !/^image\/(jpeg|png)$/.test(f.type)) { toast("Choose a JPEG or PNG picture", "err"); file.value = ""; return; }
+    if (f.size > MAX_COVER) { toast("That picture is over 25 MB", "err"); file.value = ""; return; }
+    const u = URL.createObjectURL(f);
+    panel.innerHTML = `<div class="card"><div class="row" style="gap:14px;align-items:center">
+      <img src="${u}" style="width:96px;height:96px;object-fit:cover;border-radius:8px;border:1px solid var(--line)" alt="">
+      <div class="grow"><b>Use ${esc(f.name)} as the cover?</b>
+        <div style="margin-top:8px;display:flex;gap:18px;flex-wrap:wrap">
+          <label class="check"><input type="checkbox" id="lc-embed" ${SET?.cover_embed !== false ? "checked" : ""}><span>Embed it in every audio file<small>replaces any picture already inside them</small></span></label>
+          <label class="check"><input type="checkbox" id="lc-save" ${SET?.cover_save_file !== false ? "checked" : ""}><span>Save it as cover.${/png$/i.test(f.name) ? "png" : "jpg"} in the album folder<small>replaces the current cover file</small></span></label>
+        </div></div>
+      <div style="display:flex;flex-direction:column;gap:6px"><button class="btn primary" id="lc-apply">Apply</button><button class="btn" id="lc-cancel">Cancel</button></div></div></div>`;
+    $("#lc-cancel").onclick = () => { panel.innerHTML = ""; file.value = ""; URL.revokeObjectURL(u); };
+    $("#lc-apply").onclick = async () => {
+      const btn = $("#lc-apply"); btn.disabled = true; btn.textContent = "Applying…";
+      try {
+        const res = await fetch(`/api/library/${encodeURIComponent(name)}/cover?embed=${$("#lc-embed").checked ? 1 : 0}&save=${$("#lc-save").checked ? 1 : 0}`, { method: "POST", body: f });
+        const r = await res.json(); if (!res.ok) throw new Error(r.message || "Couldn't apply the cover");
+        toast(`Cover updated${r.saved ? " · saved as " + r.saved : ""}${r.embedded ? ` · embedded in ${r.embedded} file${r.embedded === 1 ? "" : "s"}` : ""}${r.failed.length ? ` · ${r.failed.length} file(s) couldn't hold a picture` : ""}`, r.failed.length ? "info" : "ok", 6000);
+        ALBUMTAGS = null; openRip(name);
+      } catch (e) { toast(e.message, "err", 8000); btn.disabled = false; btn.textContent = "Apply"; }
+    };
+  };
+
+  // ── album-wide tags
+  $("#lib-edit-album").onclick = async () => {
+    const box = $("#lib-album-editor");
+    if (box.innerHTML) { box.innerHTML = ""; return; }
+    box.innerHTML = `<div class="card muted">Reading the tags…</div>`;
+    try { const T = await loadAlbumTags(name, true); renderAlbumEditor(name, box, T); } catch (e) { box.innerHTML = `<div class="notice err">${esc(e.message)}</div>`; }
+  };
+
+  // ── per-track tags
+  $$(".tag-toggle").forEach(b => b.onclick = async () => {
+    const row = $(`.tag-row[data-path="${CSS.escape(b.dataset.path)}"]`), ed = $(".tag-editor", row);
+    if (!row.classList.contains("hidden")) { row.classList.add("hidden"); b.classList.remove("primary"); return; }
+    row.classList.remove("hidden"); b.classList.add("primary");
+    if (ed.dataset.built) return;
+    ed.innerHTML = `<span class="muted">Reading the tags…</span>`;
+    try { const T = await loadAlbumTags(name); renderTrackEditor(name, ed, T, b.dataset.path); ed.dataset.built = "1"; }
+    catch (e) { ed.innerHTML = `<div class="notice err">${esc(e.message)}</div>`; }
+  });
+}
+
+function fieldInputs(fields, values, opts = {}) {
+  const groups = {};
+  fields.filter(f => !opts.only || opts.only.includes(f.name)).forEach(f => (groups[f.group] ||= []).push(f));
+  return Object.entries(groups).map(([g, list]) => `<div style="margin-top:10px"><div class="muted" style="font-size:12px;margin-bottom:4px;text-transform:uppercase;letter-spacing:.04em">${esc(g)}</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:8px 12px">${list.map(f => {
+      const v = values[f.name];
+      return `<label class="field" style="margin:0">${esc(f.label)}<input type="text" data-field="${f.name}" spellcheck="false" value="${esc(v?.value ?? "")}" data-orig="${esc(v?.value ?? "")}" ${v?.varies ? 'placeholder="(differs between tracks)"' : ""}></label>`;
+    }).join("")}</div></div>`).join("");
+}
+
+function changedFields(root) {
+  const set = {};
+  $$("input[data-field]", root).forEach(i => { if (i.value !== i.dataset.orig) set[i.dataset.field] = i.value.trim(); });
+  return set;
+}
+
+function renderTrackEditor(name, ed, T, path) {
+  const f = T.files.find(x => x.path === path); if (!f) { ed.innerHTML = `<span class="muted">No tags found.</span>`; return; }
+  const t = f.tags, values = Object.fromEntries(Object.entries(t.fields).map(([k, v]) => [k, { value: v }]));
+  const pics = t.pictures.length ? `${t.pictures.length} picture${t.pictures.length === 1 ? "" : "s"} (${t.pictures.map(p => fmtBytes(p.bytes)).join(", ")})` : "no embedded picture";
+  ed.innerHTML = `<div class="notice" style="margin:6px 0">
+    <div class="muted">${esc(t.format)}${t.duration_secs ? " · " + Math.floor(t.duration_secs / 60) + ":" + String(Math.round(t.duration_secs % 60)).padStart(2, "0") : ""} · ${esc(pics)}</div>
+    ${t.error ? `<div class="notice err" style="margin-top:6px">${esc(t.error)}</div>` : ""}
+    ${fieldInputs(T.fields, values)}
+    <details style="margin-top:12px"><summary style="cursor:pointer"><b>Every tag in this file</b> <span class="muted">(${t.raw.length})</span></summary>
+      <div class="raw-list" style="margin-top:8px">${t.raw.map(r => `<div class="row" style="gap:8px;margin-bottom:4px"><span class="mono muted" style="width:230px;overflow:hidden;text-overflow:ellipsis" title="${esc(r.key)}">${esc(r.key)}</span><input type="text" class="grow" data-raw="${esc(r.key)}" data-orig="${esc(r.value)}" value="${esc(r.value)}" spellcheck="false"><button class="btn small danger" data-del="${esc(r.key)}" title="Remove this tag">✕</button></div>`).join("")}</div>
+      <div class="row" style="gap:8px;margin-top:8px"><input type="text" class="new-key" placeholder="New tag name" style="width:230px" spellcheck="false"><input type="text" class="new-val grow" placeholder="Value" spellcheck="false"></div></details>
+    <div class="row" style="margin-top:12px"><button class="btn primary small save">Save tags</button><span class="muted status"></span></div></div>`;
+  const removed = new Set();
+  $$("[data-del]", ed).forEach(b => b.onclick = () => { removed.add(b.dataset.del); b.closest(".row").style.opacity = .35; $("input", b.closest(".row")).disabled = true; });
+  $(".save", ed).onclick = async () => {
+    const set = changedFields(ed), raw = {};
+    $$("input[data-raw]", ed).forEach(i => { if (removed.has(i.dataset.raw)) raw[i.dataset.raw] = null; else if (i.value !== i.dataset.orig) raw[i.dataset.raw] = i.value; });
+    const nk = $(".new-key", ed).value.trim(); if (nk) raw[nk] = $(".new-val", ed).value;
+    if (!Object.keys(set).length && !Object.keys(raw).length) { $(".status", ed).textContent = "Nothing changed."; return; }
+    const btn = $(".save", ed); btn.disabled = true;
+    try {
+      const r = await api(`/api/library/${encodeURIComponent(name)}/tags`, { method: "PUT", body: { edits: [{ file: path, set, raw }] } });
+      if (r.failed) throw new Error(r.results[0].error);
+      toast("Tags saved", "ok", 2500);
+      ALBUMTAGS = null; const T2 = await loadAlbumTags(name, true); renderTrackEditor(name, ed, T2, path);
+    } catch (e) { $(".status", ed).innerHTML = `<span class="ar-bad">${esc(e.message)}</span>`; btn.disabled = false; }
+  };
+}
+
+function renderAlbumEditor(name, box, T) {
+  const files = T.files;
+  // A field's common value, or blank with a note when the tracks disagree.
+  const values = {};
+  const names = ["album", "albumartist", "date", "originaldate", "genre", "label", "catalognumber", "barcode", "albumartistsort", "totaltracks", "totaldiscs", "musicbrainz_albumid", "musicbrainz_releasegroupid", "musicbrainz_albumartistid"];
+  names.forEach(n => { const vs = new Set(files.map(f => f.tags.fields[n] || "")); values[n] = vs.size === 1 ? { value: [...vs][0] } : { value: "", varies: true }; });
+  box.innerHTML = `<div class="card"><div class="row"><h2 class="grow" style="margin:0">Edit album tags</h2><button class="btn small" id="ae-close">Close</button></div>
+    <div class="muted" style="margin-top:4px">Change a field and it is written to all ${files.length} track${files.length === 1 ? "" : "s"}. Fields you leave alone stay as they are; clear a field to remove it. Track titles and numbers are edited per track (the Tags button on each row). File names aren't changed.</div>
+    ${fieldInputs(T.fields, values, { only: names })}
+    <div class="row" style="margin-top:14px"><button class="btn primary" id="ae-save">Save to ${files.length} file${files.length === 1 ? "" : "s"}</button><span class="muted" id="ae-status"></span></div></div>`;
+  $("#ae-close").onclick = () => box.innerHTML = "";
+  $("#ae-save").onclick = async () => {
+    const set = changedFields(box);
+    if (!Object.keys(set).length) { $("#ae-status").textContent = "Nothing changed."; return; }
+    const btn = $("#ae-save"); btn.disabled = true; btn.textContent = "Saving…";
+    try {
+      const r = await api(`/api/library/${encodeURIComponent(name)}/tags`, { method: "PUT", body: { edits: files.map(f => ({ file: f.path, set })) } });
+      toast(r.failed ? `${r.failed} of ${files.length} files couldn't be changed` : `Saved to ${files.length} file${files.length === 1 ? "" : "s"}`, r.failed ? "err" : "ok", 5000);
+      ALBUMTAGS = null; openRip(name);
+    } catch (e) { $("#ae-status").innerHTML = `<span class="ar-bad">${esc(e.message)}</span>`; btn.disabled = false; btn.textContent = `Save to ${files.length} files`; }
+  };
 }
 
 // ── Jobs page ───────────────────────────────────────────────────────────────
@@ -2274,6 +2453,7 @@ async function init() {
   $("#rips-dir").textContent = STATUS.rips_dir;
   $("#rip-format").innerHTML = STATUS.formats.map(f => `<option value="${f}">${f.toUpperCase()}${f === "flac" ? " (lossless)" : ""}</option>`).join("");
   await loadSettings(true);
+  initRipCover();
   fillDevices();
   await loadAuth();
   $("#logout").onclick = async () => { await api("/api/logout", { method: "POST", body: {} }).catch(() => {}); location.reload(); };

@@ -45,6 +45,8 @@ Built in Rust for Linux. Runs headless in Docker, so the drive can live in a ser
 - Cover art from Cover Art Archive and/or fanart.tv, saved and embedded
 - **AccurateRip** verification (v1 + v2, offset tolerant)
 - **Every MusicBrainz tag** on every file: IDs, sort names, disc, label, ISRCs, credits
+- **Your own cover art**: upload a picture when ripping, or add one later in the Library
+- **Edit tags in the Library**: album-wide or per track, every field including MusicBrainz IDs
 - **Import into your library** with your own Picard naming script, or hand rips to **Lidarr**, matched by MusicBrainz ID
 - **Archive mode:** disc structure, CD-Text and SHA-256 checksums, re-verifiable years later
 - Enhanced CDs: audio and data sessions ripped separately

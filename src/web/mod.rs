@@ -9,6 +9,7 @@ mod auth;
 mod cache;
 mod import;
 mod jobs;
+mod library_edit;
 mod mock;
 mod settings;
 mod stick;
@@ -238,6 +239,9 @@ pub async fn serve(cfg: Config, bind: SocketAddr) -> Result<(), Error> {
         .route("/api/browse", get(browse))
         .route("/api/library", get(library))
         .route("/api/library/{name}", get(library_entry))
+        .route("/api/library/{name}/tags", get(library_edit::tags).put(library_edit::save_tags))
+        .route("/api/library/{name}/cover", post(library_edit::set_cover).layer(axum::extract::DefaultBodyLimit::max(library_edit::MAX_IMAGE)))
+        .route("/api/cover/upload", post(library_edit::upload_cover).layer(axum::extract::DefaultBodyLimit::max(library_edit::MAX_IMAGE)))
         .route("/api/plan", post(plan))
         .route("/api/playlist", post(playlist_preview))
         .route("/api/audio-files", get(audio_files))
@@ -1137,11 +1141,13 @@ struct RipReq {
     mb_release: Option<String>,
     /// Explicit folder name inside the rips directory. Empty = auto-name from metadata.
     folder: Option<String>,
+    /// A picture uploaded with /api/cover/upload, to use as the cover.
+    cover_upload: Option<String>,
 }
 
 impl Default for RipReq {
     fn default() -> Self {
-        RipReq { device: None, format: None, archive: false, no_musicbrainz: false, no_accuraterip: false, debug: false, mb_release: None, folder: None }
+        RipReq { device: None, format: None, archive: false, no_musicbrainz: false, no_accuraterip: false, debug: false, mb_release: None, folder: None, cover_upload: None }
     }
 }
 
@@ -1183,6 +1189,13 @@ async fn start_rip(State(st): S, Json(req): Json<RipReq>) -> ApiResult<Json<Valu
     args.extend(["--cover-sources".into(), cfg.cover_sources.join(",")]);
     if !cfg.cover_save_file { args.push("--no-cover-file".into()); }
     if !cfg.cover_embed { args.push("--no-cover-embed".into()); }
+    let cover_file: Option<PathBuf> = match req.cover_upload.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+        Some(t) => Some(library_edit::upload_path(&st, t).ok_or_else(|| ApiError::bad("The uploaded cover has expired. Choose it again."))?),
+        None => None,
+    };
+    if let Some(p) = &cover_file {
+        args.extend(["--cover-file".into(), path_str(p)]);
+    }
     let mut envs: Vec<(String, String)> = Vec::new();
     if let Some(key) = &cover_opts.fanart_key {
         envs.push(("RUSTYDISC_FANART_KEY".into(), key.clone()));
@@ -1195,7 +1208,7 @@ async fn start_rip(State(st): S, Json(req): Json<RipReq>) -> ApiResult<Json<Valu
 
     let job = start_job(&st, "rip", &format!("Rip {device} → {}", format.to_uppercase()), true)?;
     if st.cfg.mock {
-        tokio::spawn(mock::rip(job.clone(), st.cfg.rips_dir.clone(), folder, req.archive, format, skip_mb, req.no_accuraterip, mb_release.is_some(), cover_opts));
+        tokio::spawn(mock::rip(job.clone(), st.cfg.rips_dir.clone(), folder, req.archive, format, skip_mb, req.no_accuraterip, mb_release.is_some(), cover_opts, cover_file));
     } else {
         spawn_cli_env(&st, job.clone(), args, None, envs);
     }

@@ -21,7 +21,7 @@ use super::{
 
 const VARIOUS_ARTISTS_ID: &str = "89ad4ac3-39f7-470e-963a-56509c546377";
 
-fn set(tag: &mut Tag, key: ItemKey, value: &str) {
+pub(crate) fn set(tag: &mut Tag, key: ItemKey, value: &str) {
     if !value.trim().is_empty() {
         tag.remove_key(&key);
         // "unchecked": a few keys (the recording ID in an MP3, say) have no plain name to check
@@ -32,7 +32,7 @@ fn set(tag: &mut Tag, key: ItemKey, value: &str) {
 
 /// Several values for one field: separate fields in Vorbis and MP4, one frame with the values
 /// split by a NUL byte in ID3v2.4 (a second frame of the same kind would be ignored).
-fn set_many(tag: &mut Tag, key: ItemKey, values: &[String]) {
+pub(crate) fn set_many(tag: &mut Tag, key: ItemKey, values: &[String]) {
     let values: Vec<String> = values.iter().map(|v| v.trim().to_string()).filter(|v| !v.is_empty()).collect();
     if values.is_empty() {
         return;
