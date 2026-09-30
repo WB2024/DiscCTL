@@ -180,17 +180,8 @@ pub fn encode(
         };
         cmd.arg("-metadata").arg(format!("track={}", tag));
     }
-    // MusicBrainz identifiers — stored as custom tags; most players / taggers
-    // recognise these field names (Picard convention).
-    if let Some(ref v) = tags.mb_recording_id {
-        cmd.arg("-metadata").arg(format!("MUSICBRAINZ_TRACKID={}", v));
-    }
-    if let Some(ref v) = tags.mb_release_id {
-        cmd.arg("-metadata").arg(format!("MUSICBRAINZ_ALBUMID={}", v));
-    }
-    if let Some(ref v) = tags.mb_artist_id {
-        cmd.arg("-metadata").arg(format!("MUSICBRAINZ_ARTISTID={}", v));
-    }
+    // The MusicBrainz IDs and the rest of the tags are written afterwards by `tagging::apply`,
+    // which gives each format its own native frame or field.
 
     cmd.arg(output_path);
 

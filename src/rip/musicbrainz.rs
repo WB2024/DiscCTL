@@ -6,8 +6,8 @@ use std::{
 use serde::{Deserialize, Serialize};
 use crate::error::Error;
 
-const MB_API: &str = "https://musicbrainz.org/ws/2";
-const USER_AGENT: &str = concat!("RustyDisc/", env!("CARGO_PKG_VERSION"), " ( https://github.com/WB2024/DiscCTL )");
+pub(crate) const MB_API: &str = "https://musicbrainz.org/ws/2";
+pub(crate) const USER_AGENT: &str = concat!("RustyDisc/", env!("CARGO_PKG_VERSION"), " ( https://github.com/WB2024/DiscCTL )");
 
 // ── Rate limiting ─────────────────────────────────────────────────────────────
 //
@@ -60,7 +60,7 @@ fn retry_delay(retry_after: Option<&str>, attempt: u32) -> Duration {
 }
 
 /// Make a MusicBrainz API request politely. `build` is called once per attempt.
-fn mb_call(build: impl Fn() -> ureq::Request) -> Result<ureq::Response, ureq::Error> {
+pub(crate) fn mb_call(build: impl Fn() -> ureq::Request) -> Result<ureq::Response, ureq::Error> {
     let mut attempt = 0;
     loop {
         match LIMITER.reserve(MAX_QUEUE_WAIT) {
@@ -89,7 +89,7 @@ fn mb_call(build: impl Fn() -> ureq::Request) -> Result<ureq::Response, ureq::Er
 // ── Public types ──────────────────────────────────────────────────────────────
 
 /// Metadata for a release retrieved from MusicBrainz.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ReleaseInfo {
     pub mb_release_id: String,
     pub album: String,
@@ -105,15 +105,64 @@ pub struct ReleaseInfo {
     pub mb_release_group_id: Option<String>,
     /// How many releases share this DiscID (useful for logging).
     pub total_releases: usize,
+
+    // Everything below comes from a second, fuller lookup (see `mb_enrich`) and is what Picard
+    // would tag a file with. Old rips saved without it still load.
+    #[serde(default)] pub album_artist_sort: Option<String>,
+    #[serde(default)] pub album_artist_ids: Vec<String>,
+    /// The album artist credit split into separate names.
+    #[serde(default)] pub album_artists: Vec<String>,
+    /// The release's disambiguation comment, e.g. "remastered".
+    #[serde(default)] pub release_comment: Option<String>,
+    #[serde(default)] pub status: Option<String>,
+    /// e.g. "album" or "album; live"
+    #[serde(default)] pub release_type: Option<String>,
+    #[serde(default)] pub country: Option<String>,
+    #[serde(default)] pub label: Option<String>,
+    #[serde(default)] pub catalog_number: Option<String>,
+    #[serde(default)] pub barcode: Option<String>,
+    #[serde(default)] pub asin: Option<String>,
+    #[serde(default)] pub script: Option<String>,
+    #[serde(default)] pub language: Option<String>,
+    /// Format of the disc, e.g. "CD".
+    #[serde(default)] pub media_format: Option<String>,
+    /// First release date of the release group (Picard's `originaldate`).
+    #[serde(default)] pub original_date: Option<String>,
+    #[serde(default)] pub disc_number: Option<usize>,
+    #[serde(default)] pub disc_total: Option<usize>,
+    #[serde(default)] pub disc_title: Option<String>,
+    #[serde(default)] pub genres: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MbTrackInfo {
     pub number: usize,
     pub title: String,
     pub artist: Option<String>,
     pub mb_recording_id: Option<String>,
     pub mb_artist_id: Option<String>,
+
+    // From the fuller lookup (see `mb_enrich`).
+    /// The track's own ID on this release (Picard's "release track id").
+    #[serde(default)] pub mb_release_track_id: Option<String>,
+    #[serde(default)] pub artist_sort: Option<String>,
+    #[serde(default)] pub artists: Vec<String>,
+    #[serde(default)] pub artist_ids: Vec<String>,
+    #[serde(default)] pub isrcs: Vec<String>,
+    #[serde(default)] pub work_ids: Vec<String>,
+    #[serde(default)] pub works: Vec<String>,
+    #[serde(default)] pub composers: Vec<String>,
+    #[serde(default)] pub lyricists: Vec<String>,
+    #[serde(default)] pub writers: Vec<String>,
+    #[serde(default)] pub arrangers: Vec<String>,
+    #[serde(default)] pub conductors: Vec<String>,
+    #[serde(default)] pub producers: Vec<String>,
+    #[serde(default)] pub mixers: Vec<String>,
+    #[serde(default)] pub engineers: Vec<String>,
+    #[serde(default)] pub remixers: Vec<String>,
+    /// Performers, with the instrument or role in brackets: "Name (guitar)".
+    #[serde(default)] pub performers: Vec<String>,
+    #[serde(default)] pub length_ms: Option<u64>,
 }
 
 // ── API response types (private, only used for deserialisation) ───────────────
@@ -629,6 +678,7 @@ fn parse_release(r: &MbRelease, media: &[MbMedia], total_releases: usize) -> Rel
                 artist: track_artist,
                 mb_recording_id,
                 mb_artist_id,
+                ..Default::default()
             });
         }
     }
@@ -643,6 +693,7 @@ fn parse_release(r: &MbRelease, media: &[MbMedia], total_releases: usize) -> Rel
         tracks,
         mb_release_group_id: r.release_group.as_ref().map(|g| g.id.clone()),
         total_releases,
+        ..Default::default()
     }
 }
 

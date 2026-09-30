@@ -350,6 +350,10 @@ fn handle_stdout_line(job: &Job, line: &str) {
                 job.push(Event::Result { name: "stick".into(), data: v.clone() });
                 return;
             }
+            Some("import_done") => {
+                job.push(Event::Result { name: "import".into(), data: v.clone() });
+                return;
+            }
             Some("done") => return,
             _ => {}
         }

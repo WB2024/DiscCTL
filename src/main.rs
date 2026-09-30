@@ -2,6 +2,7 @@ mod analyzer;
 mod backend;
 mod commands;
 mod error;
+mod library;
 mod model;
 mod parser;
 mod planner;
@@ -42,6 +43,8 @@ enum Cmd {
     Serve(commands::serve::ServeArgs),
     /// Rusty Stick: write music to a USB stick, filed the way you like
     Stick(commands::stick::StickArgs),
+    /// Import ripped albums into the music library, named by a Picard naming script
+    Import(commands::import::ImportArgs),
 }
 
 fn main() {
@@ -56,6 +59,7 @@ fn main() {
         Cmd::Verify(args)   => commands::verify::run(args),
         Cmd::Serve(args)    => commands::serve::run(args),
         Cmd::Stick(args)    => commands::stick::run(args),
+        Cmd::Import(args)   => commands::import::run(args),
     };
     if let Err(e) = result {
         let disc_err = e.to_disc_error();

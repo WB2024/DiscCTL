@@ -44,6 +44,8 @@ Built in Rust for Linux. Runs headless in Docker, so the drive can live in a ser
 - MusicBrainz tags, plus a built-in **search** when the match is wrong
 - Cover art from Cover Art Archive and/or fanart.tv, saved and embedded
 - **AccurateRip** verification (v1 + v2, offset tolerant)
+- **Every MusicBrainz tag** on every file: IDs, sort names, disc, label, ISRCs, credits
+- **Import into your library** with your own Picard naming script
 - **Archive mode:** disc structure, CD-Text and SHA-256 checksums, re-verifiable years later
 - Enhanced CDs: audio and data sessions ripped separately
 
@@ -234,6 +236,7 @@ The README stays short on purpose. The details live here:
 
 | | |
 |---|---|
+| 📥 [**Library import**](docs/library-import.md) | Move rips into your library with your own Picard naming script, and the full MusicBrainz tags written on rip |
 | 🖥️ [**Web UI & Docker**](docs/web-ui-and-docker.md) | Deployment, Proxmox, environment variables, the optional login |
 | 🔌 [**Rusty Stick**](docs/rusty-stick.md) | Layouts and tokens, conversion, conflicts, reformatting, hot-plug mounting, CLI |
 | 📀 [**Disc formats**](docs/disc-formats.md) | Red Book, Data, Blue Book, Data DVD and Music DVD explained |

@@ -3,8 +3,10 @@ pub mod cover;
 pub mod data;
 pub mod encoder;
 pub mod engine;
+pub mod mb_enrich;
 pub mod metadata;
 pub mod musicbrainz;
+pub mod tagging;
 
 use std::path::Path;
 use crate::{analyzer::{self, DiscFormat, SessionKind, TrackKind}, error::Error};
@@ -112,6 +114,15 @@ pub fn rip(opts: &RipOptions) -> Result<(), Error> {
     } else {
         None
     };
+
+    // The lookups above find the release; one more request fills in the rest of what Picard tags.
+    let mb = mb.map(|mut r| {
+        if !opts.no_musicbrainz || opts.mb_release.is_some() {
+            if opts.progress_json { emit_step("Fetching the full MusicBrainz details..."); }
+            musicbrainz_details(&mut r, info.discid.as_deref(), opts.debug);
+        }
+        r
+    });
 
     // Step 3: resolve final output directory
     let output_dir = resolve_output_dir(opts, &mb, &info)?;
@@ -318,7 +329,7 @@ fn rip_redbook(
             eprintln!("  Encoding track {:2} → {}", track_num, filename);
         }
 
-        encoder::encode(wav_path, &out_path, &opts.format, &TrackTags {
+        let tags = TrackTags {
             title:           title.map(str::to_string),
             artist:          artist.map(str::to_string),
             album:           album.map(str::to_string),
@@ -331,7 +342,11 @@ fn rip_redbook(
             mb_release_id:   mb_release_id.clone(),
             mb_recording_id: mb_track.and_then(|t| t.mb_recording_id.clone()),
             mb_artist_id:    mb_track.and_then(|t| t.mb_artist_id.clone()).or_else(|| mb_artist_id_alb.clone()),
-        }, cover_art, opts.debug)?;
+        };
+
+        encoder::encode(wav_path, &out_path, &opts.format, &tags, cover_art, opts.debug)?;
+
+        tagging::apply(&out_path, &tags, mb.as_ref(), mb_track, opts.debug);
     }
 
     let _ = std::fs::remove_dir_all(&wav_dir);
@@ -447,7 +462,7 @@ fn rip_bluebook(
                 eprintln!("  Encoding track {:2} → {}", track_num, filename);
             }
 
-            encoder::encode(wav_path, &out_path, &opts.format, &TrackTags {
+            let tags = TrackTags {
                 title:           title.map(str::to_string),
                 artist:          artist.map(str::to_string),
                 album:           album.map(str::to_string),
@@ -460,7 +475,11 @@ fn rip_bluebook(
                 mb_release_id:   mb_release_id.clone(),
                 mb_recording_id: mb_track.and_then(|t| t.mb_recording_id.clone()),
                 mb_artist_id:    mb_track.and_then(|t| t.mb_artist_id.clone()).or_else(|| mb_artist_id_alb.clone()),
-            }, cover_art, opts.debug)?;
+            };
+
+            encoder::encode(wav_path, &out_path, &opts.format, &tags, cover_art, opts.debug)?;
+
+            tagging::apply(&out_path, &tags, mb.as_ref(), mb_track, opts.debug);
         }
 
         let _ = std::fs::remove_dir_all(&wav_dir);
@@ -559,4 +578,8 @@ pub fn check_dependencies(format: &AudioFormat) -> Vec<String> {
         missing.push("ffmpeg (sudo apt install ffmpeg)".to_string());
     }
     missing
+}
+
+fn musicbrainz_details(r: &mut ReleaseInfo, discid: Option<&str>, debug: bool) {
+    mb_enrich::enrich(r, discid, debug);
 }

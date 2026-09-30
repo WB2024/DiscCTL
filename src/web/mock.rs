@@ -93,10 +93,12 @@ pub fn release() -> ReleaseInfo {
                 artist: None,
                 mb_recording_id: None,
                 mb_artist_id: None,
+                ..Default::default()
             })
             .collect(),
         mb_release_group_id: Some("11111111-1111-4111-8111-111111111111".into()),
         total_releases: 1,
+        ..Default::default()
     }
 }
 

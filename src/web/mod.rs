@@ -7,6 +7,7 @@
 
 mod auth;
 mod cache;
+mod import;
 mod jobs;
 mod mock;
 mod settings;
@@ -53,6 +54,8 @@ pub struct Config {
     pub stick_dirs: Vec<PathBuf>,
     /// Default place for converted files (Settings can override it).
     pub cache_dir: Option<PathBuf>,
+    /// Default music library folder (Settings can override it).
+    pub library_dir: Option<PathBuf>,
     pub mock: bool,
     /// Login from the command line / environment: (user, password).
     pub auth: Option<(String, String)>,
@@ -201,6 +204,11 @@ pub async fn serve(cfg: Config, bind: SocketAddr) -> Result<(), Error> {
 
     let app = Router::new()
         .route("/", get(|| async { Html(INDEX_HTML) }))
+        .route("/api/import/list", get(import::list))
+        .route("/api/import/plan", post(import::plan))
+        .route("/api/import/preview", post(import::preview))
+        .route("/api/import/default-script", get(import::default_script))
+        .route("/api/jobs/import", post(import::start))
         .route("/api/cache", get(cache::info))
         .route("/api/cache/clear", post(cache::clear))
         .route("/api/status", get(status))
@@ -491,6 +499,7 @@ async fn get_settings(State(st): S) -> Json<Value> {
     Json(json!({
         "settings": st.settings.get().public(),
         "config_file": path_str(st.settings.path()),
+        "library_default": st.cfg.library_dir.as_ref().map(|p| path_str(p)),
         "sources": [
             {"id": "fanart", "label": "fanart.tv", "needs_key": true},
             {"id": "caa", "label": "Cover Art Archive (MusicBrainz)", "needs_key": false},
@@ -517,6 +526,13 @@ struct SettingsUpdate {
     convert_cache_days: Option<u32>,
     convert_cache_max_gb: Option<u32>,
     convert_cache_dir: Option<String>,
+    library_path: Option<String>,
+    library_script: Option<String>,
+    import_mode: Option<String>,
+    import_cover: Option<bool>,
+    import_other: Option<bool>,
+    import_delete_leftovers: Option<bool>,
+    import_conflict: Option<String>,
 }
 
 async fn put_settings(State(st): S, Json(u): Json<SettingsUpdate>) -> ApiResult<Json<Value>> {
@@ -536,6 +552,13 @@ async fn put_settings(State(st): S, Json(u): Json<SettingsUpdate>) -> ApiResult<
         convert_cache_days: u.convert_cache_days.unwrap_or(current.convert_cache_days),
         convert_cache_max_gb: u.convert_cache_max_gb.unwrap_or(current.convert_cache_max_gb),
         convert_cache_dir: u.convert_cache_dir.unwrap_or(current.convert_cache_dir),
+        library_path: u.library_path.unwrap_or(current.library_path),
+        library_script: u.library_script.unwrap_or(current.library_script),
+        import_mode: u.import_mode.unwrap_or(current.import_mode),
+        import_cover: u.import_cover.unwrap_or(current.import_cover),
+        import_other: u.import_other.unwrap_or(current.import_other),
+        import_delete_leftovers: u.import_delete_leftovers.unwrap_or(current.import_delete_leftovers),
+        import_conflict: u.import_conflict.unwrap_or(current.import_conflict),
         auth_user: current.auth_user,
         auth_password_hash: current.auth_password_hash,
     }

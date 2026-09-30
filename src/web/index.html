@@ -178,6 +178,7 @@ pre.json { background: var(--bg); border: 1px solid var(--line); border-radius: 
       <button data-page="burn">🔥 Burn</button>
       <button data-page="stick">🔌 Rusty Stick</button>
       <button data-page="library">📚 Library</button>
+      <button data-page="import">📥 Import</button>
       <button data-page="jobs">⚙️ Jobs <span class="count hidden" id="jobcount"></span></button>
       <button data-page="tools">🧰 Tools</button>
       <button data-page="settings">🎛️ Settings</button>
@@ -420,6 +421,46 @@ pre.json { background: var(--bg); border: 1px solid var(--line); border-radius: 
     </section>
 
     <!-- ── Library ────────────────────────────────── -->
+    <section class="page" id="page-import">
+      <div class="page-head"><h1>Import</h1><div class="muted">Move finished rips into your music library, named by your Picard naming script.</div></div>
+
+      <div class="card" id="imp-setup"></div>
+
+      <div class="card" id="imp-list-card">
+        <div class="row" style="margin-bottom:10px"><h2 style="margin:0" class="grow">1 · Choose the rips</h2><button class="btn small" id="imp-refresh">↻ Refresh</button></div>
+        <div id="imp-list"></div>
+      </div>
+
+      <div class="card">
+        <h2>2 · How to import</h2>
+        <div class="grid2">
+          <div style="display:flex;flex-direction:column;gap:12px">
+            <label class="field">Files go into the library by
+              <select id="imp-mode"><option value="move">Moving them (the rip folder is emptied)</option><option value="copy">Copying them (the rip stays)</option><option value="hardlink">Hard links (the rip stays, no extra space)</option></select></label>
+            <label class="field">If a file is already in the library
+              <select id="imp-conflict"></select></label>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:12px">
+            <label class="check"><input type="checkbox" id="imp-cover"><span>Bring the cover picture<small>saved as cover.jpg in the album folder</small></span></label>
+            <label class="check"><input type="checkbox" id="imp-other"><span>Bring every other file too<small>rip logs, cue sheets, booklets… into the album folder</small></span></label>
+            <label class="check"><input type="checkbox" id="imp-delete"><span>Delete whatever is left in the rip folder afterwards<small>and the folder itself, once everything is in the library</small></span></label>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>3 · Plan</h2>
+        <div id="imp-plan"><span class="muted">Choose a rip to see where its files will go.</span></div>
+      </div>
+
+      <div class="card">
+        <h2>Import</h2>
+        <div class="row"><label class="check"><input type="checkbox" id="imp-dry"><span>Dry run<small>work through it without moving anything</small></span></label></div>
+        <div class="row" style="margin-top:14px"><button class="btn primary" id="imp-go">Import to library</button><span class="muted" id="imp-hint"></span></div>
+        <div id="imp-job"></div>
+      </div>
+    </section>
+
     <section class="page" id="page-library">
       <div class="page-head row">
         <div class="grow"><h1>Library</h1><div class="muted">Rips in <span class="mono" id="lib-dir"></span></div></div>
@@ -502,6 +543,28 @@ pre.json { background: var(--bg); border: 1px solid var(--line); border-radius: 
         </div>
       </div>
 
+      <div class="card" id="library-card">
+        <h2>Music library</h2>
+        <p class="muted" style="margin-top:0">Where <b>Import</b> puts finished rips. Files are named and filed by a MusicBrainz Picard naming script, so your library keeps exactly the layout you already have.</p>
+        <label class="field">Library folder<small>An absolute path on the server that RustyDisc can write to, e.g. <span class="mono">/library</span>.</small>
+          <input type="text" id="lib-path" spellcheck="false" placeholder="/library"></label>
+        <label class="field" style="margin-top:12px">Naming script
+          <small>Paste a Picard file naming script. It runs on every file's tags to make the path (folders and file name, without the extension). Leave it as it is to use the built-in one.</small>
+          <textarea id="lib-script" rows="14" spellcheck="false" style="font-size:12px"></textarea></label>
+        <div class="row" style="margin-top:8px"><button class="btn small" id="lib-check">Check script</button><button class="btn small" id="lib-default">Reset to the built-in script</button><span class="muted grow" id="lib-preview"></span></div>
+        <div class="grid2" style="margin-top:16px">
+          <label class="field">Import files by
+            <select id="lib-mode"><option value="move">Moving them</option><option value="copy">Copying them</option><option value="hardlink">Hard links</option></select></label>
+          <label class="field">If a file is already in the library
+            <select id="lib-conflict"><option value="skip">Skip it</option><option value="higher_quality">Replace if higher quality</option><option value="lower_quality">Replace if lower quality</option><option value="newer">Replace if newer</option><option value="replace">Always replace</option><option value="keep_both">Keep both</option></select></label>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:10px;margin-top:12px">
+          <label class="check"><input type="checkbox" id="lib-cover"><span>Bring the cover picture</span></label>
+          <label class="check"><input type="checkbox" id="lib-other"><span>Bring every other file too<small>logs, cue sheets, booklets…</small></span></label>
+          <label class="check"><input type="checkbox" id="lib-delete"><span>Delete whatever is left in the rip folder afterwards</span></label>
+        </div>
+      </div>
+
       <div class="card" id="convert-card">
         <h2>Converted files</h2>
         <p class="muted" style="margin-top:0">When Rusty Stick or a Data disc converts audio to fit, what happens to the converted files afterwards? Keeping them means the next job that needs the same conversion is instant.</p>
@@ -572,7 +635,7 @@ const confirmBox = (msg) => window.confirm(msg);
 
 // ── Global state / navigation ───────────────────────────────────────────────
 let STATUS = null;
-const pages = ["disc", "burn", "stick", "library", "jobs", "tools", "settings"];
+const pages = ["disc", "burn", "stick", "library", "import", "jobs", "tools", "settings"];
 
 function showPage(name) {
   if (!pages.includes(name)) name = "disc";
@@ -584,6 +647,7 @@ function showPage(name) {
   if (name === "tools") renderTools();
   if (name === "settings") loadSettings();
   if (name === "stick") loadStick();
+  if (name === "import") loadImport();
 }
 window.addEventListener("hashchange", () => showPage(location.hash.slice(1)));
 $("#nav").addEventListener("click", e => { const b = e.target.closest("button"); if (b) showPage(b.dataset.page); });
@@ -640,6 +704,7 @@ function jobPanel(container, jobId, { onEnd } = {}) {
       <div class="notice warn jp-input hidden" style="margin-top:10px"><div class="row"><span class="grow jp-input-msg"></span><button class="btn primary small jp-continue">Continue</button></div></div>
       <div class="jp-cover"></div>
       <div class="jp-stick"></div>
+      <div class="jp-import"></div>
       <div class="jp-result"></div>
       <div class="notice err jp-error hidden" style="margin-top:10px"></div>
       <pre class="log jp-log"></pre>
@@ -674,6 +739,7 @@ function jobPanel(container, jobId, { onEnd } = {}) {
         if (ev.name === "accuraterip") q(".jp-result").innerHTML = arTable(ev.data);
         if (ev.name === "cover") q(".jp-cover").innerHTML = coverNote(ev.data);
         if (ev.name === "stick") q(".jp-stick").innerHTML = stickDone(ev.data);
+        if (ev.name === "import") q(".jp-import").innerHTML = importDone(ev.data);
         break;
       case "error": { const e = q(".jp-error"); e.classList.remove("hidden"); e.innerHTML = `<b>${esc(ev.error)}</b> — ${esc(ev.message).replace(/\n/g, "<br>")}${ev.recoverable ? "" : ""}`; break; }
     }
@@ -1823,6 +1889,100 @@ async function stickWrite() {
   } catch (e) { toast(e.message, "err", 9000); }
 }
 
+// ── Import (rips → music library) ───────────────────────────────────────────
+const IMP = { info: null, selected: new Set(), plans: null, timer: null, seq: 0, ready: false };
+
+async function loadImport() {
+  try { IMP.info = await api("/api/import/list"); } catch (e) { toast(e.message, "err"); return; }
+  const i = IMP.info;
+  if (!IMP.ready) {
+    IMP.ready = true;
+    $("#imp-conflict").innerHTML = i.conflicts.map(c => `<option value="${c.id}">${esc(c.label)}</option>`).join("");
+    $("#imp-mode").value = i.defaults.mode; $("#imp-conflict").value = i.defaults.conflict;
+    $("#imp-cover").checked = i.defaults.include_cover; $("#imp-other").checked = i.defaults.include_other; $("#imp-delete").checked = i.defaults.delete_leftovers;
+    ["imp-mode", "imp-conflict", "imp-cover", "imp-other", "imp-delete"].forEach(id => $("#" + id).onchange = replanImport);
+    $("#imp-refresh").onclick = loadImport;
+    $("#imp-go").onclick = startImport;
+  }
+  const setup = $("#imp-setup");
+  setup.classList.toggle("hidden", !!i.library);
+  setup.innerHTML = i.library ? "" : `<h2>Set up your library first</h2><p class="muted" style="margin:0">Tell RustyDisc where your music library is (and check the naming script) in <a href="#settings" style="color:var(--accent)">Settings → Music library</a>.</p>`;
+  IMP.selected = new Set([...IMP.selected].filter(n => i.entries.some(e => e.name === n)));
+  renderImportList(); replanImportSoon();
+}
+
+function renderImportList() {
+  const i = IMP.info, box = $("#imp-list");
+  if (!i.entries.length) { box.innerHTML = `<div class="empty">No rips found in <span class="mono">${esc(i.rips_dir)}</span>. Rip a disc first.</div>`; return; }
+  box.innerHTML = "";
+  i.entries.forEach(e => {
+    const row = document.createElement("label"); row.className = "item"; row.style.cssText = "cursor:pointer;display:flex;align-items:center;gap:10px";
+    const done = e.imported_at ? `<span class="badge ok" title="${esc(e.imported_to || "")}">imported ${new Date(e.imported_at * 1000).toLocaleDateString()}</span>` : "";
+    const warn = !e.tagged ? `<span class="badge err" title="The first track has no title tag, so the naming script's fallbacks will be used">little tagging</span>` : "";
+    row.innerHTML = `<input type="checkbox" ${IMP.selected.has(e.name) ? "checked" : ""}>
+      <span class="grow"><b>${esc(e.album || e.name)}</b> <span class="muted">${esc(e.artist || "")}</span><div class="muted mono" style="font-size:12px">${esc(e.name)}</div></span>
+      ${done}${warn}${e.has_mb ? `<span class="badge">MusicBrainz</span>` : ""}<span class="badge">${e.tracks} track${e.tracks === 1 ? "" : "s"}</span>`;
+    $("input", row).onchange = ev => { ev.target.checked ? IMP.selected.add(e.name) : IMP.selected.delete(e.name); replanImportSoon(); };
+    box.append(row);
+  });
+}
+
+function impOptions() {
+  return { mode: $("#imp-mode").value, conflict: $("#imp-conflict").value, include_cover: $("#imp-cover").checked, include_other: $("#imp-other").checked, delete_leftovers: $("#imp-delete").checked };
+}
+function replanImport() { replanImportSoon(); }
+function replanImportSoon() { clearTimeout(IMP.timer); IMP.timer = setTimeout(doImportPlan, 350); }
+
+async function doImportPlan() {
+  const box = $("#imp-plan"), seq = ++IMP.seq;
+  if (!IMP.selected.size) { IMP.plans = null; box.innerHTML = `<span class="muted">Choose a rip to see where its files will go.</span>`; $("#imp-hint").textContent = ""; return; }
+  if (!IMP.info.library) { box.innerHTML = `<span class="muted">Set the library folder in Settings first.</span>`; return; }
+  box.innerHTML = `<span class="muted">Working out where everything goes…</span>`;
+  try {
+    const r = await api("/api/import/plan", { body: { rips: [...IMP.selected], options: impOptions() } });
+    if (seq !== IMP.seq) return;
+    IMP.plans = r.plans; box.innerHTML = r.plans.map(renderImportPlan).join("");
+    const n = r.plans.reduce((a, p) => a + p.to_import + p.replacing, 0);
+    $("#imp-hint").textContent = n ? `${n} file${n === 1 ? "" : "s"} to ${IMP.info.library}` : "Nothing new to import";
+  } catch (e) { if (seq === IMP.seq) { IMP.plans = null; box.innerHTML = `<div class="notice err">${esc(e.message)}</div>`; } }
+}
+
+function renderImportPlan(p) {
+  const head = `<div style="font-size:17px;font-weight:700">${esc(p.album || "Unknown album")} <span class="muted" style="font-weight:400">${esc(p.artist || "")}</span></div>
+    <div class="muted" style="margin-top:2px">→ <span class="mono">${esc(p.album_dir || "")}</span></div>
+    <div class="muted" style="margin-top:4px">${p.to_import} to import${p.replacing ? ` · ${p.replacing} replacing` : ""}${p.skipped ? ` · ${p.skipped} already there` : ""} · ${fmtMB(p.bytes)}${p.leftovers.length ? ` · ${p.leftovers.length} file${p.leftovers.length === 1 ? "" : "s"} stay in the rip folder` : ""}</div>`;
+  const warn = noticeList("Heads up", p.warnings.map(w => `<li>${esc(w)}</li>`), "warn");
+  const icon = f => f.action === "skip" ? "⏭" : f.action === "replace" ? "🔁" : f.kind === "cover" ? "🖼️" : f.kind === "other" ? "📄" : "🎵";
+  const rows = p.files.map(f => `<div class="tfile">${icon(f)} <span class="mono">${esc(f.dest.slice((p.album_dir || "").length ? (p.album_dir.length + 1) : 0))}</span>${f.note ? ` <span class="muted">— ${esc(f.note)}</span>` : ""}</div>`).join("");
+  const left = p.leftovers.length ? `<details style="margin-top:8px"><summary class="muted" style="cursor:pointer">Staying in the rip folder (${p.leftovers.length})</summary><div style="margin-top:6px">${p.leftovers.map(l => `<div class="tfile mono">${esc(l)}</div>`).join("")}</div></details>` : "";
+  return `<div class="notice" style="margin-bottom:12px">${head}${warn}<details style="margin-top:10px" open><summary style="cursor:pointer"><b>Files</b> <span class="muted">(${p.files.length})</span></summary><div style="margin-top:6px">${rows}</div></details>${left}</div>`;
+}
+
+async function startImport() {
+  if (!IMP.selected.size) return toast("Choose a rip first", "err");
+  if (!IMP.plans) return toast("Wait for the plan", "err");
+  const dry = $("#imp-dry").checked, o = impOptions();
+  const n = IMP.plans.reduce((a, p) => a + p.to_import + p.replacing, 0);
+  if (!dry) {
+    if (!n) return toast("Nothing new to import", "info");
+    const verb = { move: "Move", copy: "Copy", hardlink: "Link" }[o.mode];
+    let msg = `${verb} ${n} file${n === 1 ? "" : "s"} into ${IMP.info.library}?`;
+    if (o.mode === "move") msg += "\n\nThe files leave the rip folder.";
+    if (o.delete_leftovers) msg += "\n\nAnything left in the rip folder will be DELETED afterwards.";
+    if (!confirmBox(msg)) return;
+  }
+  try {
+    const job = await api("/api/jobs/import", { body: { rips: [...IMP.selected], options: o, dry_run: dry } });
+    jobPanel($("#imp-job"), job.id, { onEnd: () => { loadImport(); } });
+    refreshJobs();
+  } catch (e) { toast(e.message, "err", 9000); }
+}
+
+function importDone(d) {
+  const what = d.dry_run ? "Dry run finished — nothing was moved." : `Imported <b>${d.imported}</b> file${d.imported === 1 ? "" : "s"}${d.replaced ? `, replaced ${d.replaced}` : ""}${d.skipped ? `, ${d.skipped} were already there` : ""} (${fmtMB(d.bytes)}).${d.rips_removed ? ` ${d.rips_removed} rip folder${d.rips_removed === 1 ? "" : "s"} removed.` : ""}`;
+  return `<div class="notice" style="margin-top:10px"><span class="ar-ok">✔</span> ${what}</div>`;
+}
+
 // ── Settings ────────────────────────────────────────────────────────────────
 let SET = null, SETINFO = null, SRC_ORDER = [];
 
@@ -1857,6 +2017,7 @@ function renderSettings() {
   $("#set-stick-preset").innerHTML = (STICK.meta?.presets || FALLBACK_PRESETS).map(p => `<option value="${p.id}">${esc(p.label)}</option>`).join("");
   $("#set-stick-preset").value = SET.stick_preset || "artist-album";
   renderConvertCache();
+  renderLibrarySettings();
   $("#fanart-key").value = "";
   $("#fanart-key").placeholder = SET.fanart_api_key_set ? `Key saved (${SET.fanart_api_key_hint}) — paste a new one to replace it` : "Paste your fanart.tv API key";
   $("#fanart-remove").classList.toggle("hidden", !SET.fanart_api_key_set);
@@ -1902,6 +2063,27 @@ function coverWarning() {
   w.textContent = msg; w.classList.toggle("hidden", !msg);
 }
 
+let DEFAULT_SCRIPT = null;
+async function renderLibrarySettings() {
+  $("#lib-path").value = SET.library_path || "";
+  $("#lib-path").placeholder = SETINFO.library_default ? `${SETINFO.library_default} (set by RUSTYDISC_LIBRARY_DIR)` : "/library";
+  $("#lib-mode").value = SET.import_mode; $("#lib-conflict").value = SET.import_conflict;
+  $("#lib-cover").checked = SET.import_cover; $("#lib-other").checked = SET.import_other; $("#lib-delete").checked = SET.import_delete_leftovers;
+  if (!DEFAULT_SCRIPT) { try { DEFAULT_SCRIPT = (await api("/api/import/default-script")).script; } catch { DEFAULT_SCRIPT = ""; } }
+  $("#lib-script").value = SET.library_script || DEFAULT_SCRIPT;
+  $("#lib-default").onclick = () => { $("#lib-script").value = DEFAULT_SCRIPT; previewScript(); };
+  $("#lib-check").onclick = previewScript;
+  let t; $("#lib-script").oninput = () => { clearTimeout(t); t = setTimeout(previewScript, 600); };
+  previewScript();
+}
+async function previewScript() {
+  const box = $("#lib-preview");
+  try {
+    const r = await api("/api/import/preview", { body: { script: $("#lib-script").value } });
+    box.innerHTML = r.ok ? `<span class="ar-ok">✔</span> ${esc(r.sample)}: <span class="mono">${esc(r.path)}</span>` : `<span class="ar-bad">✖ ${esc(r.error)}</span>`;
+  } catch (e) { box.textContent = e.message; }
+}
+
 function renderConvertCache() {
   $$('input[name="cc-mode"]').forEach(r => { r.checked = r.value === SET.convert_cache_mode; r.onchange = syncConvertCache; });
   $("#cc-days").value = SET.convert_cache_days; $("#cc-max").value = SET.convert_cache_max_gb; $("#cc-dir").value = SET.convert_cache_dir || "";
@@ -1937,6 +2119,9 @@ async function saveSettings(extra = {}) {
     convert_cache_days: Math.max(1, parseInt($("#cc-days").value) || 7),
     convert_cache_max_gb: Math.max(0, parseInt($("#cc-max").value) || 0),
     convert_cache_dir: $("#cc-dir").value.trim(),
+    library_path: $("#lib-path").value.trim(), library_script: $("#lib-script").value,
+    import_mode: $("#lib-mode").value, import_conflict: $("#lib-conflict").value,
+    import_cover: $("#lib-cover").checked, import_other: $("#lib-other").checked, import_delete_leftovers: $("#lib-delete").checked,
     ...extra,
   };
   const typed = $("#fanart-key").value.trim();

@@ -33,6 +33,10 @@ pub struct ServeArgs {
     #[arg(long, env = "RUSTYDISC_CACHE_DIR")]
     pub cache_dir: Option<String>,
 
+    /// The music library folder rips are imported into (Settings can override it)
+    #[arg(long, env = "RUSTYDISC_LIBRARY_DIR")]
+    pub library_dir: Option<String>,
+
     /// Require a login (set together with --auth-password). Otherwise the login can be set in Settings.
     #[arg(long, env = "RUSTYDISC_AUTH_USER")]
     pub auth_user: Option<String>,
@@ -55,6 +59,7 @@ pub fn run(args: ServeArgs) -> Result<(), Error> {
         config_dir: std::path::PathBuf::from(args.config_dir),
         stick_dirs: args.stick_dir.iter().filter(|s| !s.trim().is_empty()).map(std::path::PathBuf::from).collect(),
         cache_dir: args.cache_dir.filter(|d| !d.trim().is_empty()).map(std::path::PathBuf::from),
+        library_dir: args.library_dir.filter(|d| !d.trim().is_empty()).map(std::path::PathBuf::from),
         mock: args.mock,
         auth: match (args.auth_user, args.auth_password) {
             (None, None) => None,

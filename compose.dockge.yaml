@@ -24,6 +24,8 @@ services:
       # RUSTYDISC_MOCK: "true"           # simulate a drive to try the UI without hardware
       # Rusty Stick (USB sticks): folder where sticks are mounted on the host, shared below
       # RUSTYDISC_STICK_DIRS: /usb
+      # Music library for Import (must be writable; see docs/library-import.md)
+      # RUSTYDISC_LIBRARY_DIR: /library
     # volumes (add):   - /mnt/usb:/usb:rslave
     #
     # Or let RustyDisc mount sticks itself (hot-plug); add these to the service:

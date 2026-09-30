@@ -47,6 +47,19 @@ pub struct Settings {
     /// Where they are kept; empty = the `cache` folder next to the settings.
     pub convert_cache_dir: String,
 
+    // Music library (importing rips)
+    /// The library folder rips are imported into. Empty = not set up yet.
+    pub library_path: String,
+    /// A Picard naming script. Empty = the built-in one.
+    pub library_script: String,
+    /// "move", "copy" or "hardlink"
+    pub import_mode: String,
+    pub import_cover: bool,
+    pub import_other: bool,
+    pub import_delete_leftovers: bool,
+    /// skip | replace | higher_quality | lower_quality | newer | keep_both
+    pub import_conflict: String,
+
     // Optional login
     pub auth_user: String,
     /// Argon2 hash. Never sent to the browser.
@@ -70,6 +83,13 @@ impl Default for Settings {
             convert_cache_days: 7,
             convert_cache_max_gb: 20,
             convert_cache_dir: String::new(),
+            library_path: String::new(),
+            library_script: String::new(),
+            import_mode: "move".into(),
+            import_cover: true,
+            import_other: false,
+            import_delete_leftovers: false,
+            import_conflict: "skip".into(),
             auth_user: String::new(),
             auth_password_hash: String::new(),
         }
@@ -112,6 +132,26 @@ impl Settings {
         self.convert_cache_dir = self.convert_cache_dir.trim().trim_end_matches('/').to_string();
         if !self.convert_cache_dir.is_empty() && (!self.convert_cache_dir.starts_with('/') || self.convert_cache_dir.split('/').any(|c| c == "..")) {
             return Err(format!("'{}' isn't a usable folder: give an absolute path such as /cache", self.convert_cache_dir));
+        }
+        self.library_path = self.library_path.trim().trim_end_matches('/').to_string();
+        if !self.library_path.is_empty() && (!self.library_path.starts_with('/') || self.library_path.split('/').any(|c| c == "..") || self.library_path == "/") {
+            return Err(format!("'{}' isn't a usable library folder: give an absolute path such as /library", self.library_path));
+        }
+        if self.import_mode.parse::<crate::library::import::Mode>().is_err() {
+            self.import_mode = "move".into();
+        }
+        if self.import_conflict.parse::<crate::stick::existing::Conflict>().is_err() {
+            self.import_conflict = "skip".into();
+        }
+        // The built-in script is stored as "empty", so improvements to it reach everyone who hasn't customised it.
+        let norm = |t: &str| t.replace("\r\n", "\n").trim().to_string();
+        if self.library_script.trim().is_empty() || norm(&self.library_script) == norm(crate::library::script::DEFAULT_SCRIPT) {
+            self.library_script.clear();
+        } else {
+            if self.library_script.len() > 100_000 {
+                return Err("That naming script is too long".into());
+            }
+            crate::library::script::check(&self.library_script).map_err(|e| format!("The naming script has a problem: {e}"))?;
         }
         self.fanart_api_key = self.fanart_api_key.trim().to_string();
         if self.fanart_api_key.len() > 200 || self.fanart_api_key.chars().any(char::is_whitespace) {
