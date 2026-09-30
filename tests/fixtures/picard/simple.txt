@@ -1,0 +1,144 @@
+$noop(
+########################################################################
+#                                                                      #
+#  MusicBrainz Picard File Naming Script                               #
+#  Generated: {TS}                               #
+#                                                                      #
+#  Created with Picard Script Generator                                #
+#                                                                      #
+########################################################################
+)
+
+$noop(
+########################################################################
+#  USER SETTINGS - Modify these values to customize behavior           #
+########################################################################
+)
+
+$noop( Padding minimum lengths )
+$set(_PaddedDiscNumMinLength,1)
+$set(_PaddedTrackNumMinLength,2)
+
+$noop( Maximum lengths for truncation )
+$set(_aTitleMaxLength,100)
+$set(_tTitleMaxLength,100)
+$set(_tFilenameMaxLength,200)
+
+
+$noop(
+########################################################################
+#  CONSTANTS                                                           #
+########################################################################
+)
+$set(_cUnknownArtistID,125ec42a-7229-4250-afc5-e057484327fe)
+$set(_cVariousArtistID,89ad4ac3-39f7-470e-963a-56509c546377)
+$set(_cUnknownArtist,[Unknown Artist])
+$set(_cVariousArtist,Various Artists)
+$set(_cUnknownAlbum,[Unknown Album])
+$set(_cNoTitle,[Unknown Title])
+
+
+$noop(
+########################################################################
+#  WORKING VARIABLES - Set up variables with fallback values           #
+########################################################################
+)
+
+$noop( Album Artist - with fallbacks )
+$set(_nAlbumArtist,$if2(%albumartist%,%artist%,%_cUnknownArtist%))
+$set(_nAlbumArtistSort,$if2(%albumartistsort%,%artistsort%,%_nAlbumArtist%))
+
+$noop( Track Artist )
+$set(_nTrackArtist,$if2(%artist%,%_cUnknownArtist%))
+
+$noop( Album and Track titles )
+$set(_nAlbum,$if2(%album%,%_cUnknownAlbum%))
+$set(_nTitle,$if2(%title%,%_cNoTitle%))
+
+$noop( Disc and track numbers with fallbacks )
+$set(_nTotalDiscs,$if2(%totaldiscs%,1))
+$set(_nDiscNum,$if2(%discnumber%,1))
+$set(_nTotalTracks,$if2(%totaltracks%,1))
+$set(_nTrackNum,$if2(%tracknumber%,1))
+
+
+$noop( Release year - prefer original date )
+$set(_nYear,$left($if2(%originaldate%,%originalyear%,%date%,0000),4))
+
+
+$noop( Calculate padding lengths based on totals )
+$set(_DiscPadLength,$if($gt($len(%_nTotalDiscs%),%_PaddedDiscNumMinLength%),$len(%_nTotalDiscs%),%_PaddedDiscNumMinLength%))
+$set(_TrackPadLength,$if($gt($len(%_nTotalTracks%),%_PaddedTrackNumMinLength%),$len(%_nTotalTracks%),%_PaddedTrackNumMinLength%))
+
+$noop( Padded disc and track numbers )
+$set(_nPaddedDiscNum,$num(%_nDiscNum%,%_DiscPadLength%))
+$set(_nPaddedTrackNum,$num(%_nTrackNum%,%_TrackPadLength%))
+
+
+$noop(
+########################################################################
+#  CHARACTER SANITIZATION - Replace invalid characters                 #
+########################################################################
+)
+
+$noop( Create sanitized versions of metadata for file/folder names )
+$set(_nAlbumSafe,$rreplace(%_nAlbum%,[\\/:*?"<>|]+,_))
+$set(_nTitleSafe,$rreplace(%_nTitle%,[\\/:*?"<>|]+,_))
+$set(_nAlbumArtistSafe,$rreplace(%_nAlbumArtist%,[\\/:*?"<>|]+,_))
+$set(_nTrackArtistSafe,$rreplace(%_nTrackArtist%,[\\/:*?"<>|]+,_))
+
+
+$noop(
+########################################################################
+#  FOLDER PATH GENERATION                                              #
+########################################################################
+)
+
+
+$noop( Check for Various Artists )
+$set(_isVA,$eq(%musicbrainz_albumartistid%,%_cVariousArtistID%))
+
+
+$noop( Build folder path )
+$set(_nFilePath,
+    $if(%_isVA%,
+        %_cVariousArtist%/[%_nYear%] %_nAlbumSafe%,
+        %_nAlbumArtistSafe%/[%_nYear%] %_nAlbumSafe%
+    )
+)
+
+
+$noop( Add disc subfolder for multi-disc releases )
+$if($gt(%_nTotalDiscs%,1),
+    $set(_nFilePath,%_nFilePath%/Disc %_nPaddedDiscNum%)
+)
+
+
+$noop(
+########################################################################
+#  FILENAME GENERATION                                                 #
+########################################################################
+)
+
+
+$noop( Build filename )
+$set(_nFileName,%_nPaddedTrackNum%$if(%_isVA%, - %_nTrackArtistSafe%,). %_nTitleSafe%)
+
+
+$noop( Truncate filename if too long )
+$if($gt($len(%_nFileName%),%_tFilenameMaxLength%),
+    $set(_nFileName,$left(%_nFileName%,$sub(%_tFilenameMaxLength%,3))...)
+)
+
+
+$noop(
+########################################################################
+#  OUTPUT - Final path and filename                                    #
+########################################################################
+)
+
+$noop( Combine path and filename, ensure no double slashes )
+$if(%_nFilePath%,
+    %_nFilePath%/%_nFileName%,
+    %_nFileName%
+)

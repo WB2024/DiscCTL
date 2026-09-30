@@ -586,7 +586,9 @@ pre.json { background: var(--bg); border: 1px solid var(--line); border-radius: 
         <label class="field" style="margin-top:12px">Naming script
           <small>Paste a Picard file naming script. It runs on every file's tags to make the path (folders and file name, without the extension). Leave it as it is to use the built-in one.</small>
           <textarea id="lib-script" rows="14" spellcheck="false" style="font-size:12px"></textarea></label>
-        <div class="row" style="margin-top:8px"><button class="btn small" id="lib-check">Check script</button><button class="btn small" id="lib-default">Reset to the built-in script</button><span class="muted grow" id="lib-preview"></span></div>
+        <div class="row" style="margin-top:8px"><button class="btn small" id="lib-check">Check script</button><button class="btn small" id="lib-default">Reset to the built-in script</button><button class="btn small primary" id="lib-build">🛠 Build a script…</button><span class="muted grow" id="lib-preview"></span></div>
+        <div id="lib-examples" style="margin-top:10px"></div>
+        <div id="lib-builder"></div>
         <div class="grid2" style="margin-top:16px">
           <label class="field">Import files by
             <select id="lib-mode"><option value="move">Moving them</option><option value="copy">Copying them</option><option value="hardlink">Hard links</option></select></label>
@@ -2325,14 +2327,114 @@ async function renderLibrarySettings() {
   $("#lib-script").value = SET.library_script || DEFAULT_SCRIPT;
   $("#lib-default").onclick = () => { $("#lib-script").value = DEFAULT_SCRIPT; previewScript(); };
   $("#lib-check").onclick = previewScript;
+  $("#lib-build").onclick = openScriptBuilder;
   let t; $("#lib-script").oninput = () => { clearTimeout(t); t = setTimeout(previewScript, 600); };
   previewScript();
 }
+function exampleList(ex) {
+  return `<div class="muted" style="font-size:12px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px">How it files</div>` + ex.map(e => `<div style="display:flex;gap:10px;padding:2px 0"><span class="muted" style="width:150px;flex:none">${esc(e.label)}</span>${e.error ? `<span class="ar-bad">${esc(e.error)}</span>` : `<span class="mono" style="overflow-wrap:anywhere">${esc(e.path)}</span>`}</div>`).join("");
+}
+
+// ── Script builder ──────────────────────────────────────────────────────────
+const BUILDER_FIELDS = [
+  { group: "Folders", items: [
+    { k: "use_artist_folder", t: "check", label: "Artist folders" },
+    { k: "artist_folder_style", t: "select", label: "Group artists", opts: [["standard", "Just the artist"], ["first_letter_subfolder", "A–Z first, then the artist"]] },
+    { k: "format_album_artist", t: "select", label: "Artist name", opts: [["standard", "As credited: The Beatles"], ["sort", "Sort name: Beatles, The"]] },
+    { k: "use_album_folder", t: "check", label: "Album folders" },
+    { k: "include_year_in_album", t: "check", label: "Year in the album folder" },
+    { k: "year_position", t: "select", label: "Year goes", opts: [["prefix", "Before: [1969] Abbey Road"], ["suffix", "After: Abbey Road [1969]"]] },
+    { k: "use_original_year", t: "check", label: "Use the original release year" },
+    { k: "include_disambiguation", t: "check", label: "Add the release comment, e.g. (Remaster)" },
+    { k: "include_label", t: "check", label: "Add the label [Apple]" },
+    { k: "include_catalog", t: "check", label: "Add the catalogue number {PCS7088}" },
+    { k: "include_format", t: "check", label: "Add the format [FLAC]" },
+    { k: "separate_soundtracks", t: "check", label: "Soundtracks in their own folder" },
+  ] },
+  { group: "Multi-disc albums", items: [
+    { k: "use_disc_subfolder", t: "check", label: "A folder for each disc" },
+    { k: "disc_folder_format", t: "select", label: "Called", opts: [["disc", "Disc 1"], ["cd", "CD 1"], ["side", "Side 1"]] },
+    { k: "include_disc_subtitle", t: "check", label: "Add the disc's title" },
+    { k: "include_disc_in_track", t: "check", label: "Disc number in the track number: 2-05" },
+  ] },
+  { group: "File names", items: [
+    { k: "include_track_number", t: "check", label: "Track number" },
+    { k: "track_padding_length", t: "number", label: "Digits in track numbers", min: 1, max: 4 },
+    { k: "include_title", t: "check", label: "Title" },
+    { k: "include_artist_in_filename", t: "check", label: "Artist in every file name" },
+    { k: "artist_separator", t: "text", label: "Before the artist" },
+    { k: "include_track_artist_for_va", t: "check", label: "Artist in file names of compilations" },
+    { k: "va_artist_separator", t: "text", label: "Before that artist" },
+    { k: "show_featured_artists", t: "check", label: "Show featured artists" },
+    { k: "feat_format", t: "select", label: "Written as", opts: [["feat.", "feat."], ["ft.", "ft."], ["featuring", "featuring"], ["with", "with"]] },
+  ] },
+  { group: "Safety and length", items: [
+    { k: "replace_invalid_chars", t: "check", label: "Replace characters Windows can't store (: ? * …)" },
+    { k: "max_album_length", t: "number", label: "Longest album name", min: 20, max: 250 },
+    { k: "max_title_length", t: "number", label: "Longest title", min: 20, max: 250 },
+    { k: "max_filename_length", t: "number", label: "Longest file name", min: 40, max: 250 },
+  ] },
+];
+const BUILDER = { cfg: null, presets: null, timer: null, script: "", seq: 0 };
+
+async function openScriptBuilder() {
+  const box = $("#lib-builder");
+  if (box.innerHTML) { box.innerHTML = ""; return; }
+  box.innerHTML = `<div class="muted" style="margin-top:10px">Loading…</div>`;
+  try {
+    const r = await api("/api/import/script/builder");
+    BUILDER.presets = r.presets; BUILDER.cfg = structuredClone(r.presets.find(p => p.id === "organized")?.config || r.defaults);
+  } catch (e) { box.innerHTML = `<div class="notice err">${esc(e.message)}</div>`; return; }
+  renderBuilder();
+}
+
+function renderBuilder() {
+  const box = $("#lib-builder"), c = BUILDER.cfg;
+  const ctl = f => {
+    const v = c[f.k];
+    if (f.t === "check") return `<label class="check"><input type="checkbox" data-k="${f.k}" ${v ? "checked" : ""}><span>${esc(f.label)}</span></label>`;
+    if (f.t === "select") return `<label class="field" style="margin:0">${esc(f.label)}<select data-k="${f.k}">${f.opts.map(o => `<option value="${esc(o[0])}" ${o[0] === v ? "selected" : ""}>${esc(o[1])}</option>`).join("")}</select></label>`;
+    if (f.t === "number") return `<label class="field" style="margin:0">${esc(f.label)}<input type="number" data-k="${f.k}" value="${v}" min="${f.min}" max="${f.max}" style="width:100px"></label>`;
+    return `<label class="field" style="margin:0">${esc(f.label)}<input type="text" data-k="${f.k}" value="${esc(v)}" style="width:120px" spellcheck="false"></label>`;
+  };
+  box.innerHTML = `<div class="notice" style="margin-top:12px">
+    <div class="row"><b class="grow">Build a naming script</b><button class="btn small" id="bd-close">Close</button></div>
+    <div class="muted" style="margin:4px 0 10px">Start from a preset, then adjust anything. The script is made for you, and the examples show exactly how it files different kinds of release.</div>
+    <div class="chips" id="bd-presets">${BUILDER.presets.map(p => `<span class="chip" data-id="${p.id}" title="${esc(p.example)}"><b>${esc(p.name)}</b> · ${esc(p.description.split(": ")[1] || p.description)}</span>`).join("")}</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;margin-top:14px">${BUILDER_FIELDS.map(g => `<div><div class="muted" style="font-size:12px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">${esc(g.group)}</div><div style="display:flex;flex-direction:column;gap:8px">${g.items.map(ctl).join("")}</div></div>`).join("")}</div>
+    <div id="bd-examples" style="margin-top:16px"></div>
+    <details style="margin-top:10px"><summary style="cursor:pointer" class="muted">Show the generated script</summary><pre class="log" id="bd-script" style="max-height:260px;margin-top:6px"></pre></details>
+    <div class="row" style="margin-top:12px"><button class="btn primary" id="bd-use">Use this script</button><span class="muted" id="bd-note">You can still edit it afterwards. Save the settings to keep it.</span></div></div>`;
+  $("#bd-close").onclick = () => { box.innerHTML = ""; };
+  $$("#bd-presets .chip").forEach(ch => ch.onclick = () => { BUILDER.cfg = structuredClone(BUILDER.presets.find(p => p.id === ch.dataset.id).config); renderBuilder(); });
+  $$("[data-k]", box).forEach(el => el.onchange = el.oninput = () => {
+    const f = BUILDER_FIELDS.flatMap(g => g.items).find(i => i.k === el.dataset.k);
+    BUILDER.cfg[el.dataset.k] = f.t === "check" ? el.checked : f.t === "number" ? Math.max(f.min, Math.min(f.max, +el.value || f.min)) : el.value;
+    genSoon();
+  });
+  $("#bd-use").onclick = () => {
+    if (!BUILDER.script) return;
+    $("#lib-script").value = BUILDER.script; previewScript(); box.innerHTML = "";
+    toast("Script loaded — save the settings to keep it", "ok", 5000);
+  };
+  gen();
+}
+function genSoon() { clearTimeout(BUILDER.timer); BUILDER.timer = setTimeout(gen, 300); }
+async function gen() {
+  const seq = ++BUILDER.seq;
+  try {
+    const r = await api("/api/import/script/generate", { body: BUILDER.cfg });
+    if (seq !== BUILDER.seq || !$("#bd-examples")) return;
+    BUILDER.script = r.script; $("#bd-examples").innerHTML = exampleList(r.examples); $("#bd-script").textContent = r.script;
+  } catch (e) { if ($("#bd-examples")) $("#bd-examples").innerHTML = `<span class="ar-bad">${esc(e.message)}</span>`; }
+}
+
 async function previewScript() {
   const box = $("#lib-preview");
   try {
     const r = await api("/api/import/preview", { body: { script: $("#lib-script").value } });
-    box.innerHTML = r.ok ? `<span class="ar-ok">✔</span> ${esc(r.sample)}: <span class="mono">${esc(r.path)}</span>` : `<span class="ar-bad">✖ ${esc(r.error)}</span>`;
+    box.innerHTML = r.ok ? `<span class="ar-ok">✔</span> The script is valid` : `<span class="ar-bad">✖ ${esc(r.error)}</span>`;
+    $("#lib-examples").innerHTML = r.ok ? exampleList(r.examples) : "";
   } catch (e) { box.textContent = e.message; }
 }
 

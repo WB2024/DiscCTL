@@ -6,10 +6,13 @@
 //! naming scripts: `%variables%`, `$functions(...)` with lazy `$if`/`$if2`, `\` escapes, and
 //! Picard's rule that line breaks and the indentation after them are ignored.
 //!
-//! Supported functions: noop set get unset if if2 and or not eq ne gt gte lt lte add sub mul div
-//! mod len left right substr num upper lower title trim replace rreplace firstalphachar
-//! truncate in startswith endswith swapprefix. Anything else is reported as an error rather
-//! than silently producing a wrong path.
+//! Supported functions: noop set get unset copy delete if if2 and or not eq ne gt gte lt lte
+//! eq_any eq_all ne_any ne_all add sub mul div mod min max len left right substr num pad upper
+//! lower title trim strip replace rreplace rsearch find firstalphachar initials truncate
+//! firstwords reverse in startswith endswith swapprefix delprefix year month day, the
+//! multi-value functions setmulti getmulti lenmulti join unique sortmulti reversemulti slice
+//! foreach map, and is_audio / is_video. Anything else is reported as an error rather than
+//! silently producing a wrong path.
 
 use std::collections::HashMap;
 
@@ -120,6 +123,13 @@ struct Interp<'a> {
     steps: usize,
 }
 
+/// Picard shows several values as "a; b". That is also how they are kept here.
+const MULTI: &str = "; ";
+
+fn multi(s: &str) -> Vec<String> {
+    if s.is_empty() { Vec::new() } else { s.split(MULTI).map(str::to_string).collect() }
+}
+
 fn truthy(s: &str) -> bool {
     !s.is_empty()
 }
@@ -180,6 +190,27 @@ impl Interp<'_> {
                     }
                 }
                 return Ok(String::new());
+            }
+            "foreach" | "map" => {
+                if args.len() < 2 {
+                    return Err(format!("${name} needs at least 2 arguments"));
+                }
+                let var = self.eval(&args[0])?;
+                let values = multi(&self.var(var.trim()));
+                let sep = if args.len() > 2 { self.eval(&args[2])? } else { String::new() };
+                let mut out: Vec<String> = Vec::new();
+                for (i, v) in values.iter().enumerate() {
+                    self.vars.insert("_loop_value".into(), v.clone());
+                    self.vars.insert("_loop_count".into(), (i + 1).to_string());
+                    out.push(self.eval(&args[1])?);
+                }
+                self.vars.remove("_loop_value");
+                self.vars.remove("_loop_count");
+                if name == "map" {
+                    self.vars.insert(var.trim().to_string(), out.join(MULTI));
+                    return Ok(String::new());
+                }
+                return Ok(out.join(&sep));
             }
             "and" => {
                 for a in args {
@@ -303,6 +334,69 @@ impl Interp<'_> {
                     Some(c) if c.is_alphabetic() => c.to_string(),
                     _ => other.to_string(),
                 }
+            }
+            "copy" => { need(2)?; let val = self.var(v[1].trim()); self.vars.insert(v[0].trim().to_string(), val); String::new() }
+            "delete" => { need(1)?; self.vars.insert(v[0].trim().to_string(), String::new()); String::new() }
+            "strip" => { need(1)?; arg(0).split_whitespace().collect::<Vec<_>>().join(" ") }
+            "pad" => {
+                need(3)?;
+                let (n, c) = (int(arg(1)).max(0) as usize, arg(2).chars().next().unwrap_or(' '));
+                let len = arg(0).chars().count();
+                format!("{}{}", c.to_string().repeat(n.saturating_sub(len)), arg(0))
+            }
+            "find" => { need(2)?; arg(0).find(arg(1)).map(|i| arg(0)[..i].chars().count().to_string()).unwrap_or_default() }
+            "reverse" => { need(1)?; arg(0).chars().rev().collect() }
+            "firstwords" => { need(2)?; let n = int(arg(1)).max(0) as usize; arg(0).split(' ').take(n).collect::<Vec<_>>().join(" ") }
+            "initials" => { need(1)?; arg(0).split_whitespace().filter_map(|w| w.chars().next()).filter(|c| c.is_alphabetic()).collect() }
+            "delprefix" => {
+                need(1)?;
+                let prefixes: Vec<&str> = if v.len() > 1 { v[1..].iter().map(String::as_str).collect() } else { vec!["A", "An", "The"] };
+                let text = arg(0);
+                prefixes.iter().find_map(|p| text.strip_prefix(&format!("{p} "))).unwrap_or(text).to_string()
+            }
+            "rsearch" => {
+                need(2)?;
+                let re = regex::Regex::new(arg(1)).map_err(|e| format!("$rsearch has a bad pattern ({}): {e}", arg(1)))?;
+                re.captures(arg(0)).map(|c| c.get(1).or_else(|| c.get(0)).map(|m| m.as_str().to_string()).unwrap_or_default()).unwrap_or_default()
+            }
+            "min" => { need(1)?; v.iter().map(|x| int(x)).min().map(|n| n.to_string()).unwrap_or_default() }
+            "max" => { need(1)?; v.iter().map(|x| int(x)).max().map(|n| n.to_string()).unwrap_or_default() }
+            "eq_any" => { need(2)?; boolean(v[1..].iter().any(|x| x == arg(0))) }
+            "eq_all" => { need(2)?; boolean(v[1..].iter().all(|x| x == arg(0))) }
+            "ne_any" => { need(2)?; boolean(v[1..].iter().any(|x| x != arg(0))) }
+            "ne_all" => { need(2)?; boolean(v[1..].iter().all(|x| x != arg(0))) }
+            "year" | "month" | "day" => {
+                need(1)?;
+                let p: Vec<&str> = arg(0).trim().split('-').collect();
+                p.get(match name { "year" => 0, "month" => 1, _ => 2 }).copied().unwrap_or("").to_string()
+            }
+            "is_audio" => "1".into(),
+            "is_video" => String::new(),
+            "setmulti" => {
+                need(2)?;
+                let sep = if v.len() > 2 && !arg(2).is_empty() { arg(2) } else { MULTI };
+                let vals: Vec<&str> = arg(1).split(sep).map(str::trim).filter(|x| !x.is_empty()).collect();
+                self.vars.insert(v[0].trim().to_string(), vals.join(MULTI));
+                String::new()
+            }
+            "getmulti" => { need(2)?; multi(&self.var(v[0].trim())).get(int(arg(1)).max(0) as usize).cloned().unwrap_or_default() }
+            "lenmulti" => { need(1)?; multi(&self.var(v[0].trim())).len().to_string() }
+            "join" => { need(2)?; multi(&self.var(v[0].trim())).join(arg(1)) }
+            "unique" => {
+                need(1)?;
+                let mut seen: Vec<String> = Vec::new();
+                for x in multi(&self.var(v[0].trim())) { if !seen.contains(&x) { seen.push(x); } }
+                let out = seen.join(MULTI);
+                self.vars.insert(v[0].trim().to_string(), out.clone());
+                out
+            }
+            "sortmulti" => { need(1)?; let mut m = multi(&self.var(v[0].trim())); m.sort(); let out = m.join(MULTI); self.vars.insert(v[0].trim().to_string(), out.clone()); out }
+            "reversemulti" => { need(1)?; let mut m = multi(&self.var(v[0].trim())); m.reverse(); let out = m.join(MULTI); self.vars.insert(v[0].trim().to_string(), out.clone()); out }
+            "slice" => {
+                need(3)?;
+                let m = multi(&self.var(v[0].trim()));
+                let (a, b) = (int(arg(1)).max(0) as usize, int(arg(2)).max(0) as usize);
+                m.into_iter().skip(a).take(b.saturating_sub(a)).collect::<Vec<_>>().join(MULTI)
             }
             "in" => { need(2)?; boolean(arg(0).contains(arg(1))) }
             "startswith" => { need(2)?; boolean(arg(0).starts_with(arg(1))) }
@@ -454,5 +548,35 @@ mod tests {
     #[test]
     fn output_is_split_into_safe_components() {
         assert_eq!(to_components("A/ B /../C//./D\n"), ["A", "B", "C", "D"]);
+    }
+
+    #[test]
+    fn the_wider_function_set() {
+        let m = meta(&[("genre", "rock; indie; rock"), ("title", "  the  quick   fox ")]);
+        let r = |s: &str| run(s, &m).unwrap();
+        assert_eq!(r("$strip(%title%)|$pad(7,3,0)|$find(hello,l)|$reverse(abc)|$firstwords(a b c d,2)"), "the quick fox|007|2|cba|a b");
+        assert_eq!(r("$delprefix(The Beatles)|$delprefix(Abba)|$initials(Paul John George)|$min(3,1,2)|$max(3,1,2)"), "Beatles|Abba|PJG|1|3");
+        assert_eq!(r("$eq_any(b,a,b)|$eq_all(a,a,a)|$ne_any(a,a,b)|$ne_all(a,a,b)"), "1|1|1|");
+        assert_eq!(r("$year(1969-09-26)|$month(1969-09-26)|$day(1969-09-26)|$rsearch(abc123,[0-9]+)"), "1969|09|26|123");
+        assert_eq!(r("$setmulti(x,a; b; c)$lenmulti(x)|$getmulti(x,1)|$join(x,/)|$slice(x,1,3)"), "3|b|a/b/c|b; c");
+        assert_eq!(r("$unique(genre)|$sortmulti(genre)"), "rock; indie|indie; rock");
+        assert_eq!(r("$foreach(genre,[%_loop_count%:%_loop_value%],-)"), "[1:rock]-[2:indie]-[3:rock]");
+        assert_eq!(r("$set(y,B)$copy(z,y)%z%|$delete(z)[%z%]"), "B|[]");
+    }
+
+    /// Runs a big real-world script if one is at $PICARD_SCRIPT_FILE:
+    /// `PICARD_SCRIPT_FILE=... cargo test real_world_script -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn real_world_script() {
+        let Ok(path) = std::env::var("PICARD_SCRIPT_FILE") else { return };
+        let text = std::fs::read_to_string(path).unwrap();
+        check(&text).unwrap();
+        let m = meta(&[("albumartist", "The Beatles"), ("albumartistsort", "Beatles, The"), ("artist", "The Beatles"), ("album", "Abbey Road"), ("date", "1969-09-26"),
+            ("tracknumber", "1"), ("totaltracks", "17"), ("title", "Come Together"), ("totaldiscs", "1"), ("_extension", "flac"),
+            ("_artists_album_primary_std", "The Beatles"), ("_artists_album_primary_sort", "Beatles, The"), ("_artists_album_all_std", "The Beatles"),
+            ("_artists_album_all_sort", "Beatles, The"), ("_artists_album_all_sort_primary", "Beatles, The"), ("_artists_track_primary_cred", "The Beatles"),
+            ("_artists_track_additional_cred", ""), ("_artists_track_all_cred", "The Beatles"), ("musicbrainz_albumartistid", "x")]);
+        eprintln!("{}", run(&text, &m).unwrap());
     }
 }

@@ -11,7 +11,7 @@ use crate::{
     error::Error,
     library::{
         import::{self, ImportOptions, Mode},
-        script, tags,
+        script, scriptgen, tags,
     },
     stick::existing::Conflict,
 };
@@ -130,6 +130,65 @@ pub async fn plan(State(st): S, Json(req): Json<PlanReq>) -> ApiResult<Json<Valu
     Ok(Json(json!({"plans": plans})))
 }
 
+/// Made-up tracks that show how a script files different kinds of release.
+fn example_tracks() -> Vec<(&'static str, HashMap<String, String>)> {
+    let base: &[(&str, &str)] = &[("albumartist", "The Beatles"), ("albumartistsort", "Beatles, The"), ("artist", "The Beatles"), ("album", "Abbey Road"),
+        ("date", "1969-09-26"), ("originaldate", "1969-09-26"), ("tracknumber", "1"), ("totaltracks", "17"), ("title", "Come Together"), ("totaldiscs", "1"),
+        ("discnumber", "1"), ("_extension", "flac"), ("label", "Apple"), ("catalognumber", "PCS 7088"), ("_releasecomment", "2019 mix")];
+    let with = |over: &[(&str, &str)]| -> HashMap<String, String> {
+        let mut m: HashMap<String, String> = base.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        for (k, v) in over {
+            m.insert(k.to_string(), v.to_string());
+        }
+        m
+    };
+    vec![
+        ("A normal album", with(&[])),
+        ("A multi-disc album", with(&[("album", "The Beatles"), ("title", "Back in the U.S.S.R."), ("tracknumber", "1"), ("totaldiscs", "2"), ("discnumber", "2"), ("discsubtitle", "Disc Two"), ("totaltracks", "15")])),
+        ("Various artists", with(&[("albumartist", "Various Artists"), ("albumartistsort", "Various Artists"), ("artist", "Blur"), ("album", "Britpop Classics"), ("title", "Parklife"),
+            ("musicbrainz_albumartistid", "89ad4ac3-39f7-470e-963a-56509c546377"), ("date", "1995"), ("originaldate", "1995"), ("tracknumber", "4"), ("totaltracks", "20")])),
+        ("A soundtrack", with(&[("album", "Yellow Submarine"), ("_secondaryreleasetype", "soundtrack"), ("releasetype", "album; soundtrack"), ("title", "Only a Northern Song"), ("tracknumber", "3"), ("totaltracks", "13")])),
+        ("A featured artist", with(&[("artist", "Billy Preston"), ("title", "I Want You"), ("tracknumber", "12")])),
+        ("Awkward characters", with(&[("albumartist", "AC/DC"), ("albumartistsort", "AC/DC"), ("artist", "AC/DC"), ("album", "Who Made Who: Live?"), ("title", "For Those About to Rock (We Salute You)"), ("date", "1986"), ("originaldate", "1986")])),
+    ]
+}
+
+fn run_examples(text: &str) -> Vec<Value> {
+    example_tracks()
+        .into_iter()
+        .map(|(label, vars)| match script::run(text, &vars) {
+            Ok(o) => {
+                let mut path = script::to_components(&o).join("/");
+                if let Some(ext) = vars.get("_extension") {
+                    path = format!("{path}.{ext}");
+                }
+                json!({"label": label, "path": path})
+            }
+            Err(e) => json!({"label": label, "error": e}),
+        })
+        .collect()
+}
+
+/// The builder's presets and the default settings, for the "Build a script" panel.
+pub async fn script_builder() -> Json<Value> {
+    Json(json!({
+        "presets": scriptgen::presets().into_iter().map(|(id, name, description, example, config)| json!({"id": id, "name": name, "description": description, "example": example, "config": config})).collect::<Vec<_>>(),
+        "defaults": scriptgen::ScriptConfig::default(),
+    }))
+}
+
+/// Make a script from settings and show what it does to a few kinds of release.
+pub async fn script_generate(Json(cfg): Json<scriptgen::ScriptConfig>) -> ApiResult<Json<Value>> {
+    let out = tokio::task::spawn_blocking(move || {
+        let text = scriptgen::build(&cfg, &scriptgen::timestamp_now());
+        let examples = run_examples(&text);
+        json!({"script": text, "examples": examples})
+    })
+    .await
+    .map_err(|e| Error::backend(e.to_string()))?;
+    Ok(Json(out))
+}
+
 #[derive(Deserialize, Default)]
 #[serde(default)]
 pub struct PreviewReq {
@@ -191,7 +250,7 @@ pub async fn preview(State(st): S, Json(req): Json<PreviewReq>) -> ApiResult<Jso
                 if let Some(ext) = vars.get("_extension").filter(|e| !e.is_empty()) {
                     path = format!("{path}.{ext}");
                 }
-                json!({"ok": true, "path": path, "sample": label})
+                json!({"ok": true, "path": path, "sample": label, "examples": run_examples(&text)})
             }
             Err(e) => json!({"ok": false, "error": e}),
         }

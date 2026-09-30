@@ -209,6 +209,8 @@ pub async fn serve(cfg: Config, bind: SocketAddr) -> Result<(), Error> {
         .route("/api/import/plan", post(import::plan))
         .route("/api/import/preview", post(import::preview))
         .route("/api/import/default-script", get(import::default_script))
+        .route("/api/import/script/builder", get(import::script_builder))
+        .route("/api/import/script/generate", post(import::script_generate))
         .route("/api/lidarr/test", post(import::lidarr_test))
         .route("/api/import/lidarr/plan", post(import::lidarr_plan))
         .route("/api/jobs/import-lidarr", post(import::lidarr_start))

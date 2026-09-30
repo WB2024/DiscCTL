@@ -54,8 +54,15 @@ pub fn read(path: &Path) -> FileTags {
     let d = tagged.properties().duration().as_secs_f64();
     if d > 0.0 {
         out.duration_secs = Some(d);
-        out.vars.insert("_length".into(), format!("{}", d.round() as u64));
+        let secs = d.round() as u64;
+        out.vars.insert("_length".into(), format!("{}:{:02}", secs / 60, secs % 60));
     }
+    let props = tagged.properties();
+    if let Some(v) = props.audio_bitrate() { out.vars.insert("_bitrate".into(), format!("{v}.0")); }
+    if let Some(v) = props.sample_rate() { out.vars.insert("_sample_rate".into(), v.to_string()); }
+    if let Some(v) = props.bit_depth() { out.vars.insert("_bits_per_sample".into(), v.to_string()); }
+    if let Some(v) = props.channels() { out.vars.insert("_channels".into(), v.to_string()); }
+    if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) { out.vars.insert("_filename".into(), stem.to_string()); }
     let Some(tag) = tagged.primary_tag().or_else(|| tagged.first_tag()) else {
         out.untagged = true;
         return out;
@@ -107,5 +114,20 @@ pub fn read(path: &Path) -> FileTags {
     put("releasecountry", custom(tag, "RELEASECOUNTRY", "MusicBrainz Album Release Country"));
     put("asin", custom(tag, "ASIN", "ASIN"));
     put("_releasecomment", custom(tag, "MUSICBRAINZ_ALBUMCOMMENT", "MusicBrainz Album Comment"));
+
+    // Picard's own derived variables, and stand-ins for the "Additional Artists Variables" plugin
+    // (the credit as a whole stands in for its first artist and for all of them).
+    let rt = out.vars.get("releasetype").cloned().unwrap_or_default();
+    let mut types = rt.split(';').map(str::trim).filter(|t| !t.is_empty());
+    if let Some(primary) = types.next() { out.vars.insert("_primaryreleasetype".into(), primary.to_string()); }
+    let secondary: Vec<&str> = types.collect();
+    if !secondary.is_empty() { out.vars.insert("_secondaryreleasetype".into(), secondary.join("; ")); }
+    let alias = |v: &mut HashMap<String, String>, from: &str, to: &[&str]| {
+        if let Some(x) = v.get(from).cloned() { for t in to { v.entry(t.to_string()).or_insert_with(|| x.clone()); } }
+    };
+    alias(&mut out.vars, "albumartist", &["_artists_album_primary_std", "_artists_album_primary_cred", "_artists_album_all_std", "_artists_album_all_cred"]);
+    alias(&mut out.vars, "albumartistsort", &["_artists_album_primary_sort", "_artists_album_all_sort", "_artists_album_all_sort_primary"]);
+    alias(&mut out.vars, "artist", &["_artists_track_primary_std", "_artists_track_primary_cred", "_artists_track_all_std", "_artists_track_all_cred"]);
+    alias(&mut out.vars, "artistsort", &["_artists_track_primary_sort", "_artists_track_all_sort"]);
     out
 }
