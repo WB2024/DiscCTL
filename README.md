@@ -227,7 +227,7 @@ Want to look around first? `rustydisc serve --mock` simulates a drive, with no h
 
 <p align="center"><img src="Images/Screenshots/rip-progress.png" alt="A rip in progress with live log" width="820"></p>
 
-**Burn** — build an Audio CD, Data CD or Enhanced (Blue Book) CD from files in the server's media folder, reorder tracks, set CD-Text, transcode on the fly, and preview the execution plan before anything is written. Prefer to hand-write it? Paste a disc graph JSON and validate it.
+**Burn** — build an Audio CD, Data CD or Enhanced (Blue Book) CD from files in the server's media folder. Add individual files, a whole folder, or an `.m3u`/`.m3u8` playlist (previewed before you burn, with any skipped entries listed); reorder tracks, set CD-Text, transcode audio in a Data CD, and preview the execution plan before anything is written. Prefer to hand-write it? Paste a disc graph JSON and validate it.
 
 <p align="center"><img src="Images/Screenshots/burn.png" alt="Burn page with an Enhanced CD and its execution plan" width="820"></p>
 
@@ -447,8 +447,9 @@ rustydisc burn [OPTIONS]
 |------|-------------|
 | `--format <fmt>` | Disc format: `redbook`, `datacd`, `bluebook` (default: `redbook`) |
 | `--audio <files...>` | Audio track files or glob patterns (WAV/FLAC/MP3/M4A/OGG etc.) |
-| `--playlist <file>` | M3U or M3U8 playlist — takes precedence over `--audio` if both given |
-| `--data <dir>` | Source directory for the data session |
+| `--playlist <file>` | M3U or M3U8 playlist of audio tracks (Audio / Enhanced CD) or files (Data CD) |
+| `--data <dir>` | Data CD: the folder to burn (sub-folders are kept). Enhanced CD: the folder for the data session |
+| `--files <files...>` | Data CD only: individual files, placed in the root of the disc |
 | `--label <text>` | Disc volume label (default: `Untitled`) |
 | `--input <file>` | Load a disc graph JSON instead of building from flags |
 
@@ -838,7 +839,15 @@ The disc will play as a standard audio CD in any player, and show the `extras/` 
 
 ### Playlists (M3U/M3U8)
 
-Pass any M3U or M3U8 playlist with `--playlist`. Relative paths in the playlist are resolved relative to the playlist file's directory. `#EXTINF` durations are used for multi-disc planning without requiring `ffprobe`.
+Pass any M3U or M3U8 playlist with `--playlist`; it works for Audio CDs, Enhanced CDs and Data CDs.
+
+- **Relative paths** are resolved from the playlist file's own folder (`../Albums/01.flac`, `Album One/01 Track.flac`).
+- **Other ways of writing a path** are understood: Windows separators (`Music\Album\01.flac`), `C:\…` drive prefixes, `file://` URIs, `%20`-style escapes, and quoted paths. If a playlist was written on another machine and the absolute path doesn't exist here, RustyDisc looks for the same tail of the path next to the playlist (`C:\Users\me\Music\Album\01.flac` finds `Album/01.flac` beside the playlist).
+- **Encodings:** `.m3u8` is UTF-8 (a BOM is fine); plain `.m3u` files that aren't valid UTF-8 are read as Windows-1252/Latin-1. CRLF line endings are fine.
+- `#EXTINF` durations are used for multi-disc planning without requiring `ffprobe`.
+- Entries that can't be used (missing files, folders, streams) are skipped with a warning naming each one.
+
+For a Data CD, the files from a playlist go in the root of the disc. If two files share a name, the second becomes `name (2).ext` rather than overwriting the first.
 
 ```bash
 # Data CD from playlist
@@ -853,6 +862,8 @@ rustydisc burn --format redbook \
 ```
 
 Streaming URLs (`http://`, `https://`) in the playlist are skipped with a warning.
+
+Data CDs can also be built from individual files with `--files a.txt b.pdf ...`.
 
 ---
 

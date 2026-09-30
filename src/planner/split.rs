@@ -14,7 +14,10 @@ pub const AUDIO_MAX_TRACKS: usize = 99;
 
 #[derive(Debug, Clone)]
 pub struct DataItem {
+    /// Where the file is now.
     pub path: String,
+    /// Where it goes on the disc, relative to the disc root (e.g. `Music/track.flac`).
+    pub rel_path: String,
     pub size_bytes: u64,
 }
 
@@ -101,34 +104,56 @@ pub fn split_audio(
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-/// Get file sizes for a list of paths.
-pub fn measure_paths(paths: &[String]) -> Vec<DataItem> {
+/// Items for individually chosen files: they all go in the disc root, so two files with the
+/// same name are told apart (`song.flac`, `song (2).flac`) rather than one overwriting the other.
+pub fn flat_items(paths: &[String]) -> Vec<DataItem> {
+    let mut used: std::collections::HashSet<String> = std::collections::HashSet::new();
     paths
         .iter()
-        .map(|p| DataItem {
-            size_bytes: std::fs::metadata(p).map(|m| m.len()).unwrap_or(0),
-            path: p.clone(),
+        .map(|p| {
+            let name = std::path::Path::new(p)
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "file".to_string());
+            let (stem, ext) = match name.rsplit_once('.') {
+                Some((s, e)) if !s.is_empty() => (s.to_string(), format!(".{e}")),
+                _ => (name.clone(), String::new()),
+            };
+            let mut candidate = name.clone();
+            let mut n = 2;
+            while !used.insert(candidate.to_lowercase()) {
+                candidate = format!("{stem} ({n}){ext}");
+                n += 1;
+            }
+            DataItem {
+                size_bytes: std::fs::metadata(p).map(|m| m.len()).unwrap_or(0),
+                path: p.clone(),
+                rel_path: candidate,
+            }
         })
         .collect()
 }
 
 /// Recursively enumerate all files under `dir` with their sizes.
 pub fn enumerate_dir(dir: &str) -> Result<Vec<DataItem>, Error> {
+    let root = std::path::Path::new(dir);
     let mut items = Vec::new();
-    walk(std::path::Path::new(dir), &mut items)?;
+    walk(root, root, &mut items)?;
     items.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(items)
 }
 
-fn walk(dir: &std::path::Path, out: &mut Vec<DataItem>) -> Result<(), Error> {
+fn walk(root: &std::path::Path, dir: &std::path::Path, out: &mut Vec<DataItem>) -> Result<(), Error> {
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
         if path.is_dir() {
-            walk(&path, out)?;
+            walk(root, &path, out)?;
         } else {
             out.push(DataItem {
-                size_bytes: entry.metadata()?.len(),
+                // metadata() follows symlinks, so a link to a file reports the file's size
+                size_bytes: std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0),
+                rel_path: path.strip_prefix(root).unwrap_or(&path).to_string_lossy().to_string(),
                 path: path.to_string_lossy().to_string(),
             });
         }
@@ -180,7 +205,7 @@ mod tests {
         sizes
             .iter()
             .enumerate()
-            .map(|(i, &s)| DataItem { path: format!("track{:02}.flac", i), size_bytes: s })
+            .map(|(i, &s)| DataItem { path: format!("track{:02}.flac", i), rel_path: format!("track{:02}.flac", i), size_bytes: s })
             .collect()
     }
 
@@ -253,5 +278,27 @@ mod tests {
     fn audio_single_disc_when_fits() {
         let slices = split_audio(tracks(&[240, 300, 200]), 74 * 60, 99);
         assert_eq!(slices.len(), 1);
+    }
+
+    #[test]
+    fn flat_items_never_collide() {
+        let paths: Vec<String> = ["/a/song.flac", "/b/song.flac", "/c/SONG.FLAC", "/d/readme", "/e/readme", "/f/.hidden"]
+            .iter().map(|s| s.to_string()).collect();
+        let names: Vec<String> = flat_items(&paths).into_iter().map(|i| i.rel_path).collect();
+        assert_eq!(names, ["song.flac", "song (2).flac", "SONG (3).FLAC", "readme", "readme (2)", ".hidden"]);
+    }
+
+    #[test]
+    fn enumerate_dir_keeps_the_folder_structure() {
+        let root = std::env::temp_dir().join(format!("rd_enum_{}", std::process::id()));
+        std::fs::create_dir_all(root.join("sub/deeper")).unwrap();
+        std::fs::write(root.join("top.txt"), b"1").unwrap();
+        std::fs::write(root.join("sub/a.txt"), b"22").unwrap();
+        std::fs::write(root.join("sub/deeper/a.txt"), b"333").unwrap(); // same name, different folder
+        let items = enumerate_dir(root.to_str().unwrap()).unwrap();
+        let mut rels: Vec<&str> = items.iter().map(|i| i.rel_path.as_str()).collect();
+        rels.sort();
+        assert_eq!(rels, ["sub/a.txt", "sub/deeper/a.txt", "top.txt"]);
+        std::fs::remove_dir_all(&root).ok();
     }
 }

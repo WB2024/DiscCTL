@@ -244,21 +244,28 @@ pre.json { background: var(--bg); border: 1px solid var(--line); border-radius: 
             <span class="muted" id="audio-summary"></span>
             <span class="grow"></span>
             <button class="btn small" id="add-audio">+ Add files…</button>
-            <button class="btn small" id="add-playlist">Use playlist (.m3u)…</button>
+            <button class="btn small" id="add-audio-folder">📁 Add folder…</button>
+            <button class="btn small" id="add-playlist">Use playlist (.m3u / .m3u8)…</button>
           </div>
           <div class="filelist" id="audio-list"></div>
-          <div class="muted" id="playlist-note" style="margin-top:6px"></div>
+          <div id="pl-preview-audio"></div>
         </div>
         <div id="burn-data-block" style="margin-top:16px">
           <div class="row" style="margin-bottom:8px">
             <h2 style="margin:0" id="data-title">Data folder</h2>
+            <span class="muted" id="data-summary"></span>
             <span class="grow"></span>
-            <button class="btn small" id="pick-data">Choose folder…</button>
+            <button class="btn small" id="add-data-files">+ Add files…</button>
+            <button class="btn small" id="pick-data">📁 Choose folder…</button>
+            <button class="btn small" id="add-data-playlist">Use playlist (.m3u / .m3u8)…</button>
           </div>
           <div class="filelist" id="data-list"></div>
+          <div id="pl-preview-data"></div>
         </div>
+        <div class="muted" id="source-help" style="margin-top:12px"></div>
         <div id="burn-graph-block" class="hidden">
           <h2>Disc graph</h2>
+          <p class="muted" style="margin-top:0">A disc graph is the complete description of a disc as JSON: its format, label, and each session with its tracks or files. The forms on the other tabs build one for you. Write one by hand when you need something they can't express, such as a title and artist for every track (CD-Text), or your own Joliet / Rock Ridge settings. <b>Validate</b> checks it, and <b>Show plan</b> lists the exact steps before anything is written. A graph burns one disc as written: no multi-disc splitting and no transcoding.</p>
           <textarea id="graph-text" rows="16" spellcheck="false"></textarea>
           <div class="row" style="margin-top:8px">
             <button class="btn small" id="graph-example">Load example</button>
@@ -273,7 +280,7 @@ pre.json { background: var(--bg); border: 1px solid var(--line); border-radius: 
         <div class="grid2">
           <div style="display:flex;flex-direction:column;gap:12px">
             <label class="field" id="label-wrap">Disc label<input type="text" id="burn-label" placeholder="Untitled"></label>
-            <label class="field" id="transcode-wrap">Transcode audio first
+            <label class="field" id="transcode-wrap">Transcode the audio files first<small>Shrinks audio files so more fits on the disc</small>
               <select id="burn-transcode">
                 <option value="">No — burn as-is</option><option value="flac">FLAC</option>
                 <option value="mp3:320">MP3 320k</option><option value="mp3:256">MP3 256k</option><option value="mp3:192">MP3 192k</option>
@@ -828,18 +835,23 @@ async function startRip() {
 }
 
 // ── File picker modal ───────────────────────────────────────────────────────
-// mode: "files" (multi-select audio), "folder", "playlist"
+// mode: "files" (multi-select audio files), "anyfiles" (multi-select any files),
+//       "folder", "audiofolder" (all audio in a folder), "playlist"
 function pickPath({ mode, title }) {
   return new Promise(resolve => {
     let cwd = "", chosen = new Set();
     const bg = document.createElement("div"); bg.className = "modal-bg";
     bg.innerHTML = `<div class="modal"><header>${esc(title)}</header><div class="body"><div class="crumbs"></div><div class="list"></div></div>
-      <footer><span class="muted grow sel"></span><button class="btn add-all hidden">Add all audio here</button><button class="btn cancel">Cancel</button><button class="btn primary ok">Select</button></footer></div>`;
+      <footer><span class="muted grow sel"></span><button class="btn add-all hidden"></button>
+        <button class="btn af-here hidden">Add this folder's audio</button><button class="btn af-deep hidden">…including subfolders</button>
+        <button class="btn cancel">Cancel</button><button class="btn primary ok">Select</button></footer></div>`;
     document.body.append(bg);
     const done = v => { bg.remove(); resolve(v); };
     const audioRe = /\.(flac|wav|alac|aiff?|ogg|mp3|opus|m4a)$/i;
+    const multi = mode === "files" || mode === "anyfiles";
     let entries = [];
     const join = n => cwd ? cwd + "/" + n : n;
+    const okFile = e => !e.is_dir && (mode === "files" ? audioRe.test(e.name) : mode === "anyfiles" ? true : mode === "playlist" ? /\.m3u8?$/i.test(e.name) : false);
 
     async function load(p) {
       try {
@@ -854,74 +866,140 @@ function pickPath({ mode, title }) {
       if (!entries.length) list.innerHTML = `<div class="muted" style="padding:16px">This folder is empty. Mount or copy your files into <span class="mono">${esc(STATUS.media_dir)}</span> on the server.</div>`;
       entries.forEach(e => {
         const full = join(e.name);
-        const selectable = mode === "files" ? (!e.is_dir && audioRe.test(e.name)) : mode === "playlist" ? (!e.is_dir && /\.m3u8?$/i.test(e.name)) : false;
+        const selectable = okFile(e);
         const row = document.createElement("div"); row.className = "brow";
-        row.innerHTML = `${mode === "files" && selectable ? `<input type="checkbox" ${chosen.has(full) ? "checked" : ""}>` : ""}<span>${e.is_dir ? "📁" : selectable ? "🎵" : "📄"}</span><span class="grow">${esc(e.name)}</span><span class="muted">${e.is_dir ? "" : fmtBytes(e.size)}</span>`;
+        row.innerHTML = `${multi && selectable ? `<input type="checkbox" ${chosen.has(full) ? "checked" : ""}>` : ""}<span>${e.is_dir ? "📁" : audioRe.test(e.name) ? "🎵" : /\.m3u8?$/i.test(e.name) ? "📃" : "📄"}</span><span class="grow">${esc(e.name)}</span><span class="muted">${e.is_dir ? "" : fmtBytes(e.size)}</span>`;
         row.style.opacity = (e.is_dir || selectable) ? 1 : .45;
         row.onclick = ev => {
           if (e.is_dir) return load(full);
           if (!selectable) return;
-          if (mode === "files") { chosen.has(full) ? chosen.delete(full) : chosen.add(full); const cb = $("input", row); cb.checked = chosen.has(full); if (ev.target !== cb) { } upd(); }
+          if (multi) { chosen.has(full) ? chosen.delete(full) : chosen.add(full); $("input", row).checked = chosen.has(full); upd(); }
           else done([full]);
         };
         list.append(row);
       });
-      $(".add-all", bg).classList.toggle("hidden", !(mode === "files" && entries.some(e => !e.is_dir && audioRe.test(e.name))));
+      const hereFiles = entries.filter(okFile);
+      const addAll = $(".add-all", bg);
+      addAll.textContent = mode === "files" ? "Add all audio here" : "Add all files here";
+      addAll.classList.toggle("hidden", !(multi && hereFiles.length));
       upd();
     }
     function upd() {
-      $(".sel", bg).textContent = mode === "files" ? `${chosen.size} selected` : mode === "folder" ? `Current: /${cwd}` : "";
-      $(".ok", bg).classList.toggle("hidden", mode === "playlist");
+      $(".sel", bg).textContent = multi ? `${chosen.size} selected` : (mode === "folder" || mode === "audiofolder") ? `Current: /${cwd}` : "";
+      $(".ok", bg).classList.toggle("hidden", !(multi || mode === "folder"));
       $(".ok", bg).textContent = mode === "folder" ? "Use this folder" : "Add selected";
+      $(".af-here", bg).classList.toggle("hidden", mode !== "audiofolder");
+      $(".af-deep", bg).classList.toggle("hidden", mode !== "audiofolder");
+    }
+    async function audioFrom(recursive) {
+      try {
+        const r = await api(`/api/audio-files?path=${encodeURIComponent(cwd)}&recursive=${recursive}`);
+        if (!r.files.length) return toast("No audio files found there", "err");
+        if (r.truncated) toast("That folder has a lot of audio — only the first 1000 files were added", "err", 7000);
+        done(r.files.map(f => f.path));
+      } catch (e) { toast(e.message, "err"); }
     }
     $(".cancel", bg).onclick = () => done(null);
     bg.onclick = e => { if (e.target === bg) done(null); };
-    $(".add-all", bg).onclick = () => done(entries.filter(e => !e.is_dir && audioRe.test(e.name)).map(e => join(e.name)));
+    $(".add-all", bg).onclick = () => done(entries.filter(okFile).map(e => join(e.name)));
+    $(".af-here", bg).onclick = () => audioFrom(false);
+    $(".af-deep", bg).onclick = () => audioFrom(true);
     $(".ok", bg).onclick = () => done(mode === "folder" ? [cwd] : [...chosen]);
     load("");
   });
 }
 
 // ── Burn page ───────────────────────────────────────────────────────────────
-const burn = { fmt: "redbook", audio: [], playlist: null, data: null };
+// Audio discs: `audio` files or an `playlist`. Data CD: one of `data` (folder),
+// `dfiles` (individual files) or `dplaylist`. Enhanced CD: audio plus a `data` folder.
+const burn = { fmt: "redbook", audio: [], playlist: null, data: null, dfiles: [], dplaylist: null };
+const PL_CACHE = {};
+
+const fmtSecs = s => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+
+async function showPlaylist(path, el, audio) {
+  el.innerHTML = `<div class="muted" style="margin-top:8px">Reading playlist…</div>`;
+  try {
+    const d = PL_CACHE[path] || (PL_CACHE[path] = await api("/api/playlist", { body: { path } }));
+    const n = d.entries.length;
+    const summary = audio
+      ? `${n} track${n === 1 ? "" : "s"}${d.total_secs != null ? ` · ${fmtSecs(d.total_secs)}` : ""}`
+      : `${n} file${n === 1 ? "" : "s"} · ${fmtBytes(d.total_bytes)}`;
+    el.innerHTML = `<details style="margin-top:8px"><summary style="cursor:pointer"><b>${summary}</b>${d.skipped.length ? ` <span class="badge" style="color:var(--warn)">${d.skipped.length} skipped</span>` : ""}</summary>
+      <div class="filelist" style="margin-top:8px;max-height:260px;overflow:auto">${d.entries.map((e, i) => `<div class="item"><span class="muted" style="width:26px;text-align:right">${i + 1}</span><span class="grow">${esc(e.path)}</span><span class="muted">${audio && e.duration_secs != null ? fmtSecs(e.duration_secs) : fmtBytes(e.size)}</span></div>`).join("")}</div>
+      ${d.skipped.length ? `<div class="notice warn" style="margin-top:8px"><b>Skipped:</b><ul style="margin:6px 0 0;padding-left:20px">${d.skipped.map(k => `<li><span class="mono">${esc(k.entry)}</span> — ${esc(k.reason)}</li>`).join("")}</ul></div>` : ""}</details>`;
+  } catch (e) {
+    el.innerHTML = `<div class="notice err" style="margin-top:8px">${esc(e.message)}</div>`;
+  }
+}
+
+function fileRows(list, items, onChange, emptyText) {
+  list.innerHTML = items.length ? "" : `<div class="empty">${emptyText}</div>`;
+  items.forEach((p, i) => {
+    const it = document.createElement("div"); it.className = "item";
+    it.innerHTML = `<span class="muted" style="width:26px;text-align:right">${i + 1}</span><span class="grow">${esc(p)}</span>
+      <button class="btn small" data-a="up" ${i ? "" : "disabled"}>↑</button><button class="btn small" data-a="down" ${i < items.length - 1 ? "" : "disabled"}>↓</button><button class="btn small" data-a="rm">✕</button>`;
+    it.onclick = e => {
+      const a = e.target.dataset?.a; if (!a) return;
+      if (a === "rm") items.splice(i, 1);
+      else { const j = a === "up" ? i - 1 : i + 1; [items[i], items[j]] = [items[j], items[i]]; }
+      onChange();
+    };
+    list.append(it);
+  });
+}
+
+function playlistRow(list, path, clear) {
+  list.innerHTML = `<div class="item">📃 <span class="grow">${esc(path)}</span><button class="btn small" data-a="clear">Remove</button></div>`;
+  $("[data-a=clear]", list).onclick = clear;
+}
 
 function renderBurn() {
-  const f = burn.fmt, isGraph = f === "graph";
+  const f = burn.fmt, isGraph = f === "graph", isData = f === "datacd", isEnh = f === "bluebook";
   $$("#burn-tabs button").forEach(b => b.classList.toggle("active", b.dataset.fmt === f));
-  $("#burn-audio-block").classList.toggle("hidden", isGraph || f === "datacd");
+  $("#burn-audio-block").classList.toggle("hidden", isGraph || isData);
   $("#burn-data-block").classList.toggle("hidden", isGraph || f === "redbook");
   $("#burn-graph-block").classList.toggle("hidden", !isGraph);
   $("#label-wrap").classList.toggle("hidden", isGraph);
-  $("#transcode-wrap").classList.toggle("hidden", isGraph);
-  $("#cdtext-wrap").classList.toggle("hidden", isGraph || f === "datacd");
-  $("#audio-title").textContent = f === "bluebook" ? "Session 1 — Audio tracks" : "Audio tracks";
-  $("#data-title").textContent = f === "bluebook" ? "Session 2 — Data folder" : "Data folder";
+  $("#transcode-wrap").classList.toggle("hidden", !isData);
+  $("#cdtext-wrap").classList.toggle("hidden", isGraph || isData);
+  $("#source-help").classList.toggle("hidden", isGraph);
+  $("#audio-title").textContent = isEnh ? "Session 1 — Audio tracks" : "Audio tracks";
+  $("#data-title").textContent = isEnh ? "Session 2 — Data folder" : "Files for the disc";
+  // An Enhanced CD's data session is a folder; a Data CD can be built from files, a folder or a playlist.
+  $("#add-data-files").classList.toggle("hidden", isEnh);
+  $("#add-data-playlist").classList.toggle("hidden", isEnh);
+  $("#pick-data").textContent = isEnh ? "📁 Choose folder…" : "📁 Choose folder…";
+  $("#source-help").textContent = isData
+    ? "Use one source: individual files, a whole folder (its sub-folders are kept), or a playlist. Files and playlist entries go in the root of the disc. Playlist paths can be relative to the playlist's own folder; everything must be inside the server's media folder."
+    : "Playlists can be .m3u or .m3u8. Relative paths are resolved from the playlist's own folder, and everything must be inside the server's media folder. Adding a folder adds its audio files in track order.";
 
-  const list = $("#audio-list");
+  // Audio side
+  const alist = $("#audio-list"), apl = $("#pl-preview-audio");
+  apl.innerHTML = "";
   if (burn.playlist) {
-    list.innerHTML = `<div class="item">📃 <span class="grow">${esc(burn.playlist)}</span><button class="btn small" id="clear-pl">Remove</button></div>`;
-    $("#clear-pl").onclick = () => { burn.playlist = null; renderBurn(); };
-    $("#playlist-note").textContent = "Track order comes from the playlist.";
+    playlistRow(alist, burn.playlist, () => { burn.playlist = null; renderBurn(); });
+    showPlaylist(burn.playlist, apl, true);
   } else {
-    $("#playlist-note").textContent = "";
-    list.innerHTML = burn.audio.length ? "" : `<div class="empty">No tracks yet — add files from the server's media folder.</div>`;
-    burn.audio.forEach((p, i) => {
-      const it = document.createElement("div"); it.className = "item";
-      it.innerHTML = `<span class="muted" style="width:26px;text-align:right">${i + 1}</span><span class="grow">${esc(p)}</span>
-        <button class="btn small" data-a="up" ${i ? "" : "disabled"}>↑</button><button class="btn small" data-a="down" ${i < burn.audio.length - 1 ? "" : "disabled"}>↓</button><button class="btn small" data-a="rm">✕</button>`;
-      it.onclick = e => {
-        const a = e.target.dataset?.a; if (!a) return;
-        if (a === "rm") burn.audio.splice(i, 1);
-        else { const j = a === "up" ? i - 1 : i + 1; [burn.audio[i], burn.audio[j]] = [burn.audio[j], burn.audio[i]]; }
-        renderBurn();
-      };
-      list.append(it);
-    });
+    fileRows(alist, burn.audio, renderBurn, "No tracks yet — add files or a folder, or use a playlist.");
   }
   $("#audio-summary").textContent = burn.playlist ? "" : burn.audio.length ? `${burn.audio.length} track${burn.audio.length === 1 ? "" : "s"}` : "";
-  $("#data-list").innerHTML = burn.data === null ? `<div class="empty">No folder chosen.</div>`
-    : `<div class="item">📁 <span class="grow">/${esc(burn.data)}</span><button class="btn small" id="clear-data">Remove</button></div>`;
-  $("#clear-data") && ($("#clear-data").onclick = () => { burn.data = null; renderBurn(); });
+
+  // Data side
+  const dlist = $("#data-list"), dpl = $("#pl-preview-data");
+  dpl.innerHTML = "";
+  let dsum = "";
+  if (isEnh || (!burn.dfiles.length && !burn.dplaylist)) {
+    dlist.innerHTML = burn.data === null ? `<div class="empty">${isEnh ? "No folder chosen." : "Nothing chosen yet — add files, choose a folder, or use a playlist."}</div>` : "";
+    if (burn.data !== null) { dlist.innerHTML = `<div class="item">📁 <span class="grow">/${esc(burn.data)}</span><button class="btn small" data-a="clear">Remove</button></div>`; $("[data-a=clear]", dlist).onclick = () => { burn.data = null; renderBurn(); }; }
+  } else if (burn.dplaylist) {
+    playlistRow(dlist, burn.dplaylist, () => { burn.dplaylist = null; renderBurn(); });
+    showPlaylist(burn.dplaylist, dpl, false);
+  } else {
+    fileRows(dlist, burn.dfiles, renderBurn, "");
+    dsum = `${burn.dfiles.length} file${burn.dfiles.length === 1 ? "" : "s"}`;
+  }
+  $("#data-summary").textContent = dsum;
 }
 
 function burnBody() {
@@ -931,14 +1009,16 @@ function burnBody() {
     try { graph = JSON.parse($("#graph-text").value); } catch (e) { throw new Error("Disc graph is not valid JSON: " + e.message); }
     return { graph, dry_run: $("#burn-dry").checked, debug: $("#burn-debug").checked, device: selectedDevice() };
   }
-  if (f !== "datacd" && !burn.playlist && !burn.audio.length) throw new Error("Add at least one audio track or a playlist");
-  if (f !== "redbook" && burn.data === null) throw new Error("Choose a data folder");
-  return {
-    format: f, audio: f === "datacd" ? [] : (burn.playlist ? [] : burn.audio), playlist: f === "datacd" ? null : burn.playlist,
-    data: f === "redbook" ? null : burn.data, label: $("#burn-label").value.trim() || null,
-    cd_text: $("#burn-cdtext").checked && f !== "datacd", transcode: $("#burn-transcode").value || null,
-    dry_run: $("#burn-dry").checked, debug: $("#burn-debug").checked, device: selectedDevice(),
-  };
+  const common = { format: f, label: $("#burn-label").value.trim() || null, dry_run: $("#burn-dry").checked, debug: $("#burn-debug").checked, device: selectedDevice() };
+  if (f === "datacd") {
+    if (!burn.data && !burn.dfiles.length && !burn.dplaylist) throw new Error("Choose what to put on the disc: files, a folder or a playlist");
+    return { ...common, data: burn.dplaylist || burn.dfiles.length ? null : burn.data, files: burn.dplaylist ? [] : burn.dfiles,
+      playlist: burn.dplaylist, transcode: $("#burn-transcode").value || null };
+  }
+  if (!burn.playlist && !burn.audio.length) throw new Error("Add at least one audio track, a folder, or a playlist");
+  if (f === "bluebook" && burn.data === null) throw new Error("Choose a data folder for the second session");
+  return { ...common, audio: burn.playlist ? [] : burn.audio, playlist: burn.playlist, data: f === "bluebook" ? burn.data : null,
+    cd_text: $("#burn-cdtext").checked };
 }
 
 async function burnPlan() {
@@ -1190,9 +1270,22 @@ async function init() {
   $("#rip-start").onclick = startRip;
 
   $("#burn-tabs").onclick = e => { const b = e.target.closest("button"); if (!b) return; burn.fmt = b.dataset.fmt; if (burn.fmt === "graph" && !$("#graph-text").value) $("#graph-text").value = JSON.stringify(GRAPH_EXAMPLE, null, 2); renderBurn(); };
-  $("#add-audio").onclick = async () => { const r = await pickPath({ mode: "files", title: "Add audio files" }); if (r) { r.forEach(p => burn.audio.includes(p) || burn.audio.push(p)); burn.playlist = null; renderBurn(); } };
-  $("#add-playlist").onclick = async () => { const r = await pickPath({ mode: "playlist", title: "Choose a playlist" }); if (r?.[0]) { burn.playlist = r[0]; burn.audio = []; renderBurn(); } };
-  $("#pick-data").onclick = async () => { const r = await pickPath({ mode: "folder", title: "Choose the data folder" }); if (r) { burn.data = r[0]; renderBurn(); } };
+  const addTo = (list, r) => r.forEach(p => list.includes(p) || list.push(p));
+  $("#add-audio").onclick = async () => { const r = await pickPath({ mode: "files", title: "Add audio files" }); if (r?.length) { addTo(burn.audio, r); burn.playlist = null; renderBurn(); } };
+  $("#add-audio-folder").onclick = async () => { const r = await pickPath({ mode: "audiofolder", title: "Add the audio in a folder" }); if (r?.length) { addTo(burn.audio, r); burn.playlist = null; renderBurn(); } };
+  $("#add-playlist").onclick = async () => { const r = await pickPath({ mode: "playlist", title: "Choose a playlist (.m3u / .m3u8)" }); if (r?.[0]) { burn.playlist = r[0]; burn.audio = []; delete PL_CACHE[r[0]]; renderBurn(); } };
+  $("#pick-data").onclick = async () => {
+    const r = await pickPath({ mode: "folder", title: "Choose the folder" });
+    if (r) { burn.data = r[0]; burn.dfiles = []; burn.dplaylist = null; renderBurn(); }
+  };
+  $("#add-data-files").onclick = async () => {
+    const r = await pickPath({ mode: "anyfiles", title: "Add files" });
+    if (r?.length) { addTo(burn.dfiles, r); burn.data = null; burn.dplaylist = null; renderBurn(); }
+  };
+  $("#add-data-playlist").onclick = async () => {
+    const r = await pickPath({ mode: "playlist", title: "Choose a playlist (.m3u / .m3u8)" });
+    if (r?.[0]) { burn.dplaylist = r[0]; burn.dfiles = []; burn.data = null; delete PL_CACHE[r[0]]; renderBurn(); }
+  };
   $("#graph-example").onclick = () => { $("#graph-text").value = JSON.stringify(GRAPH_EXAMPLE, null, 2); };
   $("#graph-validate").onclick = async () => {
     try { const graph = JSON.parse($("#graph-text").value); await api("/api/validate", { body: { graph } }); toast("Disc graph is valid", "ok"); }

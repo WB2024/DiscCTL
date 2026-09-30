@@ -32,6 +32,10 @@ pub fn append_data_session(
         mkiso.arg("-C").arg(ms).arg("-M").arg(device);
     }
 
+    // Follow symlinks: staged folders are made of links to the real files, and without this
+    // the disc would hold links that point at nothing.
+    mkiso.arg("-f");
+
     mkiso.arg("-o").arg(&iso_path).arg(&session.source_dir);
 
     if debug { eprintln!("Running: {:?}", mkiso); }

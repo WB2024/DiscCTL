@@ -23,7 +23,7 @@ use axum::{
     response::{Html, IntoResponse, Response, Sse, sse},
     routing::{get, post},
 };
-use futures_util::{Stream, StreamExt};
+use futures_util::StreamExt;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tower_http::services::ServeDir;
@@ -196,6 +196,8 @@ pub async fn serve(cfg: Config, bind: SocketAddr) -> Result<(), Error> {
         .route("/api/library", get(library))
         .route("/api/library/{name}", get(library_entry))
         .route("/api/plan", post(plan))
+        .route("/api/playlist", post(playlist_preview))
+        .route("/api/audio-files", get(audio_files))
         .route("/api/validate", post(validate))
         .route("/api/jobs", get(list_jobs))
         .route("/api/jobs/rip", post(start_rip))
@@ -712,6 +714,8 @@ struct BurnReq {
     playlist: Option<String>,
     /// Data source folder, relative to the media directory.
     data: Option<String>,
+    /// Individual files for a Data CD, relative to the media directory.
+    files: Vec<String>,
     label: Option<String>,
     cd_text: bool,
     transcode: Option<String>,
@@ -737,26 +741,46 @@ fn burn_args(cmd: &str, req: &BurnReq, cfg: &Config) -> ApiResult<(Vec<String>, 
         if !["redbook", "datacd", "bluebook"].contains(&format) {
             return Err(ApiError::bad(format!("Unknown format '{format}' (use redbook, datacd or bluebook)")));
         }
+        let is_data_cd = format == "datacd";
         a.extend(["--format".into(), format.into()]);
-        if !req.audio.is_empty() {
-            a.push("--audio".into());
-            for f in &req.audio {
-                a.push(path_str(&safe_join(&cfg.media_dir, f)?));
+
+        if is_burn || !is_data_cd {
+            if !is_data_cd && !req.audio.is_empty() {
+                a.push("--audio".into());
+                for f in &req.audio {
+                    a.push(path_str(&safe_join(&cfg.media_dir, f)?));
+                }
+            }
+            if let Some(pl) = &req.playlist {
+                a.extend(["--playlist".into(), path_str(&safe_join(&cfg.media_dir, pl)?)]);
+                // A playlist may only pull in files from the media folder.
+                if is_burn {
+                    a.extend(["--playlist-root".into(), path_str(&cfg.media_dir)]);
+                }
+            }
+            if is_burn && is_data_cd && !req.files.is_empty() {
+                a.push("--files".into());
+                for f in &req.files {
+                    a.push(path_str(&safe_join(&cfg.media_dir, f)?));
+                }
             }
         }
-        if let Some(pl) = &req.playlist {
-            a.extend(["--playlist".into(), path_str(&safe_join(&cfg.media_dir, pl)?)]);
-        }
         if let Some(d) = &req.data {
-            a.extend(["--data".into(), path_str(&safe_join(&cfg.media_dir, d)?)]);
+            if format != "redbook" {
+                a.extend(["--data".into(), path_str(&safe_join(&cfg.media_dir, d)?)]);
+            }
+        } else if !is_burn && is_data_cd {
+            // The plan only shows the steps, not the files; it just needs a folder that exists.
+            a.extend(["--data".into(), path_str(&cfg.media_dir)]);
         }
         if let Some(l) = req.label.as_deref().filter(|l| !l.trim().is_empty()) {
             a.extend(["--label".into(), l.into()]);
         }
-        if req.cd_text {
+        if req.cd_text && !is_data_cd {
             a.push("--cd-text".into());
         }
-        if is_burn {
+        if is_burn && is_data_cd {
+            // Audio CDs are always converted to CD audio; transcoding only shrinks audio inside a Data CD.
             if let Some(t) = req.transcode.as_deref().filter(|t| !t.is_empty()) {
                 a.extend(["--transcode".into(), t.into()]);
             }
@@ -813,6 +837,131 @@ async fn validate(State(st): S, Json(req): Json<BurnReq>) -> ApiResult<Json<Valu
     let _ = std::fs::remove_file(tmp);
     res?;
     Ok(Json(json!({"ok": true})))
+}
+
+// ── Playlists and audio folders (for the Burn page) ─────────────────────────
+
+#[derive(Deserialize)]
+struct PlaylistReq {
+    /// The .m3u / .m3u8 file, relative to the media directory.
+    path: String,
+}
+
+/// What a playlist would contribute, without burning anything.
+async fn playlist_preview(State(st): S, Json(req): Json<PlaylistReq>) -> ApiResult<Json<Value>> {
+    let file = safe_join(&st.cfg.media_dir, &req.path)?;
+    let media = st.cfg.media_dir.clone();
+    let parsed = tokio::task::spawn_blocking(move || {
+        crate::parser::playlist::parse_detailed(&file.to_string_lossy(), Some(&media))
+    })
+    .await
+    .map_err(|e| Error::backend(e.to_string()))??;
+
+    let media = st.cfg.media_dir.canonicalize().unwrap_or_else(|_| st.cfg.media_dir.clone());
+    let entries: Vec<Value> = parsed
+        .entries
+        .iter()
+        .map(|e| {
+            let p = Path::new(&e.path);
+            json!({
+                "path": p.strip_prefix(&media).map(|r| r.to_string_lossy().to_string()).unwrap_or_else(|_| e.path.clone()),
+                "name": e.display.clone().unwrap_or_else(|| p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()),
+                "duration_secs": e.duration_secs,
+                "size": std::fs::metadata(p).map(|m| m.len()).unwrap_or(0),
+            })
+        })
+        .collect();
+    let total_bytes: u64 = entries.iter().map(|e| e["size"].as_u64().unwrap_or(0)).sum();
+    let known: Vec<u64> = entries.iter().filter_map(|e| e["duration_secs"].as_u64()).collect();
+    Ok(Json(json!({
+        "entries": entries,
+        "skipped": parsed.skipped.iter().map(|s| json!({"entry": s.entry, "reason": s.reason})).collect::<Vec<_>>(),
+        "total_bytes": total_bytes,
+        // Only meaningful when every entry carried an #EXTINF duration
+        "total_secs": if !entries.is_empty() && known.len() == entries.len() { json!(known.iter().sum::<u64>()) } else { Value::Null },
+    })))
+}
+
+/// Compare names the way people order tracks: "2 - x" before "10 - x", ignoring case.
+fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    fn chunks(s: &str) -> Vec<(bool, String)> {
+        let mut out: Vec<(bool, String)> = Vec::new();
+        for c in s.to_lowercase().chars() {
+            let digit = c.is_ascii_digit();
+            match out.last_mut() {
+                Some((d, buf)) if *d == digit => buf.push(c),
+                _ => out.push((digit, c.to_string())),
+            }
+        }
+        out
+    }
+    let (ca, cb) = (chunks(a), chunks(b));
+    for (x, y) in ca.iter().zip(cb.iter()) {
+        let ord = if x.0 && y.0 {
+            let (nx, ny) = (x.1.trim_start_matches('0'), y.1.trim_start_matches('0'));
+            nx.len().cmp(&ny.len()).then_with(|| nx.cmp(ny))
+        } else {
+            x.1.cmp(&y.1)
+        };
+        if ord != std::cmp::Ordering::Equal {
+            return ord;
+        }
+    }
+    ca.len().cmp(&cb.len())
+}
+
+const MAX_LISTED_FILES: usize = 1000;
+
+fn collect_audio(base: &Path, dir: &Path, recursive: bool, out: &mut Vec<(String, u64)>) {
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    for e in rd.filter_map(|e| e.ok()) {
+        let name = e.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') || out.len() > MAX_LISTED_FILES {
+            continue;
+        }
+        let path = e.path();
+        let Ok(meta) = std::fs::metadata(&path) else { continue };
+        if meta.is_dir() {
+            if recursive {
+                collect_audio(base, &path, recursive, out);
+            }
+        } else if is_audio(&name) {
+            if let Ok(rel) = path.strip_prefix(base) {
+                out.push((rel.to_string_lossy().to_string(), meta.len()));
+            }
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct AudioFilesQuery {
+    path: Option<String>,
+    recursive: Option<bool>,
+}
+
+/// Audio files in a media folder (optionally including subfolders), in track order.
+async fn audio_files(State(st): S, Query(q): Query<AudioFilesQuery>) -> ApiResult<Json<Value>> {
+    let rel = q.path.unwrap_or_default();
+    let dir = safe_join(&st.cfg.media_dir, &rel)?;
+    if !dir.is_dir() {
+        return Err(ApiError::not_found(format!("No such folder: {rel}")));
+    }
+    let base = st.cfg.media_dir.clone();
+    let recursive = q.recursive.unwrap_or(false);
+    let mut files = tokio::task::spawn_blocking(move || {
+        let mut out = Vec::new();
+        collect_audio(&base, &dir, recursive, &mut out);
+        out
+    })
+    .await
+    .map_err(|e| Error::backend(e.to_string()))?;
+    files.sort_by(|a, b| natural_cmp(&a.0, &b.0));
+    let truncated = files.len() > MAX_LISTED_FILES;
+    files.truncate(MAX_LISTED_FILES);
+    Ok(Json(json!({
+        "files": files.iter().map(|(p, s)| json!({"path": p, "size": s})).collect::<Vec<_>>(),
+        "truncated": truncated,
+    })))
 }
 
 // ── Jobs ─────────────────────────────────────────────────────────────────────
@@ -1046,4 +1195,16 @@ async fn job_events(
 
     // X-Accel-Buffering stops nginx-style reverse proxies from holding events back.
     Ok(([("x-accel-buffering", "no")], Sse::new(stream).keep_alive(sse::KeepAlive::default())))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::natural_cmp;
+
+    #[test]
+    fn natural_order_puts_2_before_10() {
+        let mut v = vec!["10 - b.flac", "2 - a.flac", "01 - z.flac", "Album/1.flac", "album/02.flac", "Album/10.flac"];
+        v.sort_by(|a, b| natural_cmp(a, b));
+        assert_eq!(v, ["01 - z.flac", "2 - a.flac", "10 - b.flac", "Album/1.flac", "album/02.flac", "Album/10.flac"]);
+    }
 }
