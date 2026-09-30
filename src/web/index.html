@@ -1564,6 +1564,7 @@ function renderIdentify() {
         <div class="muted mono" style="margin-top:2px">${esc([t.device, f.uuid && "UUID " + f.uuid, f.partition_table && ({ dos: "MBR", gpt: "GPT" }[f.partition_table] || f.partition_table) + " partition table"].filter(Boolean).join(" · "))}</div>
         <div class="muted" style="margin-top:6px">${esc(i.limits.join(" "))}</div>
       </div>
+      <button class="btn small" id="id-inspect">🔍 Inspect</button>
       <button class="btn small" id="id-refresh">↻ Re-identify</button>
       <button class="btn small" id="id-format" ${i.can_format ? "" : `disabled title="${esc(i.format_blocked)}"`}>Reformat…</button>
     </div>
@@ -1575,9 +1576,52 @@ function renderIdentify() {
     <div id="id-format-form"></div>
   </div>`;
   $("#id-refresh").onclick = () => identifyStick(true);
+  $("#id-inspect").onclick = () => inspectStick();
   $("#id-format").onclick = showFormatForm;
   const use = $("#id-use-layout");
   if (use) use.onclick = () => useDetectedLayout();
+}
+
+// Browse everything on the stick, from the root down to single tracks.
+function inspectStick() {
+  const t = STICK.info?.target || selectedStick(); if (!t) return;
+  let cwd = "";
+  const bg = document.createElement("div"); bg.className = "modal-bg";
+  bg.innerHTML = `<div class="modal wide"><header class="row"><span class="grow">🔍 ${esc(t.label)} <span class="muted mono" style="font-weight:400">${esc(t.mount_point)}</span></span><button class="btn small close">Close</button></header>
+    <div class="body"><div class="crumbs" style="margin:6px 0 8px"></div><div class="list"></div></div><footer><span class="muted grow sum"></span></footer></div>`;
+  document.body.append(bg);
+  const close = () => { bg.remove(); document.removeEventListener("keydown", onKey); };
+  const onKey = e => { if (e.key === "Escape") close(); };
+  document.addEventListener("keydown", onKey);
+  bg.onclick = e => { if (e.target === bg) close(); };
+  $(".close", bg).onclick = close;
+  const join = n => cwd ? cwd + "/" + n : n;
+  async function load(p) {
+    let d;
+    try { d = await api("/api/stick/browse", { body: { target: t.mount_point, path: p } }); }
+    catch (e) { toast(e.message, "err"); return; }
+    cwd = d.path;
+    const parts = cwd ? cwd.split("/") : [];
+    $(".crumbs", bg).innerHTML = `<a data-p="">${esc(t.label)}</a>` + parts.map((s, i) => ` / <a data-p="${esc(parts.slice(0, i + 1).join("/"))}">${esc(s)}</a>`).join("");
+    $$(".crumbs a", bg).forEach(a => a.onclick = () => load(a.dataset.p));
+    const list = $(".list", bg); list.innerHTML = "";
+    if (cwd) { const up = document.createElement("div"); up.className = "brow"; up.innerHTML = `<span>⬆️</span><span class="grow">..</span>`; up.onclick = () => load(parts.slice(0, -1).join("/")); list.append(up); }
+    if (!d.entries.length) list.innerHTML += `<div class="muted" style="padding:16px">This folder is empty.</div>`;
+    d.entries.forEach(e => {
+      const row = document.createElement("div"); row.className = "brow";
+      const tg = e.tags;
+      const meta = tg ? [tg.track != null ? String(tg.track).padStart(2, "0") : "", tg.title, tg.artist && `— ${tg.artist}`, tg.album && `(${tg.album})`].filter(Boolean).join(" ") : "";
+      row.innerHTML = `<span>${e.is_dir ? "📁" : e.audio ? "🎵" : e.link ? "🔗" : /\.(jpe?g|png)$/i.test(e.name) ? "🖼️" : "📄"}</span>
+        <span class="grow">${esc(e.name)}${meta ? `<div class="muted" style="font-size:12px">${esc(meta)}</div>` : ""}</span>
+        ${tg ? `<span class="badge ${tg.lossless ? "ok" : ""}">${esc(tg.quality)}</span>` : ""}
+        <span class="muted" style="min-width:64px;text-align:right">${e.is_dir ? "" : fmtBytes(e.size)}</span>`;
+      if (e.is_dir) row.onclick = () => load(join(e.name)); else row.style.cursor = "default";
+      list.append(row);
+    });
+    const dirs = d.entries.filter(e => e.is_dir).length, files = d.entries.length - dirs;
+    $(".sum", bg).textContent = `${dirs} folder${dirs === 1 ? "" : "s"}, ${files} file${files === 1 ? "" : "s"}`;
+  }
+  load("");
 }
 
 function useDetectedLayout() {

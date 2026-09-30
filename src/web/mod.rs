@@ -211,6 +211,7 @@ pub async fn serve(cfg: Config, bind: SocketAddr) -> Result<(), Error> {
         .route("/api/stick/plan", post(stick::plan))
         .route("/api/stick/mount", post(stick::mount))
         .route("/api/stick/identify", post(stick::identify))
+        .route("/api/stick/browse", post(stick::browse))
         .route("/api/stick/format", post(stick::format))
         .route("/api/stick/eject", post(stick::eject))
         .route("/api/jobs/stick", post(stick::start))

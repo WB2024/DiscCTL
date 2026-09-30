@@ -513,3 +513,66 @@ pub async fn format(State(st): S, Json(req): Json<FormatReq>) -> ApiResult<Json<
     let mounted = tokio::task::spawn_blocking(move || devices::mount_device(&device).ok()).await.ok().flatten();
     Ok(Json(json!({"ok": true, "mount_point": mounted})))
 }
+
+// ── Browse what is on a stick ────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct BrowseReq {
+    target: String,
+    #[serde(default)]
+    path: String,
+}
+
+pub async fn browse(State(st): S, Json(req): Json<BrowseReq>) -> ApiResult<Json<Value>> {
+    let target = all_targets(&st)
+        .into_iter()
+        .find(|t| t.mount_point == req.target)
+        .ok_or_else(|| ApiError::not_found("That stick isn't available (refresh the list)"))?;
+    let root = PathBuf::from(&target.mount_point);
+    let dir = safe_join(&root, &req.path)?;
+    let rel = req.path.trim_matches('/').to_string();
+    let out = tokio::task::spawn_blocking(move || -> Result<Value, Error> {
+        // Never follow a link out of the stick.
+        let real_root = std::fs::canonicalize(&root)?;
+        let real = std::fs::canonicalize(&dir).map_err(|_| Error::validation("That folder doesn't exist on the stick"))?;
+        if !real.starts_with(&real_root) || !real.is_dir() {
+            return Err(Error::validation("That isn't a folder on the stick"));
+        }
+        let mut entries: Vec<Value> = Vec::new();
+        let mut audio: Vec<(usize, PathBuf)> = Vec::new();
+        let mut names: Vec<std::fs::DirEntry> = std::fs::read_dir(&dir)?.filter_map(|e| e.ok()).collect();
+        names.sort_by(|a, b| scan::natural_cmp(&a.file_name().to_string_lossy().to_lowercase(), &b.file_name().to_string_lossy().to_lowercase()));
+        for e in names {
+            let name = e.file_name().to_string_lossy().to_string();
+            let Ok(m) = e.metadata() else { continue };
+            let link = e.file_type().map(|t| t.is_symlink()).unwrap_or(false);
+            let is_dir = m.is_dir() && !link;
+            let is_audio = !is_dir && scan::is_audio_path(&e.path());
+            if is_audio && audio.len() < 400 {
+                audio.push((entries.len(), e.path()));
+            }
+            entries.push(json!({
+                "name": name, "is_dir": is_dir, "size": if is_dir { 0 } else { m.len() }, "audio": is_audio, "link": link,
+                "mtime": existing::mtime_of(&e.path()),
+            }));
+        }
+        // Tags and quality for the tracks in this folder.
+        for (i, path) in audio {
+            let t = scan::read_track(&path);
+            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+            let q = existing::quality_of(ext, t.size, t.duration_secs);
+            entries[i]["tags"] = json!({
+                "artist": if t.meta.artist.is_empty() { &t.meta.album_artist } else { &t.meta.artist },
+                "album": t.meta.album, "title": t.meta.title, "track": t.meta.track, "disc": t.meta.disc,
+                "duration": t.duration_secs, "quality": q.label, "lossless": q.lossless,
+            });
+        }
+        Ok(json!({"entries": entries}))
+    })
+    .await
+    .map_err(|e| Error::backend(e.to_string()))??;
+    let mut v = out;
+    v["path"] = json!(rel);
+    v["label"] = json!(target.label);
+    Ok(Json(v))
+}
