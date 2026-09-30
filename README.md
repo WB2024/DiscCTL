@@ -27,7 +27,7 @@ Most Linux disc software is either a desktop GUI you have to sit in front of (K3
 - **One tool for both directions.** Rip *and* burn, audio *and* data, including Blue Book / CD Extra enhanced discs. It handles the multi-session rules (audio first, data appended, then finalise) for you.
 - **Runs where the drive is.** `rustydisc serve` gives you a web UI, so a headless box or Proxmox host with a drive in it can be driven from any browser on your network. There is a Docker image and a compose file.
 - **Safe by design.** Every burn is compiled into a plan and validated **before** the drive is touched, so mistakes fail early rather than after wasting a disc. `--dry-run` and *Show plan* let you see exactly what will happen.
-- **Rips you can trust later.** Automatic MusicBrainz tags, embedded cover art, and an **archive mode** that stores the disc's structure, CD-Text, metadata and SHA-256 checksums so a rip can be re-verified years from now.
+- **Rips you can trust later.** Automatic MusicBrainz tags, embedded cover art, an **AccurateRip check** that tells you whether each track matches other people's rips, and an **archive mode** that stores the disc's structure, CD-Text, metadata and SHA-256 checksums so a rip can be re-verified years from now.
 - **Scriptable.** Errors are structured JSON with a machine-readable code, and long jobs emit newline-delimited JSON progress. Automation and frontends can build on it without scraping text.
 
 ### How it compares
@@ -45,10 +45,10 @@ Most Linux disc software is either a desktop GUI you have to sit in front of (K3
 | Runs headless / in Docker | ✅ | — | — | ✅ | ✅ |
 | Structured JSON errors and progress | ✅ | — | — | — | — |
 | Dry-run / plan before writing | ✅ | — | — | — | — |
-| AccurateRip verification | **not yet** | — | — | — | ✅ |
+| AccurateRip verification (v1 + v2) | ✅ | — | — | — | ✅ |
 | Desktop GUI | — (web) | ✅ | ✅ | — | — |
 
-<sub>Based on my understanding of each project's documented behaviour; corrections are welcome as issues or PRs. RustyDisc is not a replacement for everything: if AccurateRip confirmation is a hard requirement, use whipper (or EAC on Windows) for that step. RustyDisc is Linux-only and, like the tools above, relies on external programs (`cdparanoia`, `cdrdao`, `xorriso`, `ffmpeg`) that the Docker image bundles for you.</sub>
+<sub>Based on my understanding of each project's documented behaviour; corrections are welcome as issues or PRs. RustyDisc's AccurateRip check is new and read-only: it reports whether each track matches the database, and reports the drive offset it detects, but does not yet correct the ripped audio for that offset the way whipper and EAC do. RustyDisc is Linux-only and, like the tools above, relies on external programs (`cdparanoia`, `cdrdao`, `xorriso`, `ffmpeg`) that the Docker image bundles for you.</sub>
 
 ---
 
@@ -143,11 +143,14 @@ Physical Disc
   Secure Rip Engine       ← cdparanoia (paranoia mode: overlapping reads, jitter correction,
         │                    paranoia retry logic)
         ▼
+  AccurateRip Check       ← v1 + v2 checksums per track, matched against the database
+        │                    (tolerates drive read offset)
+        ▼
    Audio Encoders         ← ffmpeg → WAV / FLAC / ALAC / AIFF / OGG / MP3 / Opus
    Data Extractor         ← xorriso → directory tree or ISO image
         │                    cover art embedded in every audio file
         ▼
-  Metadata + Checksums    ← musicbrainz.json, cdtext.json, disc.json, checksums.json
+  Metadata + Checksums    ← musicbrainz.json, accuraterip.json, cdtext.json, disc.json, checksums.json
 ```
 
 Format constraints are enforced **before** any hardware is touched, so you get a clear error rather than a half-burned coaster.
@@ -178,6 +181,7 @@ Format constraints are enforced **before** any hardware is touched, so you get a
 - **Blue Book session-aware ripping** — extracts audio and data sessions independently into `audio/` and `data/` subdirectories
 - **Data session extraction** — xorriso extracts the ISO filesystem as a directory tree; ISO image output also supported
 - **Archive mode** — `--archive` produces a complete reconstruction kit: `disc.json`, `cdtext.json`, `musicbrainz.json`, `checksums.json`
+- **AccurateRip verification** — every track is checked against the AccurateRip database (v1 and v2 checksums, offset-tolerant) and reported with a confidence score
 - **SHA256 verification** — `rustydisc verify` checks every ripped file against its stored checksum
 
 ### Web UI
@@ -211,7 +215,7 @@ Want to look around first? `rustydisc serve --mock` simulates a drive, with no h
 
 <p align="center"><img src="Images/Screenshots/disc-scan.png" alt="Disc scan with MusicBrainz match" width="820"></p>
 
-**Live progress** — jobs run on the server and stream their progress to every open browser. Close the tab and come back later; the job keeps going. A banner follows you around the app while the drive is busy.
+**Live progress** — jobs run on the server and stream their progress to every open browser. Close the tab and come back later; the job keeps going. A banner follows you around the app while the drive is busy. When the rip finishes its AccurateRip check, a per-track result table appears (the simulated rip in this screenshot shows a drive-offset match).
 
 <p align="center"><img src="Images/Screenshots/rip-progress.png" alt="A rip in progress with live log" width="820"></p>
 
@@ -223,7 +227,7 @@ Want to look around first? `rustydisc serve --mock` simulates a drive, with no h
 
 <p align="center"><img src="Images/Screenshots/library.png" alt="Library grid of ripped albums" width="820"></p>
 
-**Play, download and verify** — play tracks in the browser, download files, and re-check an archive against its SHA-256 checksums with one click.
+**Play, download and verify** — play tracks in the browser, download files, see each album's stored AccurateRip result, and re-check an archive against its SHA-256 checksums with one click.
 
 <p align="center"><img src="Images/Screenshots/library-detail.png" alt="Album detail with verification result and audio players" width="820"></p>
 
@@ -462,7 +466,8 @@ After detecting the disc, RustyDisc automatically:
 2. Queries the **MusicBrainz API** for album title, artist, year, and track titles
 3. Downloads **cover art** from the Cover Art Archive
 4. Rips audio securely with **cdparanoia**
-5. Encodes to the requested format and **embeds all metadata and cover art** into each file
+5. Checks each track against the **AccurateRip** database
+6. Encodes to the requested format and **embeds all metadata and cover art** into each file
 
 ```
 rustydisc rip [OPTIONS]
@@ -476,7 +481,8 @@ rustydisc rip [OPTIONS]
 | `--format <fmt>` | Audio format: `wav`, `flac`, `alac`, `aiff`, `ogg`, `mp3`, `opus` (default: `flac`) |
 | `--archive` | Archive mode: store in `audio/` + `metadata/` subdirs; add `musicbrainz.json` + `checksums.json` |
 | `--no-musicbrainz` | Skip MusicBrainz lookup (for offline use or discs not in the database) |
-| `--debug` | Verbose output including MusicBrainz URLs, ffmpeg commands |
+| `--no-accuraterip` | Skip the AccurateRip database check (for offline use) |
+| `--debug` | Verbose output including MusicBrainz and AccurateRip URLs, ffmpeg commands |
 | `--progress-json` | Emit machine-readable JSON progress events to stdout |
 
 **Audio formats:**
@@ -511,6 +517,7 @@ Artist - Album (Year)/
     disc.json           ← full TOC, session layout, track LBAs, DiscID
     cdtext.json         ← CD-Text in structured JSON (if present on disc)
     musicbrainz.json    ← full MusicBrainz release data (if found)
+    accuraterip.json    ← per-track AccurateRip result (if the disc is in the database)
     checksums.json      ← SHA256 + byte count per file
 ```
 
@@ -978,7 +985,22 @@ Exit codes:
 
 ### Secure ripping
 
-Audio extraction uses **cdparanoia** in its full paranoia mode: it reads sectors with overlap, compares the results, re-reads on disagreement, and corrects jitter, so scratched or marginal discs still come out as close to bit-perfect as the drive allows. RustyDisc does **not** yet check rips against the AccurateRip database, so if you need that confirmation, run [whipper](https://github.com/whipper-team/whipper) or Exact Audio Copy alongside it.
+Audio extraction uses **cdparanoia** in its full paranoia mode: it reads sectors with overlap, compares the results, re-reads on disagreement, and corrects jitter, so scratched or marginal discs still come out as close to bit-perfect as the drive allows.
+
+### AccurateRip
+
+After extraction, and before encoding, every track is checked against the [AccurateRip](http://www.accuraterip.com/) database, which holds checksums of the same pressing ripped by other people. RustyDisc looks the disc up by its table of contents, computes the **v1 and v2** checksums for each track, and reports a per-track confidence (the number of independent rips that agree).
+
+Drives read audio a few hundred samples early or late (the "read offset"), and cdparanoia does not correct for it, so an accurate rip would normally fail to match. RustyDisc therefore also matches each track at every shift of up to ±2939 samples. A match at a shift still proves the audio is identical, and when all tracks agree on the same shift it is reported as a hint of your drive's offset. The saved audio is **not** shifted, so it is exactly what the drive returned.
+
+What to expect:
+
+- **Verified, confidence ≥ 2** — the rip matches at least two other people's rips.
+- **Confidence 1** — matches one other rip; good, but weaker evidence.
+- **No match** — a damaged read, a different pressing than the database holds, or a v2-only database entry on a drive that needs an offset. Try the rip again, or compare with another drive.
+- **Not in the database** — nothing to compare against; this says nothing about the rip.
+
+The check needs internet access (use `--no-accuraterip` to skip it) and never fails a rip. In archive mode the full report is stored as `metadata/accuraterip.json`. The check is skipped when the disc's table of contents can't be read completely. The checksum maths is tested against the reference implementation and real disc IDs, but it has not yet been run against a large range of physical discs, so please report any mismatch that looks wrong.
 
 ### User permissions
 

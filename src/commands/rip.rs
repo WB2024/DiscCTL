@@ -33,6 +33,10 @@ pub struct RipArgs {
     #[arg(long)]
     pub no_musicbrainz: bool,
 
+    /// Skip the AccurateRip check (for offline use)
+    #[arg(long)]
+    pub no_accuraterip: bool,
+
     /// Print debug information
     #[arg(long)]
     pub debug: bool,
@@ -70,6 +74,7 @@ pub fn run(args: RipArgs) -> Result<(), Error> {
         debug:          args.debug,
         progress_json:  args.progress_json,
         no_musicbrainz: args.no_musicbrainz,
+        no_accuraterip: args.no_accuraterip,
     };
 
     rip::rip(&opts)?;

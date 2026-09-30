@@ -136,6 +136,8 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .toast.err { border-left-color: var(--err); } .toast.ok { border-left-color: var(--ok); }
 audio { width: 100%; height: 34px; }
 a { color: var(--accent2); }
+table.ar td, table.ar th { padding: 4px 8px; }
+.ar-ok { color: var(--ok); } .ar-bad { color: var(--err); } .ar-skip { color: var(--muted); }
 pre.json { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 12px; overflow: auto; max-height: 340px; font: 12px/1.5 var(--mono); }
 </style>
 </head>
@@ -195,6 +197,7 @@ pre.json { background: var(--bg); border: 1px solid var(--line); border-radius: 
             </label>
             <label class="check"><input type="checkbox" id="rip-archive"><span>Archive mode<small>audio/ + metadata/ folders with disc.json, cdtext.json, musicbrainz.json and SHA-256 checksums</small></span></label>
             <label class="check"><input type="checkbox" id="rip-nomb"><span>Skip MusicBrainz lookup<small>for offline use or discs that aren't in the database</small></span></label>
+            <label class="check"><input type="checkbox" id="rip-noar"><span>Skip AccurateRip check<small>don't compare the rip with the AccurateRip database</small></span></label>
             <label class="check"><input type="checkbox" id="rip-debug"><span>Debug output</span></label>
           </div>
           <div style="display:flex;flex-direction:column;gap:10px">
@@ -370,6 +373,21 @@ function showPage(name) {
 window.addEventListener("hashchange", () => showPage(location.hash.slice(1)));
 $("#nav").addEventListener("click", e => { const b = e.target.closest("button"); if (b) showPage(b.dataset.page); });
 
+// ── AccurateRip report ─────────────────────────────────────────────────────
+function arTable(r) {
+  if (!r) return "";
+  if (!r.found) return `<div class="notice" style="margin-top:12px"><b>AccurateRip</b> — this disc isn't in the database yet, so the rip couldn't be compared.</div>`;
+  const rows = r.tracks.map(t => {
+    const ok = t.status === "verified";
+    const detail = ok ? `accurately ripped · v${t.version} · confidence ${t.confidence}${t.shift_samples ? ` · matched at ${t.shift_samples > 0 ? "+" : ""}${t.shift_samples} sample shift` : ""}`
+      : t.status === "skipped" ? "not checked" : "no match (damaged read, different pressing, or uncorrected drive offset)";
+    return `<tr><td>${t.track}</td><td class="${ok ? "ar-ok" : t.status === "skipped" ? "ar-skip" : "ar-bad"}">${ok ? "✔" : t.status === "skipped" ? "–" : "✖"}</td><td>${esc(detail)}</td></tr>`;
+  }).join("");
+  const shift = r.detected_shift_samples ? `<div class="muted" style="margin-top:6px">Every verified track matched at a ${r.detected_shift_samples > 0 ? "+" : ""}${r.detected_shift_samples} sample shift, which suggests your drive's read offset. The audio is saved as read (not offset-corrected).</div>` : "";
+  return `<div class="notice" style="margin-top:12px"><b>AccurateRip</b> — ${r.verified} of ${r.total} tracks verified against ${r.pressings} pressing${r.pressings === 1 ? "" : "s"} in the database
+    <table class="ar" style="margin-top:8px"><tbody>${rows}</tbody></table>${shift}</div>`;
+}
+
 // ── Job panel (SSE follower) ────────────────────────────────────────────────
 function jobPanel(container, jobId, { onEnd } = {}) {
   container.__panel?.close();
@@ -380,6 +398,7 @@ function jobPanel(container, jobId, { onEnd } = {}) {
       <div class="bar"><i class="jp-bar"></i></div>
       <div class="stepline jp-step muted"></div>
       <div class="notice warn jp-input hidden" style="margin-top:10px"><div class="row"><span class="grow jp-input-msg"></span><button class="btn primary small jp-continue">Continue</button></div></div>
+      <div class="jp-result"></div>
       <div class="notice err jp-error hidden" style="margin-top:10px"></div>
       <pre class="log jp-log"></pre>
     </div>`;
@@ -409,6 +428,7 @@ function jobPanel(container, jobId, { onEnd } = {}) {
       case "log": addLog(ev.msg); break;
       case "input": q(".jp-input-msg").textContent = ev.msg; q(".jp-input").classList.remove("hidden"); break;
       case "status": setStatus(ev.status); break;
+      case "result": if (ev.name === "accuraterip") q(".jp-result").innerHTML = arTable(ev.data); break;
       case "error": { const e = q(".jp-error"); e.classList.remove("hidden"); e.innerHTML = `<b>${esc(ev.error)}</b> — ${esc(ev.message).replace(/\n/g, "<br>")}${ev.recoverable ? "" : ""}`; break; }
     }
   };
@@ -556,7 +576,7 @@ async function startRip() {
   if ($('input[name=dest]:checked').value === "custom" && !folder) return toast("Enter a folder name or choose auto-naming", "err");
   const body = {
     device: selectedDevice(), format: $("#rip-format").value, archive: $("#rip-archive").checked,
-    no_musicbrainz: $("#rip-nomb").checked, debug: $("#rip-debug").checked, folder: folder || null,
+    no_musicbrainz: $("#rip-nomb").checked, no_accuraterip: $("#rip-noar").checked, debug: $("#rip-debug").checked, folder: folder || null,
   };
   try {
     const job = await api("/api/jobs/rip", { body });
@@ -707,6 +727,12 @@ const GRAPH_EXAMPLE = {
 };
 
 // ── Library ─────────────────────────────────────────────────────────────────
+function arBadge(a) {
+  if (!a || !a.found) return "";
+  const all = a.verified === a.total;
+  return `<span class="badge ${all ? "ok" : "warn"}" title="AccurateRip: ${a.verified} of ${a.total} tracks verified">AR ${a.verified}/${a.total}</span>`;
+}
+
 async function loadLibrary() {
   $("#lib-detail").classList.add("hidden"); $("#lib-list").classList.remove("hidden");
   const box = $("#lib-list");
@@ -721,7 +747,7 @@ async function loadLibrary() {
           <div class="muted" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(e.artist || "")}${e.year ? " · " + esc(e.year) : ""}</div>
           <div style="margin-top:6px;display:flex;gap:4px;flex-wrap:wrap">
             ${e.audio_files ? `<span class="badge">${e.audio_files} tracks</span>` : ""}${e.has_data ? `<span class="badge">data</span>` : ""}
-            ${e.archive ? `<span class="badge accent">archive</span>` : ""}<span class="badge">${fmtBytes(e.total_bytes)}</span></div></div></div>`).join("")}</div>`;
+            ${e.archive ? `<span class="badge accent">archive</span>` : ""}${arBadge(e.accuraterip)}<span class="badge">${fmtBytes(e.total_bytes)}</span></div></div></div>`).join("")}</div>`;
     $$(".lib-card", box).forEach(c => c.onclick = () => openRip(c.dataset.name));
   } catch (e) { box.innerHTML = `<div class="notice err">${esc(e.message)}</div>`; }
 }
@@ -751,6 +777,7 @@ async function openRip(name) {
           </div>
         </div></div>
         <div id="verify-job"></div>
+        ${d.accuraterip_report ? arTable(d.accuraterip_report) : ""}
       </div>
       ${audio.length ? `<div class="card"><h2>Audio</h2><table><tbody>${audio.map((f, i) => `
         <tr><td style="width:28px" class="muted">${i + 1}</td><td>${esc(titleFor(f, i) || f.path.split("/").pop())}<div class="muted mono">${esc(f.path)}</div></td>

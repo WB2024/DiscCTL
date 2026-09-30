@@ -109,7 +109,7 @@ fn cancelled(job: &Job) {
     job.push(Event::Status { status: Status::Cancelled });
 }
 
-pub async fn rip(job: Arc<Job>, rips_dir: PathBuf, folder: Option<String>, archive: bool, format: String, no_mb: bool) {
+pub async fn rip(job: Arc<Job>, rips_dir: PathBuf, folder: Option<String>, archive: bool, format: String, no_mb: bool, no_ar: bool) {
     job.push(Event::Step { msg: "Analysing disc...".into() });
     job.push(Event::Progress { pct: 0.0 });
     if work(&job, 700).await { return cancelled(&job); }
@@ -146,6 +146,26 @@ pub async fn rip(job: Arc<Job>, rips_dir: PathBuf, folder: Option<String>, archi
         job.push(Event::Progress { pct: 85.0 + (i + 1) as f32 / TRACKS.len() as f32 * 12.0 });
     }
 
+    let mut ar_report = None;
+    if !no_ar {
+        job.push(Event::Step { msg: "Checking rip against the AccurateRip database...".into() });
+        if work(&job, 900).await { return cancelled(&job); }
+        const CONFIDENCE: [u32; 5] = [48, 51, 47, 44, 12];
+        let tracks: Vec<Value> = TRACKS.iter().enumerate().map(|(i, _)| json!({
+            "track": i + 1, "status": "verified", "confidence": CONFIDENCE[i],
+            "version": if i == 3 { 1 } else { 2 }, "shift_samples": -6,
+            "v1": "00000000", "v2": "00000000",
+        })).collect();
+        let report = json!({
+            "found": true, "database_url": "http://www.accuraterip.com/accuraterip/…",
+            "pressings": 2, "verified": TRACKS.len(), "total": TRACKS.len(),
+            "detected_shift_samples": -6, "tracks": tracks,
+        });
+        job.push(Event::Step { msg: format!("AccurateRip: {0} of {0} tracks verified", TRACKS.len()) });
+        job.push(Event::Result { name: "accuraterip".into(), data: report.clone() });
+        ar_report = Some(report);
+    }
+
     if archive {
         job.push(Event::Step { msg: "Writing metadata and checksums...".into() });
         let meta = out.join("metadata");
@@ -153,6 +173,9 @@ pub async fn rip(job: Arc<Job>, rips_dir: PathBuf, folder: Option<String>, archi
         let _ = std::fs::write(meta.join("disc.json"), serde_json::to_string_pretty(&info("redbook", "mock").unwrap()).unwrap());
         if !no_mb {
             let _ = std::fs::write(meta.join("musicbrainz.json"), serde_json::to_string_pretty(&release()).unwrap());
+        }
+        if let Some(r) = &ar_report {
+            let _ = std::fs::write(meta.join("accuraterip.json"), serde_json::to_string_pretty(r).unwrap());
         }
         let dir = out.to_string_lossy().to_string();
         match metadata::generate_checksums(&dir).and_then(|m| metadata::write_checksums(&m, &meta.to_string_lossy())) {

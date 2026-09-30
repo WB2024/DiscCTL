@@ -1,3 +1,4 @@
+pub mod accuraterip;
 pub mod data;
 pub mod encoder;
 pub mod engine;
@@ -22,6 +23,8 @@ pub struct RipOptions {
     pub debug: bool,
     pub progress_json: bool,
     pub no_musicbrainz: bool,
+    /// Skip the AccurateRip database check
+    pub no_accuraterip: bool,
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
@@ -212,6 +215,12 @@ fn rip_redbook(
         &opts.device, &wav_dir, track_count, opts.debug, opts.progress_json,
     )?;
 
+    let ar = if opts.no_accuraterip {
+        None
+    } else {
+        accuraterip::check(info, &wav_tracks, opts.debug, opts.progress_json)
+    };
+
     let ext   = opts.format.extension();
     let total = wav_tracks.len();
 
@@ -262,6 +271,9 @@ fn rip_redbook(
         write_cdtext_json(info, output_dir)?;
         if let Some(release) = mb {
             write_mb_json(release, output_dir)?;
+        }
+        if let Some(report) = &ar {
+            write_accuraterip_json(report, output_dir)?;
         }
         if opts.progress_json { emit_step("Generating checksums..."); emit_progress(96.0); }
         let manifest = metadata::generate_checksums(output_dir)?;
@@ -317,6 +329,7 @@ fn rip_bluebook(
     std::fs::create_dir_all(&data_dir)?;
 
     let audio_session = info.sessions.iter().find(|s| matches!(s.kind, SessionKind::Audio));
+    let mut ar: Option<accuraterip::Report> = None;
 
     if let Some(session) = audio_session {
         let track_count = session.tracks.iter().filter(|t| t.kind == TrackKind::Audio).count();
@@ -333,6 +346,10 @@ fn rip_bluebook(
         let wav_tracks = engine::rip_all_tracks(
             &opts.device, &wav_dir, track_count, opts.debug, opts.progress_json,
         )?;
+
+        if !opts.no_accuraterip {
+            ar = accuraterip::check(info, &wav_tracks, opts.debug, opts.progress_json);
+        }
 
         let ext   = opts.format.extension();
         let total = wav_tracks.len();
@@ -386,6 +403,9 @@ fn rip_bluebook(
     if let Some(release) = mb {
         write_mb_json(release, output_dir)?;
     }
+    if let Some(report) = &ar {
+        write_accuraterip_json(report, output_dir)?;
+    }
 
     if opts.archive {
         if opts.progress_json { emit_step("Generating checksums..."); emit_progress(95.0); }
@@ -410,6 +430,13 @@ fn write_mb_json(release: &ReleaseInfo, output_dir: &str) -> Result<(), Error> {
     let meta_dir = format!("{}/metadata", output_dir);
     std::fs::create_dir_all(&meta_dir)?;
     std::fs::write(format!("{}/musicbrainz.json", meta_dir), serde_json::to_string_pretty(release)?)?;
+    Ok(())
+}
+
+fn write_accuraterip_json(report: &accuraterip::Report, output_dir: &str) -> Result<(), Error> {
+    let meta_dir = format!("{}/metadata", output_dir);
+    std::fs::create_dir_all(&meta_dir)?;
+    std::fs::write(format!("{}/accuraterip.json", meta_dir), serde_json::to_string_pretty(report)?)?;
     Ok(())
 }
 

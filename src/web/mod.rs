@@ -430,6 +430,12 @@ fn describe_rip(dir: &Path) -> Value {
     let artist = mb.as_ref().and_then(|m| m["album_artist"].as_str()).map(String::from);
     let year = mb.as_ref().and_then(|m| m["year"].as_str()).map(String::from);
 
+    let ar = read_json(&dir.join("metadata/accuraterip.json"));
+    let accuraterip = ar.as_ref().map(|r| json!({
+        "found": r["found"], "verified": r["verified"], "total": r["total"],
+        "detected_shift_samples": r["detected_shift_samples"],
+    }));
+
     let modified = std::fs::metadata(dir)
         .and_then(|m| m.modified())
         .ok()
@@ -441,6 +447,7 @@ fn describe_rip(dir: &Path) -> Value {
         "name": name, "archive": archive, "cover": cover,
         "audio_files": audio.len(), "has_data": has_data, "total_bytes": total,
         "album": album, "artist": artist, "year": year, "modified": modified,
+        "accuraterip": accuraterip,
         "files": files.iter().map(|(p, s)| json!({"path": p, "size": s, "audio": is_audio(p)})).collect::<Vec<_>>(),
     })
 }
@@ -477,6 +484,7 @@ async fn library_entry(State(st): S, UrlPath(name): UrlPath<String>) -> ApiResul
         let mut v = describe_rip(&dir);
         let mb = read_json(&dir.join("metadata/musicbrainz.json")).or_else(|| read_json(&dir.join("musicbrainz.json")));
         v["musicbrainz"] = mb.unwrap_or(Value::Null);
+        v["accuraterip_report"] = read_json(&dir.join("metadata/accuraterip.json")).unwrap_or(Value::Null);
         v
     })
     .await
@@ -603,14 +611,22 @@ async fn validate(State(st): S, Json(req): Json<BurnReq>) -> ApiResult<Json<Valu
 // ── Jobs ─────────────────────────────────────────────────────────────────────
 
 #[derive(Deserialize)]
+#[serde(default)]
 struct RipReq {
     device: Option<String>,
     format: Option<String>,
     archive: bool,
     no_musicbrainz: bool,
+    no_accuraterip: bool,
     debug: bool,
     /// Explicit folder name inside the rips directory. Empty = auto-name from metadata.
     folder: Option<String>,
+}
+
+impl Default for RipReq {
+    fn default() -> Self {
+        RipReq { device: None, format: None, archive: false, no_musicbrainz: false, no_accuraterip: false, debug: false, folder: None }
+    }
 }
 
 async fn start_rip(State(st): S, Json(req): Json<RipReq>) -> ApiResult<Json<Value>> {
@@ -637,7 +653,7 @@ async fn start_rip(State(st): S, Json(req): Json<RipReq>) -> ApiResult<Json<Valu
         }
         None => args.extend(["--dir".into(), path_str(&st.cfg.rips_dir)]),
     }
-    for (flag, on) in [("--archive", req.archive), ("--no-musicbrainz", req.no_musicbrainz), ("--debug", req.debug)] {
+    for (flag, on) in [("--archive", req.archive), ("--no-musicbrainz", req.no_musicbrainz), ("--no-accuraterip", req.no_accuraterip), ("--debug", req.debug)] {
         if on {
             args.push(flag.into());
         }
@@ -645,7 +661,7 @@ async fn start_rip(State(st): S, Json(req): Json<RipReq>) -> ApiResult<Json<Valu
 
     let job = start_job(&st, "rip", &format!("Rip {device} → {}", format.to_uppercase()), true)?;
     if st.cfg.mock {
-        tokio::spawn(mock::rip(job.clone(), st.cfg.rips_dir.clone(), folder, req.archive, format, req.no_musicbrainz));
+        tokio::spawn(mock::rip(job.clone(), st.cfg.rips_dir.clone(), folder, req.archive, format, req.no_musicbrainz, req.no_accuraterip));
     } else {
         spawn_cli(&st, job.clone(), args, None);
     }

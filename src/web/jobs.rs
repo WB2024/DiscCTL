@@ -45,6 +45,8 @@ pub enum Event {
     /// The process is waiting for the user (e.g. "insert the next blank disc").
     Input { msg: String },
     Status { status: Status },
+    /// Structured output from the CLI, e.g. the AccurateRip report.
+    Result { name: String, data: serde_json::Value },
     Error { error: String, message: String, recoverable: bool },
 }
 
@@ -332,6 +334,13 @@ fn handle_stdout_line(job: &Job, line: &str) {
                 job.push(Event::Step { msg });
                 return;
             }
+            Some("accuraterip") => {
+                job.push(Event::Result {
+                    name: "accuraterip".into(),
+                    data: v.get("report").cloned().unwrap_or(serde_json::Value::Null),
+                });
+                return;
+            }
             Some("done") => return,
             _ => {}
         }
@@ -346,7 +355,7 @@ async fn read_stderr(job: Arc<Job>, mut stderr: tokio::process::ChildStderr) -> 
     let mut buf = [0u8; 4096];
     let mut pending = String::new();
 
-    let mut flush_lines = |pending: &mut String, all: &mut Vec<String>, job: &Job, force: bool| {
+    let flush_lines = |pending: &mut String, all: &mut Vec<String>, job: &Job, force: bool| {
         while let Some(pos) = pending.find(['\n', '\r']) {
             let line: String = pending.drain(..=pos).collect();
             let line = line.trim().to_string();
