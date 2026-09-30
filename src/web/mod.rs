@@ -6,6 +6,7 @@
 //! browser over Server-Sent Events.
 
 mod auth;
+mod cache;
 mod jobs;
 mod mock;
 mod settings;
@@ -50,6 +51,8 @@ pub struct Config {
     pub config_dir: PathBuf,
     /// Extra folders Rusty Stick may write to (besides detected USB sticks).
     pub stick_dirs: Vec<PathBuf>,
+    /// Default place for converted files (Settings can override it).
+    pub cache_dir: Option<PathBuf>,
     pub mock: bool,
     /// Login from the command line / environment: (user, password).
     pub auth: Option<(String, String)>,
@@ -194,8 +197,12 @@ pub async fn serve(cfg: Config, bind: SocketAddr) -> Result<(), Error> {
     let auth = auth::Auth::new(env_user, env_pass).map_err(Error::validation)?;
     let state = Arc::new(AppState { cfg, jobs: Jobs::default(), settings, auth, cover_cache: Default::default(), stick_scan: Default::default(), stick_existing: Default::default() });
 
+    cache::spawn_tidier(state.clone());
+
     let app = Router::new()
         .route("/", get(|| async { Html(INDEX_HTML) }))
+        .route("/api/cache", get(cache::info))
+        .route("/api/cache/clear", post(cache::clear))
         .route("/api/status", get(status))
         .route("/api/login", post(auth::login))
         .route("/api/logout", post(auth::logout))
@@ -506,6 +513,10 @@ struct SettingsUpdate {
     stick_extra_folders: Vec<String>,
     #[serde(default)]
     stick_preset: String,
+    convert_cache_mode: Option<String>,
+    convert_cache_days: Option<u32>,
+    convert_cache_max_gb: Option<u32>,
+    convert_cache_dir: Option<String>,
 }
 
 async fn put_settings(State(st): S, Json(u): Json<SettingsUpdate>) -> ApiResult<Json<Value>> {
@@ -521,6 +532,10 @@ async fn put_settings(State(st): S, Json(u): Json<SettingsUpdate>) -> ApiResult<
         fanart_api_key: u.fanart_api_key.unwrap_or(current.fanart_api_key),
         stick_extra_folders: u.stick_extra_folders,
         stick_preset: u.stick_preset,
+        convert_cache_mode: u.convert_cache_mode.unwrap_or(current.convert_cache_mode),
+        convert_cache_days: u.convert_cache_days.unwrap_or(current.convert_cache_days),
+        convert_cache_max_gb: u.convert_cache_max_gb.unwrap_or(current.convert_cache_max_gb),
+        convert_cache_dir: u.convert_cache_dir.unwrap_or(current.convert_cache_dir),
         auth_user: current.auth_user,
         auth_password_hash: current.auth_password_hash,
     }
@@ -530,6 +545,9 @@ async fn put_settings(State(st): S, Json(u): Json<SettingsUpdate>) -> ApiResult<
         Error::backend(format!("Could not save settings to {}: {e}", st.settings.path().display()))
     })?;
     st.cover_cache.lock().unwrap().clear();
+    // A shorter retention applies straight away.
+    let st2 = st.clone();
+    tokio::task::spawn_blocking(move || cache::tidy(&st2));
     Ok(Json(json!({"settings": st.settings.get().public()})))
 }
 
@@ -1140,7 +1158,10 @@ async fn start_rip(State(st): S, Json(req): Json<RipReq>) -> ApiResult<Json<Valu
 }
 
 async fn start_burn(State(st): S, Json(req): Json<BurnReq>) -> ApiResult<Json<Value>> {
-    let (args, tmp) = burn_args("burn", &req, &st.cfg)?;
+    let (mut args, tmp) = burn_args("burn", &req, &st.cfg)?;
+    if req.graph.is_none() {
+        args.extend(cache::job_args(&st));
+    }
     let label = req.label.clone().filter(|l| !l.is_empty()).unwrap_or_else(|| "Untitled".into());
     let fmt = if req.graph.is_some() { "disc graph".to_string() } else { req.format.clone().unwrap_or_else(|| "redbook".into()) };
     let title = format!("{} \"{label}\" ({fmt})", if req.dry_run { "Dry-run burn" } else { "Burn" });

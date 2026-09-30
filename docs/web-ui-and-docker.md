@@ -44,3 +44,16 @@ The image bundles everything RustyDisc needs (`cdparanoia`, `cdrdao`, `xorriso`,
 
  by default the UI has no login, so keep it on a trusted network. To require one, either open **Settings → Security** and choose a user name and password (at least 8 characters), or set `RUSTYDISC_AUTH_USER` and `RUSTYDISC_AUTH_PASSWORD` (`--auth-user` / `--auth-password`) which take priority and can't be changed from the UI. With a login on, every page, API call, file download and live-progress stream needs a session cookie; passwords are stored only as Argon2 hashes in `/config/settings.json` (mode 600), sessions last a week and end on log-out or a password change, and 8 wrong attempts from one address lock it out for 5 minutes. It is plain HTTP, so on an untrusted network put a TLS reverse proxy in front.
 
+## Converted files
+
+When Rusty Stick or a Data disc converts audio to fit (say FLAC to MP3), the converted files can be thrown away or kept for next time. Choose in **Settings → Converted files**:
+
+- **Delete right after use** (default): nothing is kept.
+- **Keep for N days** after they were last used: any job that needs the same conversion of the same file reuses it instantly.
+- **Keep until I clear them.**
+
+A **size limit** (default 20 GB, 0 for none) removes the least recently used files first, and **Clear now** empties the cache. Files are matched on the source file's path, size and modification time plus the conversion, so an edited file or a different bitrate is never served a stale copy. Files used in the last 15 minutes are never removed, so a running job is safe.
+
+They live in `cache` next to the settings by default; set another folder in Settings, or with `RUSTYDISC_CACHE_DIR` (in Docker, mount a volume there if you convert a lot). Temporary files while a job runs go to `/tmp`, or use `--stage-dir` on the command line.
+
+From the command line: `--convert-cache <dir>` with `--cache-days <n>` and `--cache-max-gb <n>` on `rustydisc stick` and `rustydisc burn`.

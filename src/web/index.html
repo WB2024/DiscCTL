@@ -57,7 +57,7 @@ main { padding: 22px 40px 60px; max-width: 1500px; width: 100%; margin: 0 auto; 
 .btn.primary:hover:not(:disabled) { background: var(--accent2); border-color: var(--accent2); }
 .btn.danger { border-color: color-mix(in srgb, var(--err) 60%, var(--line)); color: var(--err); }
 .btn.small { padding: 3px 9px; font-size: 12.5px; }
-input[type=text], input[type=search], input[type=password], select, textarea { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; min-width: 0; }
+input[type=text], input[type=search], input[type=password], input[type=number], select, textarea { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; min-width: 0; }
 input:focus, select:focus, textarea:focus { outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent); outline-offset: 0; }
 textarea { width: 100%; font-family: var(--mono); font-size: 12.5px; resize: vertical; }
 label.field { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--muted); }
@@ -500,6 +500,23 @@ pre.json { background: var(--bg); border: 1px solid var(--line); border-radius: 
             <label class="check"><input type="checkbox" id="set-noar"><span>Skip the AccurateRip check</span></label>
           </div>
         </div>
+      </div>
+
+      <div class="card" id="convert-card">
+        <h2>Converted files</h2>
+        <p class="muted" style="margin-top:0">When Rusty Stick or a Data disc converts audio to fit, what happens to the converted files afterwards? Keeping them means the next job that needs the same conversion is instant.</p>
+        <div style="display:flex;flex-direction:column;gap:10px">
+          <label class="check"><input type="radio" name="cc-mode" value="delete"><span>Delete them right after use<small>nothing is kept; the default</small></span></label>
+          <label class="check"><input type="radio" name="cc-mode" value="days"><span>Keep them for <input type="number" id="cc-days" min="1" max="3650" style="width:70px" class="inline"> days after they were last used<small>reused by any job in that time, then removed</small></span></label>
+          <label class="check"><input type="radio" name="cc-mode" value="forever"><span>Keep them until I clear them<small>limited only by the size cap below</small></span></label>
+        </div>
+        <div class="grid2" style="margin-top:14px">
+          <label class="field" id="cc-max-wrap">Size limit (GB)<small>The least recently used files go first. 0 means no limit.</small>
+            <input type="number" id="cc-max" min="0" max="100000" style="width:120px"></label>
+          <label class="field" id="cc-dir-wrap">Where they are kept<small>Empty uses the <span class="mono">cache</span> folder next to the settings. Point it at a bigger disk if you convert a lot.</small>
+            <input type="text" id="cc-dir" spellcheck="false" placeholder="/cache"></label>
+        </div>
+        <div class="row" style="margin-top:12px"><span class="muted grow" id="cc-usage">…</span><button class="btn small" id="cc-clear">Clear now</button></div>
       </div>
 
       <div class="card" id="security-card">
@@ -1839,6 +1856,7 @@ function renderSettings() {
   $("#set-stick-folders").value = (SET.stick_extra_folders || []).join("\n");
   $("#set-stick-preset").innerHTML = (STICK.meta?.presets || FALLBACK_PRESETS).map(p => `<option value="${p.id}">${esc(p.label)}</option>`).join("");
   $("#set-stick-preset").value = SET.stick_preset || "artist-album";
+  renderConvertCache();
   $("#fanart-key").value = "";
   $("#fanart-key").placeholder = SET.fanart_api_key_set ? `Key saved (${SET.fanart_api_key_hint}) — paste a new one to replace it` : "Paste your fanart.tv API key";
   $("#fanart-remove").classList.toggle("hidden", !SET.fanart_api_key_set);
@@ -1884,6 +1902,30 @@ function coverWarning() {
   w.textContent = msg; w.classList.toggle("hidden", !msg);
 }
 
+function renderConvertCache() {
+  $$('input[name="cc-mode"]').forEach(r => { r.checked = r.value === SET.convert_cache_mode; r.onchange = syncConvertCache; });
+  $("#cc-days").value = SET.convert_cache_days; $("#cc-max").value = SET.convert_cache_max_gb; $("#cc-dir").value = SET.convert_cache_dir || "";
+  $("#cc-clear").onclick = async () => {
+    if (!confirmBox("Delete every converted file that is being kept?")) return;
+    try { const r = await api("/api/cache/clear", { body: {} }); toast(`Cleared ${r.removed} file${r.removed === 1 ? "" : "s"} (${fmtBytes(r.freed_bytes)})`, "ok"); loadCacheUsage(); }
+    catch (e) { toast(e.message, "err", 8000); }
+  };
+  syncConvertCache(); loadCacheUsage();
+}
+function syncConvertCache() {
+  const mode = $('input[name="cc-mode"]:checked')?.value || "delete";
+  $("#cc-days").disabled = mode !== "days";
+  $("#cc-max-wrap").style.opacity = $("#cc-dir-wrap").style.opacity = mode === "delete" ? .5 : 1;
+  $("#cc-max").disabled = $("#cc-dir").disabled = mode === "delete";
+}
+async function loadCacheUsage() {
+  try {
+    const c = await api("/api/cache"), s = c.stats;
+    const age = s.oldest_secs == null ? "" : ` · oldest last used ${s.oldest_secs < 3600 ? "under an hour" : s.oldest_secs < 172800 ? Math.round(s.oldest_secs / 3600) + " hours" : Math.round(s.oldest_secs / 86400) + " days"} ago`;
+    $("#cc-usage").innerHTML = s.files ? `Using <b>${fmtBytes(s.bytes)}</b> in ${s.files} file${s.files === 1 ? "" : "s"}${age} · <span class="mono">${esc(c.dir)}</span>` : `Nothing kept right now · <span class="mono">${esc(c.dir)}</span>`;
+  } catch { $("#cc-usage").textContent = ""; }
+}
+
 async function saveSettings(extra = {}) {
   const body = {
     rip_format: $("#set-format").value, rip_archive: $("#set-archive").checked,
@@ -1891,6 +1933,10 @@ async function saveSettings(extra = {}) {
     cover_sources: enabledSources(), cover_save_file: $("#cover-save").checked, cover_embed: $("#cover-embed").checked,
     stick_extra_folders: $("#set-stick-folders").value.split("\n").map(l => l.trim()).filter(Boolean),
     stick_preset: $("#set-stick-preset").value,
+    convert_cache_mode: $('input[name="cc-mode"]:checked')?.value || "delete",
+    convert_cache_days: Math.max(1, parseInt($("#cc-days").value) || 7),
+    convert_cache_max_gb: Math.max(0, parseInt($("#cc-max").value) || 0),
+    convert_cache_dir: $("#cc-dir").value.trim(),
     ...extra,
   };
   const typed = $("#fanart-key").value.trim();

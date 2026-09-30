@@ -69,7 +69,7 @@ Built in Rust for Linux. Runs headless in Docker, so the drive can live in a ser
 - **Inspect** it down to individual tracks
 - **Reformat** the whole stick (exFAT, FAT32, ext4, NTFS)
 - File music your way: A–Z, artist, album, disc, or your own pattern
-- **Convert to fit**, with one-click size suggestions
+- **Convert to fit**, with one-click size suggestions, and keep converted files for reuse (or delete them right away, your call)
 - **Tidy existing music** and resolve duplicates by quality, date or rule
 
 </td>

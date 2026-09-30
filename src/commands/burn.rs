@@ -80,6 +80,8 @@ pub struct BurnArgs {
     /// Keep staged files after burn (default: delete)
     #[arg(long)]
     pub keep_staged: bool,
+    #[command(flatten)]
+    pub cache: backend::cache::CacheArgs,
     /// Emit newline-delimited JSON progress events to stdout (for machine consumers)
     #[arg(long)]
     pub progress_json: bool,
@@ -236,6 +238,7 @@ fn burn_data_discs(
     // Converted files are written here one disc at a time; --stage-dir puts them somewhere with room.
     let base = args.stage_dir.clone().unwrap_or_else(|| "/tmp".to_string());
     let carry_dir = format!("{}/rustydisc_carry_{}", base, pid);
+    let cache = backend::cache::Cache::from_args(&args.cache);
     let _carry_guard = StagedDir::new(carry_dir.clone(), false, true);
 
     let mut queue: VecDeque<Queued> = files.into_iter().map(|file| Queued { file, cached: None }).collect();
@@ -276,12 +279,24 @@ fn burn_data_discs(
             } else if item.file.transcode && !args.dry_run {
                 convert_no += 1;
                 note(args, &format!("Disc {}: converting {} — {}", disc_num, convert_no, item.file.rel_path));
-                backend::transcode::transcode_file(
-                    &item.file.path,
-                    &dest.to_string_lossy(),
-                    spec.as_ref().expect("transcode implies a spec"),
-                    args.debug,
-                )?;
+                let spec = spec.as_ref().expect("transcode implies a spec");
+                let ext = spec.extension();
+                let cached_key = cache.as_ref().and_then(|_| backend::cache::Cache::key(&item.file.path, args.transcode.as_deref().unwrap_or(""), false));
+                match (&cache, cached_key) {
+                    (Some(c), Some(key)) => {
+                        let file = match c.get(&key, ext) {
+                            Some(hit) => hit,
+                            None => {
+                                let part = c.begin(&key, ext);
+                                backend::transcode::transcode_file(&item.file.path, &part.to_string_lossy(), spec, args.debug)?;
+                                c.commit(&part, &key, ext)?
+                            }
+                        };
+                        // A link costs nothing; the staged folder is deleted after the burn, the cache file stays.
+                        std::fs::hard_link(&file, &dest).or_else(|_| std::fs::copy(&file, &dest).map(|_| ()))?;
+                    }
+                    _ => backend::transcode::transcode_file(&item.file.path, &dest.to_string_lossy(), spec, args.debug)?,
+                }
                 std::fs::metadata(&dest)?.len()
             } else {
                 let source = std::fs::canonicalize(&item.file.path)?;
@@ -349,6 +364,9 @@ fn burn_data_discs(
         }
     }
 
+    if let Some(c) = &cache {
+        c.prune();
+    }
     if !args.dry_run {
         eprintln!("All {} disc{} burned successfully.", disc_num, if disc_num == 1 { "" } else { "s" });
     }
@@ -684,7 +702,7 @@ mod tests {
         let args = |files: Option<Vec<String>>, data: Option<String>| BurnArgs {
             format: "datacd".into(), audio: None, playlist: None, data, files, playlist_root: None, disc_size: None, dvd_audio_kbps: 448, dvd_standard: "pal".into(), dvd_still: None, iso_out: None,
             label: "T".into(), input: None, device: "/dev/null".into(), debug: false, dry_run: true,
-            cd_text: false, transcode: None, stage_dir: None, keep_staged: false, progress_json: false,
+            cd_text: false, transcode: None, stage_dir: None, keep_staged: false, cache: Default::default(), progress_json: false,
         };
         let resolve = |a: BurnArgs| discs::resolve_data(&DataSpec { playlist: a.playlist, files: a.files, data: a.data, playlist_root: None });
         assert!(resolve(args(None, None)).is_err());

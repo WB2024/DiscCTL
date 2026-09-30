@@ -348,6 +348,7 @@ pub async fn start(State(st): S, Json(req): Json<StickReq>) -> ApiResult<Json<Va
         a.extend(["--assume-capacity".into(), r.target.free_bytes.to_string()]);
     }
 
+    a.extend(super::cache::job_args(&st));
     let job = start_job(&st, "stick", &format!("Rusty Stick → {}", r.target.label), false)?;
     spawn_cli(&st, job.clone(), a, None);
     Ok(Json(json!(job.summary())))

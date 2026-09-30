@@ -1,4 +1,5 @@
 pub mod audio;
+pub mod cache;
 pub mod convert;
 pub mod data;
 pub mod device;

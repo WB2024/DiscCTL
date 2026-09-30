@@ -38,6 +38,15 @@ pub struct Settings {
     /// Default folder layout: a preset id.
     pub stick_preset: String,
 
+    // Converted files (from "convert to fit" in Rusty Stick and Data discs)
+    /// "delete" (right after use), "days" (keep for `convert_cache_days`) or "forever".
+    pub convert_cache_mode: String,
+    pub convert_cache_days: u32,
+    /// Keep the cache under this many GB, removing the least recently used first (0 = no limit).
+    pub convert_cache_max_gb: u32,
+    /// Where they are kept; empty = the `cache` folder next to the settings.
+    pub convert_cache_dir: String,
+
     // Optional login
     pub auth_user: String,
     /// Argon2 hash. Never sent to the browser.
@@ -57,6 +66,10 @@ impl Default for Settings {
             fanart_api_key: String::new(),
             stick_extra_folders: Vec::new(),
             stick_preset: "artist-album".into(),
+            convert_cache_mode: "delete".into(),
+            convert_cache_days: 7,
+            convert_cache_max_gb: 20,
+            convert_cache_dir: String::new(),
             auth_user: String::new(),
             auth_password_hash: String::new(),
         }
@@ -90,6 +103,15 @@ impl Settings {
         }
         if !crate::stick::layout::PRESETS.iter().any(|p| p.id == self.stick_preset) {
             self.stick_preset = "artist-album".into();
+        }
+        if !["delete", "days", "forever"].contains(&self.convert_cache_mode.as_str()) {
+            self.convert_cache_mode = "delete".into();
+        }
+        self.convert_cache_days = self.convert_cache_days.clamp(1, 3650);
+        self.convert_cache_max_gb = self.convert_cache_max_gb.min(100_000);
+        self.convert_cache_dir = self.convert_cache_dir.trim().trim_end_matches('/').to_string();
+        if !self.convert_cache_dir.is_empty() && (!self.convert_cache_dir.starts_with('/') || self.convert_cache_dir.split('/').any(|c| c == "..")) {
+            return Err(format!("'{}' isn't a usable folder: give an absolute path such as /cache", self.convert_cache_dir));
         }
         self.fanart_api_key = self.fanart_api_key.trim().to_string();
         if self.fanart_api_key.len() > 200 || self.fanart_api_key.chars().any(char::is_whitespace) {

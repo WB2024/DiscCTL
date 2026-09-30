@@ -90,6 +90,8 @@ pub struct StickArgs {
     /// Only accept playlist entries inside this folder (used by the web UI)
     #[arg(long, hide = true)]
     pub playlist_root: Option<String>,
+    #[command(flatten)]
+    pub cache: crate::backend::cache::CacheArgs,
     #[arg(long)]
     pub debug: bool,
     /// Emit newline-delimited JSON progress events to stdout
@@ -202,6 +204,7 @@ pub fn run(args: StickArgs) -> Result<(), Error> {
         debug: args.debug,
         progress_json: args.progress_json,
         stage_dir: args.stage_dir.clone(),
+        cache: crate::backend::cache::Cache::from_args(&args.cache),
     })?;
 
     let result = serde_json::json!({

@@ -18,6 +18,8 @@ use crate::{
 const PART: &str = ".rustydisc-part";
 /// How many converted files may wait in the staging folder for the writer.
 const LOOKAHEAD: usize = 6;
+/// Makes each write's staging folder unique, even for two writes in one process.
+static STAGE_SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 pub struct WriteOptions {
     pub keep_art: bool,
@@ -28,6 +30,8 @@ pub struct WriteOptions {
     pub debug: bool,
     pub progress_json: bool,
     pub stage_dir: Option<String>,
+    /// Keep converted files here so the next job can reuse them.
+    pub cache: Option<crate::backend::cache::Cache>,
 }
 
 #[derive(Debug, Default)]
@@ -115,7 +119,8 @@ impl Item<'_> {
 }
 
 struct Pipeline {
-    ready: Mutex<HashMap<usize, Result<PathBuf, String>>>,
+    /// A converted file and whether it lives in the cache (and so must not be deleted).
+    ready: Mutex<HashMap<usize, Result<(PathBuf, bool), String>>>,
     consumed: Mutex<usize>,
     cv: Condvar,
 }
@@ -213,7 +218,7 @@ pub fn write(plan: &StickPlan, opts: &WriteOptions) -> Result<Summary, Error> {
     }
 
     let total_bytes: u64 = items.iter().map(|i| i.bytes()).sum::<u64>().max(1);
-    let stage = PathBuf::from(opts.stage_dir.clone().unwrap_or_else(|| "/tmp".into())).join(format!("rustydisc_stick_{}", std::process::id()));
+    let stage = PathBuf::from(opts.stage_dir.clone().unwrap_or_else(|| "/tmp".into())).join(format!("rustydisc_stick_{}_{}", std::process::id(), STAGE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
     let _ = std::fs::remove_dir_all(&stage);
     let convert: Vec<usize> = items
         .iter()
@@ -258,10 +263,26 @@ pub fn write(plan: &StickPlan, opts: &WriteOptions) -> Result<Summary, Error> {
                     }
                 }
                 let Item::Track { idx, plan: t } = &items[item_no] else { continue };
-                let out = stage.join(format!("{idx}.{}", Path::new(&t.dest).extension().and_then(|e| e.to_str()).unwrap_or("dat")));
-                let r = transcode_file_art(&t.src, &out.to_string_lossy(), spec.as_ref().expect("spec present"), opts.keep_art && t.art_bytes > 0, opts.debug)
-                    .map(|_| out)
-                    .map_err(|e| e.to_string());
+                let ext = Path::new(&t.dest).extension().and_then(|e| e.to_str()).unwrap_or("dat").to_string();
+                let spec = spec.as_ref().expect("spec present");
+                let art = opts.keep_art && t.art_bytes > 0;
+                let key = opts.cache.as_ref().and_then(|_| crate::backend::cache::Cache::key(&t.src, plan.transcode_spec.as_deref().unwrap_or(""), art));
+                let r = match (&opts.cache, key) {
+                    (Some(c), Some(key)) => match c.get(&key, &ext) {
+                        Some(hit) => Ok((hit, true)),
+                        None => {
+                            let part = c.begin(&key, &ext);
+                            transcode_file_art(&t.src, &part.to_string_lossy(), spec, art, opts.debug)
+                                .and_then(|_| c.commit(&part, &key, &ext).map_err(Error::from))
+                                .map(|done| (done, true))
+                                .map_err(|e| e.to_string())
+                        }
+                    },
+                    _ => {
+                        let out = stage.join(format!("{idx}.{ext}"));
+                        transcode_file_art(&t.src, &out.to_string_lossy(), spec, art, opts.debug).map(|_| (out, false)).map_err(|e| e.to_string())
+                    }
+                };
                 pipe.ready.lock().unwrap().insert(k, r);
                 pipe.cv.notify_all();
             });
@@ -299,9 +320,11 @@ pub fn write(plan: &StickPlan, opts: &WriteOptions) -> Result<Summary, Error> {
                             *pipe.consumed.lock().unwrap() = k + 1;
                             pipe.cv.notify_all();
                         }
-                        let staged = converted.map_err(Error::backend)?;
+                        let (staged, cached) = converted.map_err(Error::backend)?;
                         let len = copy_file(&staged, &part)?;
-                        let _ = std::fs::remove_file(&staged);
+                        if !cached {
+                            let _ = std::fs::remove_file(&staged);
+                        }
                         summary.converted += 1;
                         len
                     }
@@ -348,6 +371,12 @@ pub fn write(plan: &StickPlan, opts: &WriteOptions) -> Result<Summary, Error> {
     result?;
 
     finish_deletes(plan, &dest_root, opts, &mut summary);
+    if let Some(c) = &opts.cache {
+        let p = c.prune();
+        if p.removed > 0 {
+            say(opts, &format!("Cleared {} old converted file(s) from the cache ({:.0} MB).", p.removed, p.freed_bytes as f64 / 1e6));
+        }
+    }
     say(opts, "Flushing to the stick — wait for this before pulling it out...");
     let _ = Command::new("sync").arg("-f").arg(&dest_root).status();
     remove_partials(&dest_root);
@@ -434,7 +463,7 @@ mod tests {
     }
 
     fn quiet() -> WriteOptions {
-        WriteOptions { keep_art: false, clear: false, confirm_clear: None, dry_run: false, debug: false, progress_json: false, stage_dir: None }
+        WriteOptions { keep_art: false, clear: false, confirm_clear: None, dry_run: false, debug: false, progress_json: false, stage_dir: None, cache: None }
     }
 
     /// Copy and convert real (tiny) files onto a "stick" and check where everything lands.
@@ -564,6 +593,49 @@ mod tests {
         o.conflict = Conflict::KeepBoth;
         let both = build_plan(&scan2, &on_stick, &o, &target).unwrap();
         assert_eq!(both.tracks[0].dest, "Band/Rec/01 - Song (2).mp3");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// With a cache, converted files are kept and the next job reuses them instead of converting again.
+    #[test]
+    fn converted_files_are_kept_and_reused_when_a_cache_is_set() {
+        use crate::backend::cache::{stats, Cache, CacheArgs};
+        if !have_ffmpeg() {
+            eprintln!("skipping: ffmpeg not installed");
+            return;
+        }
+        let root = std::env::temp_dir().join(format!("rd_stick_cache_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (music, stick, cache_dir) = (root.join("music"), root.join("stick"), root.join("cache"));
+        std::fs::create_dir_all(&music).unwrap();
+        std::fs::create_dir_all(&stick).unwrap();
+        let p = music.join("a.wav");
+        wav(&p, 440, 2);
+        let scan = Scan { tracks: vec![src(&p, "Band", "Rec", "Song", 1, 2.0)], skipped: vec![] };
+        let target = TargetInfo { mount_point: stick.clone(), total_bytes: 1 << 30, free_bytes: 1 << 30, block_size: 4096, max_file_bytes: None };
+        let mut o = StickOptions::default();
+        o.layout = Layout { template: "{albumartist}/{title}".into(), options: LayoutOptions::default() };
+        o.transcode = Some("mp3:128".into());
+        let cached = || WriteOptions { cache: Cache::from_args(&CacheArgs { convert_cache: Some(cache_dir.to_string_lossy().to_string()), ..Default::default() }), ..quiet() };
+
+        o.dest_subfolder = "One".into();
+        write(&build_plan(&scan, &[], &o, &target).unwrap(), &cached()).unwrap();
+        assert_eq!(stats(&cache_dir).files, 1, "the converted file is kept");
+        assert!(stick.join("One/Band/Song.mp3").is_file());
+
+        // Mark the kept file: if the second job reuses it, the marker shows up on the stick.
+        let kept = std::fs::read_dir(&cache_dir).unwrap().next().unwrap().unwrap().path();
+        std::fs::write(&kept, b"REUSED").unwrap();
+        o.dest_subfolder = "Two".into();
+        write(&build_plan(&scan, &[], &o, &target).unwrap(), &cached()).unwrap();
+        assert_eq!(std::fs::read(stick.join("Two/Band/Song.mp3")).unwrap(), b"REUSED");
+        assert_eq!(stats(&cache_dir).files, 1);
+
+        // Without a cache nothing is kept.
+        std::fs::remove_dir_all(&cache_dir).unwrap();
+        o.dest_subfolder = "Three".into();
+        write(&build_plan(&scan, &[], &o, &target).unwrap(), &quiet()).unwrap();
+        assert!(!cache_dir.exists());
         std::fs::remove_dir_all(&root).ok();
     }
 
