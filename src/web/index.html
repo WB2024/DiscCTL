@@ -280,6 +280,9 @@ pre.json { background: var(--bg); border: 1px solid var(--line); border-radius: 
         <div class="grid2">
           <div style="display:flex;flex-direction:column;gap:12px">
             <label class="field" id="label-wrap">Disc label<input type="text" id="burn-label" placeholder="Untitled"></label>
+            <label class="field" id="discsize-wrap">Blank disc
+              <select id="burn-discsize"><option value="700">700 MB · 80 min (standard CD-R)</option><option value="650">650 MB · 74 min</option><option value="800">800 MB · 90 min</option></select>
+            </label>
             <label class="field" id="transcode-wrap">Transcode the audio files first<small>Shrinks audio files so more fits on the disc</small>
               <select id="burn-transcode">
                 <option value="">No — burn as-is</option><option value="flac">FLAC</option>
@@ -961,6 +964,7 @@ function renderBurn() {
   $("#burn-data-block").classList.toggle("hidden", isGraph || f === "redbook");
   $("#burn-graph-block").classList.toggle("hidden", !isGraph);
   $("#label-wrap").classList.toggle("hidden", isGraph);
+  $("#discsize-wrap").classList.toggle("hidden", isGraph);
   $("#transcode-wrap").classList.toggle("hidden", !isData);
   $("#cdtext-wrap").classList.toggle("hidden", isGraph || isData);
   $("#source-help").classList.toggle("hidden", isGraph);
@@ -1009,7 +1013,7 @@ function burnBody() {
     try { graph = JSON.parse($("#graph-text").value); } catch (e) { throw new Error("Disc graph is not valid JSON: " + e.message); }
     return { graph, dry_run: $("#burn-dry").checked, debug: $("#burn-debug").checked, device: selectedDevice() };
   }
-  const common = { format: f, label: $("#burn-label").value.trim() || null, dry_run: $("#burn-dry").checked, debug: $("#burn-debug").checked, device: selectedDevice() };
+  const common = { format: f, disc_size_mb: +$("#burn-discsize").value, label: $("#burn-label").value.trim() || null, dry_run: $("#burn-dry").checked, debug: $("#burn-debug").checked, device: selectedDevice() };
   if (f === "datacd") {
     if (!burn.data && !burn.dfiles.length && !burn.dplaylist) throw new Error("Choose what to put on the disc: files, a folder or a playlist");
     return { ...common, data: burn.dplaylist || burn.dfiles.length ? null : burn.data, files: burn.dplaylist ? [] : burn.dfiles,
@@ -1021,19 +1025,87 @@ function burnBody() {
     cd_text: $("#burn-cdtext").checked };
 }
 
+const fmtMB = b => b >= 1024 ** 3 ? (b / 1024 ** 3).toFixed(1) + " GB" : Math.max(1, Math.round(b / 1024 ** 2)) + " MB";
+
+function fillBar(pct) {
+  const p = Math.min(100, pct);
+  const color = pct > 100 ? "var(--err)" : "var(--accent)";
+  return `<div class="bar" style="width:140px;display:inline-block;vertical-align:middle"><i style="width:${p}%;background:${color}"></i></div>`;
+}
+
+function discCards(plan, kind) {
+  return plan.discs.map(d => {
+    const rows = d.items.map(i => {
+      const f = plan.files ? plan.files[i] : plan.tracks[i];
+      if (kind === "data") return `<div class="item"><span class="grow">${esc(f.rel_path)}</span><span class="muted">${f.transcode ? `${fmtMB(f.original_bytes)} → ` : ""}${fmtMB(f.est_bytes)}</span></div>`;
+      return `<div class="item"><span class="grow">${esc(f.path)}</span><span class="muted">${fmtSecs(f.secs)}</span></div>`;
+    }).join("");
+    const size = kind === "data" ? fmtMB(d.payload_bytes) : fmtSecs(d.secs);
+    const count = kind === "data" ? `${d.files} file${d.files === 1 ? "" : "s"}` : `${d.tracks} track${d.tracks === 1 ? "" : "s"}`;
+    return `<details class="card" style="margin:8px 0;padding:10px 14px"><summary style="cursor:pointer;display:flex;gap:14px;align-items:center;flex-wrap:wrap">
+      <b>Disc ${d.number}</b><span>${count} · ${size}</span>${fillBar(d.percent)}<span class="muted">${Math.round(d.percent)}% full</span></summary>
+      <div class="filelist" style="margin-top:10px;max-height:240px;overflow:auto">${rows}</div></details>`;
+  }).join("");
+}
+
+function noticeList(title, items, cls) {
+  return items.length ? `<div class="notice ${cls}" style="margin-top:10px"><b>${title}</b><ul style="margin:6px 0 0;padding-left:20px">${items.join("")}</ul></div>` : "";
+}
+
+function renderPlan(res) {
+  if (res.kind === "graph") return `<h2 style="margin-top:16px">Execution plan</h2><pre class="json">${esc(JSON.stringify(res.steps, null, 2))}</pre>`;
+  const p = res.plan, kind = res.kind;
+  const warnings = noticeList("Heads up", (p.warnings || []).map(w => `<li>${esc(w)}</li>`), "warn");
+  const skipped = noticeList("Skipped", (p.skipped || []).map(k => `<li><span class="mono">${esc(k.entry)}</span> — ${esc(k.reason)}</li>`), "warn");
+  const n = p.disc_count;
+  let head = "", body = "", foot = "";
+
+  if (kind === "data") {
+    const converted = p.transcode && p.transcoded_files > 0;
+    head = `<div style="font-size:20px;font-weight:700">${n} disc${n === 1 ? "" : "s"} needed</div>
+      <div class="muted" style="margin-top:4px">${p.files.length} file${p.files.length === 1 ? "" : "s"} · ${fmtMB(p.original_bytes)}${converted ? ` as they are, about <b>${fmtMB(p.estimated_bytes)}</b> after converting ${p.transcoded_files} to ${esc(p.transcode)}` : ""}</div>`;
+    body = discCards(p, "data");
+    if (p.too_big.length) foot += noticeList("Too big for a disc", p.too_big.map(x => `<li class="mono">${esc(x)}</li>`), "err");
+    foot += `<div class="muted" style="margin-top:10px">${converted ? "Converted sizes are estimates (bitrate × length); the burn measures the real files as it converts and moves on to the next disc when one is full. " : ""}Each disc keeps a little room free. You'll be asked to insert each blank disc in turn.</div>`;
+  } else if (kind === "audio") {
+    head = `<div style="font-size:20px;font-weight:700">${n} disc${n === 1 ? "" : "s"} needed</div>
+      <div class="muted" style="margin-top:4px">${p.tracks.length} track${p.tracks.length === 1 ? "" : "s"} · ${fmtSecs(p.total_secs)} in total · ${fmtSecs(p.capacity_secs)} fits on each disc</div>`;
+    body = discCards(p, "audio");
+  } else {
+    head = `<div style="font-size:20px;font-weight:700">${res.fits ? "Fits on one disc" : "Does not fit on one disc"}</div>
+      <div class="muted" style="margin-top:4px">${p.tracks.length} track${p.tracks.length === 1 ? "" : "s"} (${fmtSecs(p.total_secs)}) + ${res.data_files} data file${res.data_files === 1 ? "" : "s"} (${fmtMB(res.data_bytes)}) · uses about ${Math.round(res.percent)}% of the disc</div>
+      <div style="margin-top:8px">${fillBar(res.percent)}</div>`;
+    body = "";
+  }
+  return `<h2 style="margin-top:16px">Plan</h2><div class="notice">${head}</div>${body}${warnings}${skipped}${foot}`;
+}
+
 async function burnPlan() {
-  const out = $("#burn-plan-out");
+  const out = $("#burn-plan-out"), btn = $("#burn-plan");
+  let body;
+  try { body = burnBody(); } catch (e) { out.innerHTML = `<div class="notice err" style="margin-top:16px">${esc(e.message)}</div>`; return; }
+  btn.disabled = true; const label = btn.textContent; btn.textContent = "Working out the plan…";
+  out.innerHTML = `<div class="muted" style="margin-top:16px">Reading the files and working out how many discs are needed — this can take a little while for large jobs…</div>`;
   try {
-    const body = burnBody();
     const plan = await api("/api/plan", { body });
-    out.innerHTML = `<h2 style="margin-top:16px">Execution plan</h2><pre class="json">${esc(JSON.stringify(plan, null, 2))}</pre>`;
+    out.innerHTML = renderPlan(plan);
   } catch (e) { out.innerHTML = `<div class="notice err" style="margin-top:16px"><b>${esc(e.code || "Error")}</b> — ${esc(e.message)}</div>`; }
+  finally { btn.disabled = false; btn.textContent = label; out.scrollIntoView({ behavior: "smooth", block: "nearest" }); }
 }
 
 async function burnStart() {
+  let body;
+  try { body = burnBody(); } catch (e) { return toast(e.message, "err", 8000); }
   try {
-    const body = burnBody();
-    if (!body.dry_run && !confirmBox(`Burn to ${body.device}? This writes to the disc in the drive and can't be undone.`)) return;
+    let msg = `Burn to ${body.device}? This writes to the disc in the drive and can't be undone.`;
+    if (!body.graph) {
+      // Work out the disc count first so the confirmation says what is about to happen.
+      const res = await api("/api/plan", { body });
+      const n = res.plan?.disc_count || 1;
+      if (res.kind === "enhanced" && !res.fits) throw new Error(res.plan.warnings[0] || "This won't fit on one disc");
+      if (n > 1) msg = `This job needs ${n} discs.\n\nYou'll be asked to insert a blank disc for each one, one after another.\n\nStart burning disc 1 in ${body.device}?`;
+    }
+    if (!body.dry_run && !confirmBox(msg)) return;
     const job = await api("/api/jobs/burn", { body });
     jobPanel($("#burn-job"), job.id, { onEnd: () => toast("Burn job finished", "ok") });
     refreshJobs();
@@ -1291,6 +1363,8 @@ async function init() {
     try { const graph = JSON.parse($("#graph-text").value); await api("/api/validate", { body: { graph } }); toast("Disc graph is valid", "ok"); }
     catch (e) { toast(e.message, "err", 8000); }
   };
+  try { $("#burn-discsize").value = store.get("burn-discsize", "700"); } catch {}
+  $("#burn-discsize").onchange = e => store.set("burn-discsize", e.target.value);
   $("#burn-plan").onclick = burnPlan;
   $("#burn-start").onclick = burnStart;
   renderBurn();

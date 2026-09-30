@@ -1,3 +1,4 @@
+pub mod discs;
 pub mod split;
 
 use crate::{
@@ -185,15 +186,18 @@ fn validate_wav_format(path: &str) -> Result<(), Error> {
     Ok(())
 }
 
-const ISO_SIZE_LIMIT_BYTES: u64 = 700 * 1024 * 1024;
 
 fn validate_iso_size(source_dir: &str) -> Result<(), Error> {
     let total = dir_size(std::path::Path::new(source_dir))?;
-    if total > ISO_SIZE_LIMIT_BYTES {
+    let limit = crate::backend::data::disc_capacity();
+    if total > limit {
         return Err(Error::validation(format!(
-            "Data directory '{}' is {:.1}MB, which exceeds the 700MB CD-R limit",
+            "Data directory '{}' is {:.1}MB, which exceeds the {:.0}MB disc limit. \
+             Burning a Data CD splits big jobs across several discs automatically; \
+             only a hand-written disc graph has to fit on one.",
             source_dir,
-            total as f64 / 1024.0 / 1024.0
+            total as f64 / 1024.0 / 1024.0,
+            limit as f64 / 1024.0 / 1024.0,
         )));
     }
     Ok(())
@@ -203,7 +207,8 @@ fn dir_size(path: &std::path::Path) -> Result<u64, Error> {
     let mut total = 0u64;
     for entry in std::fs::read_dir(path)? {
         let entry = entry?;
-        let meta = entry.metadata()?;
+        // Follow symlinks: a staged folder is made of links to the real files.
+        let meta = std::fs::metadata(entry.path())?;
         if meta.is_dir() {
             total += dir_size(&entry.path())?;
         } else {

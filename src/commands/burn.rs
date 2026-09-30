@@ -1,4 +1,8 @@
-use std::io::Write as _;
+use std::{
+    collections::{HashSet, VecDeque},
+    io::Write as _,
+    path::{Path, PathBuf},
+};
 use clap::Args;
 use crate::{
     backend,
@@ -6,9 +10,9 @@ use crate::{
     error::Error,
     parser,
     planner,
-    planner::split::{
-        self, AudioItem, AudioSlice, DataItem, DataSlice,
-        AUDIO_DISC_CAPACITY_SECS, AUDIO_MAX_TRACKS, DATA_DISC_CAPACITY_BYTES,
+    planner::{
+        discs::{self, DataSpec, DiscSize, PlannedFile},
+        split::{self, AudioItem, AudioSlice, DataItem, AUDIO_MAX_TRACKS},
     },
 };
 
@@ -29,6 +33,9 @@ pub struct BurnArgs {
     /// Individual files for a Data CD (they go in the disc root)
     #[arg(long, num_args = 1..)]
     pub files: Option<Vec<String>>,
+    /// Disc capacity in MB: 650 (74 min), 700 (80 min, default) or 800 (90 min)
+    #[arg(long, default_value_t = 700)]
+    pub disc_size: u64,
     /// Only accept playlist entries inside this folder (used by the web UI)
     #[arg(long, hide = true)]
     pub playlist_root: Option<String>,
@@ -82,21 +89,88 @@ pub fn run(args: BurnArgs) -> Result<(), Error> {
 
 // ── Data CD path ─────────────────────────────────────────────────────────────
 
+fn disc_size(args: &BurnArgs) -> Result<DiscSize, Error> {
+    let size = DiscSize::new(args.disc_size)?;
+    // Lets the ISO builder and validator refuse anything that can't fit this disc.
+    backend::data::set_disc_capacity(size.capacity_bytes());
+    Ok(size)
+}
+
+fn playlist_root(args: &BurnArgs) -> Option<PathBuf> {
+    args.playlist_root.as_ref().map(PathBuf::from)
+}
+
+/// A progress line: a JSON event for machine readers, plain text otherwise.
+fn note(args: &BurnArgs, msg: &str) {
+    if args.progress_json {
+        println!("{}", serde_json::json!({"type": "step", "msg": msg}));
+    } else {
+        eprintln!("{}", msg);
+    }
+}
+
 fn run_data(args: &BurnArgs) -> Result<(), Error> {
-    // Step 1: resolve the source file list (with optional transcoding)
-    let source = prepare_data_items(args)?;
+    let size = disc_size(args)?;
+    let spec = match args.transcode.as_deref().filter(|t| !t.trim().is_empty()) {
+        Some(t) => Some(TranscodeSpec::parse(t)?),
+        None => None,
+    };
 
-    let total_bytes: u64 = source.items.iter().map(|f| f.size_bytes).sum();
-    let disc_count = estimate_disc_count_data(total_bytes);
+    let resolved = discs::resolve_data(&DataSpec {
+        playlist: args.playlist.clone(),
+        files: args.files.clone(),
+        data: args.data.clone(),
+        playlist_root: playlist_root(args),
+    })?;
 
-    if disc_count <= 1 {
-        // Single disc: burn from the folder directly when it already holds exactly the
-        // right files, otherwise stage the chosen files into a temporary folder.
-        let (dir, _guard) = match &source.ready_root {
+    // How big will everything be (after transcoding), and how many discs is that?
+    note(args, "Working out how many discs are needed...");
+    let (planned, _) = discs::plan_files(&resolved.items, spec.as_ref());
+    let (est_discs, too_big) = discs::pack_data(&planned, size);
+    for &i in &too_big {
+        eprintln!(
+            "Warning: '{}' ({:.1}MB) is larger than a whole disc — skipping.",
+            planned[i].path,
+            planned[i].est_bytes as f64 / 1_048_576.0
+        );
+    }
+    let usable: Vec<PlannedFile> = planned
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| !too_big.contains(i))
+        .map(|(_, f)| f.clone())
+        .collect();
+    if usable.is_empty() {
+        return Err(Error::validation("Nothing to burn: every file is larger than a whole disc"));
+    }
+
+    let total_est: u64 = usable.iter().map(|f| f.est_bytes).sum();
+    let total_orig: u64 = usable.iter().map(|f| f.original_bytes).sum();
+    if let Some(s) = &spec {
+        note(args, &format!(
+            "{} files: {:.0} MB as they are, about {:.0} MB after converting to {} → {} disc{}",
+            usable.len(),
+            total_orig as f64 / 1_048_576.0,
+            total_est as f64 / 1_048_576.0,
+            s.label(),
+            est_discs.len(),
+            if est_discs.len() == 1 { "" } else { "s" },
+        ));
+    } else if est_discs.len() > 1 {
+        note(args, &format!(
+            "{} files, {:.0} MB → {} discs required.",
+            usable.len(), total_est as f64 / 1_048_576.0, est_discs.len()
+        ));
+    }
+
+    // One disc and nothing to convert: burn straight from the folder, or from a folder of
+    // links to the chosen files.
+    if est_discs.len() <= 1 && spec.is_none() && too_big.is_empty() {
+        let (dir, _guard) = match &resolved.ready_root {
             Some(root) => (root.clone(), None),
             None => {
                 let dir = format!("/tmp/rustydisc_stage_{}", std::process::id());
-                stage_items(&source.items, &dir)?;
+                stage_items(&resolved.items, &dir)?;
                 (dir.clone(), Some(StagedDir::new(dir, false, true)))
             }
         };
@@ -104,128 +178,146 @@ fn run_data(args: &BurnArgs) -> Result<(), Error> {
         return burn_graph(&graph, args, None);
     }
 
-    // Multi-disc
-    eprintln!(
-        "\n{} total ({:.0}MB) → {} discs required.",
-        source.items.len(),
-        total_bytes as f64 / 1_048_576.0,
-        disc_count,
-    );
-
-    let slices = split::split_data(source.items, DATA_DISC_CAPACITY_BYTES);
-    burn_data_discs(&slices, args)
+    burn_data_discs(args, size, spec, usable, est_discs.len())
 }
 
-/// What a Data CD will contain.
-struct DataSource {
-    items: Vec<DataItem>,
-    /// A folder that already contains exactly `items` at their `rel_path`s.
-    ready_root: Option<String>,
-    _staged: Option<StagedDir>,
+/// A file waiting for a disc; `cached` is a copy that was already converted for an earlier
+/// disc that turned out to be full.
+struct Queued {
+    file: PlannedFile,
+    cached: Option<PathBuf>,
 }
 
-fn playlist_root(args: &BurnArgs) -> Option<std::path::PathBuf> {
-    args.playlist_root.as_ref().map(std::path::PathBuf::from)
-}
+/// Fill and burn discs one at a time. Files are converted disc by disc as they are staged,
+/// so only one disc's worth of converted files exists at a time, and the real converted size
+/// (not the estimate) decides when a disc is full.
+fn burn_data_discs(
+    args: &BurnArgs,
+    size: DiscSize,
+    spec: Option<TranscodeSpec>,
+    files: Vec<PlannedFile>,
+    estimated_discs: usize,
+) -> Result<(), Error> {
+    if spec.as_ref().is_some_and(|_| files.iter().any(|f| f.transcode)) && !args.dry_run {
+        backend::transcode::ensure_ffmpeg()?;
+    }
+    let usable = size.data_usable_bytes();
+    let pid = std::process::id();
+    // Converted files are written here one disc at a time; --stage-dir puts them somewhere with room.
+    let base = args.stage_dir.clone().unwrap_or_else(|| "/tmp".to_string());
+    let carry_dir = format!("{}/rustydisc_carry_{}", base, pid);
+    let _carry_guard = StagedDir::new(carry_dir.clone(), false, true);
 
-/// Individually chosen files, checked and made absolute.
-fn resolve_files(files: &[String]) -> Result<Vec<String>, Error> {
-    files
-        .iter()
-        .map(|f| {
-            let p = std::fs::canonicalize(f).map_err(|_| Error::validation(format!("File not found: {}", f)))?;
-            if p.is_dir() {
-                return Err(Error::validation(format!("'{}' is a folder — use --data for folders", f)));
+    let mut queue: VecDeque<Queued> = files.into_iter().map(|file| Queued { file, cached: None }).collect();
+    let mut disc_num = 0usize;
+    let mut expected = estimated_discs.max(1);
+
+    while !queue.is_empty() {
+        disc_num += 1;
+        let stage = format!("{}/rustydisc_disc{:02}_{}", base, disc_num, pid);
+        let _ = std::fs::remove_dir_all(&stage);
+        std::fs::create_dir_all(&stage)?;
+        let staged = StagedDir::new(stage.clone(), args.keep_staged, true);
+
+        note(args, &format!("Disc {} of ~{}: preparing files...", disc_num, expected.max(disc_num)));
+
+        let mut used = 0u64;
+        let mut payload = 0u64;
+        let mut count = 0usize;
+        let mut dirs: HashSet<String> = HashSet::new();
+        let mut convert_no = 0usize;
+
+        while let Some(front) = queue.front() {
+            let dir = Path::new(&front.file.rel_path).parent().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
+            let new_dir = if dirs.contains(&dir) { 0 } else { 8 * 1024 };
+            // The estimate says whether it is worth converting this file for this disc at all.
+            if count > 0 && used + discs::file_cost(front.file.est_bytes) + new_dir > usable {
+                break;
             }
-            Ok(p.to_string_lossy().to_string())
-        })
-        .collect()
-}
+            let item = queue.pop_front().expect("front exists");
+            let dest = Path::new(&stage).join(&item.file.rel_path);
+            if let Some(parent) = dest.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
 
-fn prepare_data_items(args: &BurnArgs) -> Result<DataSource, Error> {
-    let chosen = [args.playlist.is_some(), args.files.is_some(), args.data.is_some()];
-    match chosen.iter().filter(|c| **c).count() {
-        0 => return Err(Error::validation(
-            "Data CD burn requires --data <dir>, --files <files>, --playlist <file>, or --input <graph.json>",
-        )),
-        1 => {}
-        _ => return Err(Error::validation(
-            "Choose one source for a Data CD: --data <dir>, --files <files>, or --playlist <file>",
-        )),
-    }
+            let actual = if let Some(cached) = &item.cached {
+                std::fs::rename(cached, &dest).or_else(|_| std::fs::copy(cached, &dest).map(|_| ()))?;
+                std::fs::metadata(&dest)?.len()
+            } else if item.file.transcode && !args.dry_run {
+                convert_no += 1;
+                note(args, &format!("Disc {}: converting {} — {}", disc_num, convert_no, item.file.rel_path));
+                backend::transcode::transcode_file(
+                    &item.file.path,
+                    &dest.to_string_lossy(),
+                    spec.as_ref().expect("transcode implies a spec"),
+                    args.debug,
+                )?;
+                std::fs::metadata(&dest)?.len()
+            } else {
+                let source = std::fs::canonicalize(&item.file.path)?;
+                std::os::unix::fs::symlink(&source, &dest)
+                    .or_else(|_| std::fs::hard_link(&source, &dest))
+                    .or_else(|_| std::fs::copy(&source, &dest).map(|_| ()))?;
+                if item.file.transcode { item.file.est_bytes } else { std::fs::metadata(&source)?.len() }
+            };
 
-    // The individual files (from --files or a playlist), if that is the source.
-    let entries: Option<Vec<parser::playlist::PlaylistEntry>> = if let Some(ref pl) = args.playlist {
-        Some(parser::playlist::parse_within(pl, playlist_root(args).as_deref())?)
-    } else if let Some(ref files) = args.files {
-        Some(resolve_files(files)?
-            .into_iter()
-            .map(|path| parser::playlist::PlaylistEntry { path, duration_secs: None, display: None })
-            .collect())
-    } else {
-        None
-    };
+            if count > 0 && used + discs::file_cost(actual) + new_dir > usable {
+                // The estimate was too low and this file doesn't fit after all: it starts the next
+                // disc, and if it was already converted that result is kept for it.
+                let cached = if item.file.transcode && !args.dry_run {
+                    std::fs::create_dir_all(&carry_dir)?;
+                    let keep = Path::new(&carry_dir).join(format!("{}_{}", disc_num, queue.len()));
+                    std::fs::rename(&dest, &keep).or_else(|_| std::fs::copy(&dest, &keep).map(|_| ()))?;
+                    let _ = std::fs::remove_file(&dest);
+                    Some(keep)
+                } else {
+                    let _ = std::fs::remove_file(&dest);
+                    None
+                };
+                queue.push_front(Queued { file: item.file, cached });
+                break;
+            }
 
-    if let Some(ref spec_str) = args.transcode {
-        let spec = TranscodeSpec::parse(spec_str)?;
-        let (stage_path, auto) = stage_path(args);
-        let staged = StagedDir::new(stage_path.clone(), args.keep_staged, auto);
-
-        if let Some(ref entries) = entries {
-            eprintln!("Transcoding {} files → {} ...", entries.len(), stage_path);
-            backend::transcode::transcode_playlist(entries, &spec, &stage_path, args.debug)?;
-        } else if let Some(ref data_dir) = args.data {
-            eprintln!("Transcoding '{}' → {} ...", data_dir, stage_path);
-            backend::transcode::transcode_dir(data_dir, &stage_path, &spec, args.debug)?;
+            used += discs::file_cost(actual) + new_dir;
+            payload += actual;
+            dirs.insert(dir);
+            count += 1;
         }
 
-        let items = split::enumerate_dir(&stage_path)?;
-        return Ok(DataSource { items, ready_root: Some(stage_path), _staged: Some(staged) });
-    }
+        // The real number of discs is only known once the files are converted; keep the count honest.
+        if queue.is_empty() {
+            expected = disc_num; // that was the last one
+        } else {
+            let remaining: u64 = queue.iter().map(|q| q.file.est_bytes).sum();
+            expected = expected.max(disc_num + 1).max(disc_num + remaining.div_ceil(usable.max(1)) as usize);
+        }
+        let label = disc_label(&args.label, disc_num, expected);
 
-    if let Some(entries) = entries {
-        let paths: Vec<String> = entries.into_iter().map(|e| e.path).collect();
-        return Ok(DataSource { items: split::flat_items(&paths), ready_root: None, _staged: None });
-    }
-
-    let data_dir = args.data.as_ref().expect("checked above");
-    let items = split::enumerate_dir(data_dir)?;
-    Ok(DataSource { items, ready_root: Some(data_dir.clone()), _staged: None })
-}
-
-fn burn_data_discs(slices: &[DataSlice], args: &BurnArgs) -> Result<(), Error> {
-    let total = slices.len();
-
-    for (i, slice) in slices.iter().enumerate() {
-        let disc_num = i + 1;
-        let label = disc_label(&args.label, disc_num, total);
-
-        // Stage this disc's files into a sub-directory using symlinks
-        let disc_stage = format!("/tmp/rustydisc_disc{:02}_{}", disc_num, std::process::id());
-        stage_items(&slice.items, &disc_stage)?;
-        let disc_staged = StagedDir::new(disc_stage.clone(), false, true);
-
-        // Prompt
         if !args.dry_run {
-            prompt_insert(disc_num, total, &args.device, slice.total_bytes, slice.items.len(), None)?;
+            prompt_insert(disc_num, expected, &args.device, payload, count, None)?;
         }
 
-        let graph = parser::from_cli(
-            "datacd", None, None, Some(&disc_stage), &label, false,
-        )?;
+        let graph = parser::from_cli("datacd", None, None, Some(&stage), &label, false)?;
+        // A dry run doesn't convert anything, so the staged links point at the originals and
+        // would look too big; the plan above already used the converted sizes.
+        if args.dry_run {
+            backend::data::set_disc_capacity(u64::MAX / 2);
+        }
+        let result = burn_graph(&graph, args, Some(&staged));
+        if args.dry_run {
+            backend::data::set_disc_capacity(size.capacity_bytes());
+        }
+        result?;
 
-        burn_graph(&graph, args, Some(&disc_staged))?;
-
-        if !args.dry_run && disc_num < total {
+        if !args.dry_run && !queue.is_empty() {
             eject(&args.device);
-            eprintln!("Disc {}/{} complete. Remove the disc.", disc_num, total);
+            eprintln!("Disc {} complete. Remove the disc.", disc_num);
         }
     }
 
     if !args.dry_run {
-        eprintln!("All {} discs burned successfully.", total);
+        eprintln!("All {} disc{} burned successfully.", disc_num, if disc_num == 1 { "" } else { "s" });
     }
-
     Ok(())
 }
 
@@ -247,13 +339,16 @@ fn run_audio(args: &BurnArgs) -> Result<(), Error> {
         return Err(Error::validation("--files only applies to Data CDs; use --audio or --playlist for audio tracks"));
     }
 
+    let size = disc_size(args)?;
+    let capacity_secs = size.audio_capacity_secs();
+
     // Collect tracks with durations
     let audio_items = collect_audio_items(args)?;
 
     let total_secs: u64 = audio_items.iter().map(|t| t.duration_secs).sum();
     let total_tracks = audio_items.len();
 
-    let needs_split = total_secs > AUDIO_DISC_CAPACITY_SECS
+    let needs_split = total_secs > capacity_secs
         || total_tracks > AUDIO_MAX_TRACKS;
 
     if !needs_split {
@@ -278,7 +373,7 @@ fn run_audio(args: &BurnArgs) -> Result<(), Error> {
     }
 
     // Multi-disc
-    let slices = split::split_audio(audio_items, AUDIO_DISC_CAPACITY_SECS, AUDIO_MAX_TRACKS);
+    let slices = split::split_audio(audio_items, capacity_secs, AUDIO_MAX_TRACKS);
 
     eprintln!(
         "\n{} tracks ({}:{:02} total) → {} discs required.",
@@ -292,33 +387,9 @@ fn run_audio(args: &BurnArgs) -> Result<(), Error> {
 }
 
 fn collect_audio_items(args: &BurnArgs) -> Result<Vec<AudioItem>, Error> {
-    // Playlist path: use EXTINF durations where available
-    if let Some(ref pl) = args.playlist {
-        let entries = parser::playlist::parse_within(pl, playlist_root(args).as_deref())?;
-        return Ok(entries
-            .into_iter()
-            .map(|e| AudioItem {
-                duration_secs: e.duration_secs.unwrap_or_else(|| split::duration_secs(&e.path)),
-                path: e.path,
-            })
-            .collect());
-    }
-
-    // Audio flag / glob patterns
-    if let Some(ref patterns) = args.audio {
-        let tracks = parser::expand_audio_globs(patterns)?;
-        return Ok(tracks
-            .into_iter()
-            .map(|p| AudioItem {
-                duration_secs: split::duration_secs(&p),
-                path: p,
-            })
-            .collect());
-    }
-
-    Err(Error::validation(
-        "Audio burn requires --audio <files>, --playlist <file>, or --input <graph.json>",
-    ))
+    let audio = args.audio.clone().unwrap_or_default();
+    let (items, _skipped) = discs::resolve_audio(&audio, args.playlist.as_deref(), playlist_root(args).as_deref())?;
+    Ok(items)
 }
 
 fn burn_audio_discs(slices: &[AudioSlice], args: &BurnArgs) -> Result<(), Error> {
@@ -404,12 +475,6 @@ fn stage_items(items: &[DataItem], dir: &str) -> Result<(), Error> {
     Ok(())
 }
 
-fn stage_path(args: &BurnArgs) -> (String, bool) {
-    match &args.stage_dir {
-        Some(p) => (p.clone(), false),
-        None => (format!("/tmp/rustydisc_stage_{}", std::process::id()), true),
-    }
-}
 
 // ── User interaction ──────────────────────────────────────────────────────────
 
@@ -452,9 +517,6 @@ fn disc_label(base: &str, disc_num: usize, total: usize) -> String {
     }
 }
 
-fn estimate_disc_count_data(total_bytes: u64) -> usize {
-    ((total_bytes + DATA_DISC_CAPACITY_BYTES - 1) / DATA_DISC_CAPACITY_BYTES).max(1) as usize
-}
 
 #[cfg(test)]
 mod tests {
@@ -522,12 +584,13 @@ mod tests {
     #[test]
     fn data_sources_are_exclusive() {
         let args = |files: Option<Vec<String>>, data: Option<String>| BurnArgs {
-            format: "datacd".into(), audio: None, playlist: None, data, files, playlist_root: None,
+            format: "datacd".into(), audio: None, playlist: None, data, files, playlist_root: None, disc_size: 700,
             label: "T".into(), input: None, device: "/dev/null".into(), debug: false, dry_run: true,
             cd_text: false, transcode: None, stage_dir: None, keep_staged: false, progress_json: false,
         };
-        assert!(prepare_data_items(&args(None, None)).is_err());
-        assert!(prepare_data_items(&args(Some(vec!["/etc/hostname".into()]), Some("/tmp".into()))).is_err());
-        assert!(prepare_data_items(&args(Some(vec!["/definitely/not/here".into()]), None)).is_err());
+        let resolve = |a: BurnArgs| discs::resolve_data(&DataSpec { playlist: a.playlist, files: a.files, data: a.data, playlist_root: None });
+        assert!(resolve(args(None, None)).is_err());
+        assert!(resolve(args(Some(vec!["/etc/hostname".into()]), Some("/tmp".into()))).is_err());
+        assert!(resolve(args(Some(vec!["/definitely/not/here".into()]), None)).is_err());
     }
 }

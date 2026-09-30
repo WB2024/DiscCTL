@@ -227,7 +227,7 @@ Want to look around first? `rustydisc serve --mock` simulates a drive, with no h
 
 <p align="center"><img src="Images/Screenshots/rip-progress.png" alt="A rip in progress with live log" width="820"></p>
 
-**Burn** — build an Audio CD, Data CD or Enhanced (Blue Book) CD from files in the server's media folder. Add individual files, a whole folder, or an `.m3u`/`.m3u8` playlist (previewed before you burn, with any skipped entries listed); reorder tracks, set CD-Text, transcode audio in a Data CD, and preview the execution plan before anything is written. Prefer to hand-write it? Paste a disc graph JSON and validate it.
+**Burn** — build an Audio CD, Data CD or Enhanced (Blue Book) CD from files in the server's media folder. **Show plan** works out how many discs the job needs, and how full each will be, counting the size after any transcoding. Add individual files, a whole folder, or an `.m3u`/`.m3u8` playlist (previewed before you burn, with any skipped entries listed); reorder tracks, set CD-Text, transcode audio in a Data CD, and preview the execution plan before anything is written. Prefer to hand-write it? Paste a disc graph JSON and validate it.
 
 <p align="center"><img src="Images/Screenshots/burn.png" alt="Burn page with an Enhanced CD and its execution plan" width="820"></p>
 
@@ -467,8 +467,9 @@ rustydisc burn [OPTIONS]
 
 | Flag | Description |
 |------|-------------|
-| `--transcode <spec>` | Convert audio before burning: `mp3:256`, `aac:320`, `opus:192`, `flac`, `wav` |
-| `--stage-dir <dir>` | Where to write transcoded files (auto-temp directory if omitted) |
+| `--transcode <spec>` | Data CD: convert audio before burning: `mp3:256`, `aac:320`, `opus:192`, `flac`, `wav` (only files that would shrink are converted) |
+| `--disc-size <MB>` | Blank disc size: `650` (74 min), `700` (80 min, default) or `800` (90 min) |
+| `--stage-dir <dir>` | Where to write converted files, one disc at a time (default: `/tmp`) |
 | `--keep-staged` | Keep staged files after burn (default: delete on exit) |
 
 ---
@@ -614,10 +615,11 @@ Exit code `0` on success, `1` on failure (with structured JSON error on stderr).
 
 ### `rustydisc plan`
 
-Prints the burn plan as JSON without writing to any device. Useful for scripting and verifying disc layout before committing to media.
+Prints the burn plan as JSON without writing to any device: how many discs are needed, what goes on each and how full it is (counting the converted size when `--transcode` is given), plus the burn steps for a single disc. Useful for scripting and verifying disc layout before committing to media. It accepts the same source flags as `burn` (`--audio`, `--playlist`, `--data`, `--files`, `--transcode`, `--disc-size`).
 
 ```
 rustydisc plan --format redbook --audio ~/music/*.wav --label "Preview"
+rustydisc plan --format datacd --data ~/Music --transcode mp3:320 --disc-size 700
 rustydisc plan --input disc.json
 ```
 
@@ -887,13 +889,24 @@ Transcoded files are staged in a temporary directory, used for the burn, then de
 
 ### Multi-Disc Burning
 
-When the total content exceeds single-disc capacity, Rusty Disc automatically calculates how many discs are needed and walks you through burning each one.
+When the content doesn't fit on one disc, RustyDisc works out how many discs are needed and walks you through burning each one. `rustydisc plan` (and **Show plan** in the web UI) shows the whole plan first: how many discs, what goes on each, and how full each will be.
 
-Thresholds:
-- **Data CD** — 690 MB per disc (conservative, accounting for ISO overhead)
-- **Red Book audio** — 74 minutes / 99 tracks per disc (30-second safety margin)
+How discs are filled:
+
+- **Data CD** — packed by size, in order (albums and playlists stay together). Every file counts its ISO 9660 overhead (sector padding and directory records), and each disc keeps about 6 MB free, so a "700 MB" disc gets about 693 MB of files. Sub-folders are kept.
+- **Transcoding is counted.** If you convert audio first (`--transcode mp3:320`), each file is counted at its *size after converting* (bitrate × length), so 2 GB of FLAC that becomes 1.3 GB of MP3 needs fewer discs. Files are only converted when it helps: lossless files are converted, but a lossy file already at or below the target bitrate is left alone (a 128k MP3 is never "upgraded" to 320k), and non-audio files are never touched. Estimates are slightly conservative.
+- **The burn checks the real sizes.** Files are converted one disc at a time; the real converted size decides when a disc is full, and the disc image size is checked against the disc before anything is written. Only one disc's worth of converted files exists at a time (use `--stage-dir` to put them somewhere with more room than `/tmp`).
+- **Red Book audio** — packed by playing time (79:30 on an 80-minute disc, up to 99 tracks).
+- **Enhanced CD** — everything must fit on one disc, counting the audio, the gap between the two sessions and the data. If it doesn't fit you're told by how much.
+- **Disc size** — `--disc-size 700` (default, 80 min), `650` (74 min) or `800` (90 min); it's a drop-down in the web UI.
+
+<p align="center"><img src="Images/Screenshots/burn-plan.png" alt="Show plan: a playlist of FLAC tracks converted to MP3 320k needs 2 discs instead of 3" width="820"></p>
 
 ```bash
+# See the plan first: 3 discs as they are, 2 after converting to MP3 320k
+rustydisc plan --format datacd --playlist "Giant Collection.m3u8"
+rustydisc plan --format datacd --playlist "Giant Collection.m3u8" --transcode mp3:320
+
 # 150 FLAC tracks → automatically split across multiple discs
 rustydisc burn --format redbook \
   --playlist "Giant Collection.m3u8" \
@@ -908,6 +921,8 @@ rustydisc burn --format redbook \
   17 tracks  |  73:44
 Insert blank disc 1 into /dev/sr0 and press ENTER to burn...
 ```
+
+For converted Data CDs the count is an estimate until the files are converted, so the prompt shows `Disc 1 of ~3` and corrects itself as it goes.
 
 Each disc's volume label is automatically suffixed: `"Giant Collection (1/6)"`, `"Giant Collection (2/6)"`, etc.
 

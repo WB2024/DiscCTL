@@ -722,6 +722,8 @@ struct BurnReq {
     dry_run: bool,
     debug: bool,
     device: Option<String>,
+    /// Disc capacity in MB: 650, 700 (default) or 800.
+    disc_size_mb: Option<u64>,
     /// Full disc graph (overrides every source option).
     graph: Option<Value>,
 }
@@ -769,9 +771,6 @@ fn burn_args(cmd: &str, req: &BurnReq, cfg: &Config) -> ApiResult<(Vec<String>, 
             if format != "redbook" {
                 a.extend(["--data".into(), path_str(&safe_join(&cfg.media_dir, d)?)]);
             }
-        } else if !is_burn && is_data_cd {
-            // The plan only shows the steps, not the files; it just needs a folder that exists.
-            a.extend(["--data".into(), path_str(&cfg.media_dir)]);
         }
         if let Some(l) = req.label.as_deref().filter(|l| !l.trim().is_empty()) {
             a.extend(["--label".into(), l.into()]);
@@ -788,6 +787,9 @@ fn burn_args(cmd: &str, req: &BurnReq, cfg: &Config) -> ApiResult<(Vec<String>, 
     }
 
     if is_burn {
+        if let Some(mb) = req.disc_size_mb {
+            a.extend(["--disc-size".into(), mb.to_string()]);
+        }
         let device = req.device.clone().unwrap_or_else(|| cfg.device.clone());
         check_device(&device)?;
         a.extend(["--device".into(), device, "--progress-json".into()]);
@@ -818,14 +820,50 @@ async fn run_cli_capture(st: &AppState, args: Vec<String>) -> ApiResult<String> 
     }
 }
 
+/// How many discs a job needs and what goes on each, counting the size after any transcoding.
+/// A hand-written disc graph is a single disc, so it just gets its steps.
 async fn plan(State(st): S, Json(req): Json<BurnReq>) -> ApiResult<Json<Value>> {
-    let (args, tmp) = burn_args("plan", &req, &st.cfg)?;
-    let res = run_cli_capture(&st, args).await;
-    if let Some(p) = tmp {
-        let _ = std::fs::remove_file(p);
+    if req.graph.is_some() {
+        let (args, tmp) = burn_args("plan", &req, &st.cfg)?;
+        let res = run_cli_capture(&st, args).await;
+        if let Some(p) = tmp {
+            let _ = std::fs::remove_file(p);
+        }
+        let stdout = res?;
+        return Ok(Json(json!({"kind": "graph", "steps": serde_json::from_str::<Value>(&stdout).map_err(Error::from)?})));
     }
-    let stdout = res?;
-    Ok(Json(serde_json::from_str(&stdout).map_err(Error::from)?))
+
+    let media = &st.cfg.media_dir;
+    let join_all = |v: &[String]| -> ApiResult<Vec<String>> { v.iter().map(|f| safe_join(media, f).map(|p| path_str(&p))).collect() };
+    let format = req.format.clone().unwrap_or_else(|| "redbook".into());
+    let plan_req = rip_plan_request(&format, &req, media, &join_all)?;
+
+    let planned = tokio::task::spawn_blocking(move || crate::planner::discs::plan_request(&plan_req))
+        .await
+        .map_err(|e| Error::backend(e.to_string()))??;
+    Ok(Json(planned))
+}
+
+fn rip_plan_request(
+    format: &str,
+    req: &BurnReq,
+    media: &Path,
+    join_all: &dyn Fn(&[String]) -> ApiResult<Vec<String>>,
+) -> ApiResult<crate::planner::discs::PlanRequest> {
+    let is_data_cd = format == "datacd";
+    let opt_path = |p: &Option<String>| -> ApiResult<Option<String>> {
+        p.as_deref().map(|p| safe_join(media, p).map(|j| path_str(&j))).transpose()
+    };
+    Ok(crate::planner::discs::PlanRequest {
+        format: format.to_string(),
+        audio: if is_data_cd { Vec::new() } else { join_all(&req.audio)? },
+        playlist: opt_path(&req.playlist)?,
+        files: if is_data_cd && !req.files.is_empty() { Some(join_all(&req.files)?) } else { None },
+        data: if format == "redbook" { None } else { opt_path(&req.data)? },
+        playlist_root: Some(media.to_path_buf()),
+        transcode: if is_data_cd { req.transcode.clone() } else { None },
+        disc_size_mb: req.disc_size_mb,
+    })
 }
 
 async fn validate(State(st): S, Json(req): Json<BurnReq>) -> ApiResult<Json<Value>> {

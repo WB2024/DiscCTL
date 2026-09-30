@@ -1,6 +1,18 @@
 use std::io::Read;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::process::{Command, Stdio};
 use crate::{error::Error, model::disc::DataSession};
+
+/// Capacity of the disc being burned, in bytes (default: a 700 MB CD-R).
+static DISC_CAPACITY: AtomicU64 = AtomicU64::new(700 * 1024 * 1024);
+
+pub fn set_disc_capacity(bytes: u64) {
+    DISC_CAPACITY.store(bytes, Ordering::Relaxed);
+}
+
+pub fn disc_capacity() -> u64 {
+    DISC_CAPACITY.load(Ordering::Relaxed)
+}
 
 pub fn append_data_session(
     session: &DataSession,
@@ -67,6 +79,20 @@ pub fn append_data_session(
             let _ = std::fs::remove_file(&iso_path);
             return Err(Error::backend(format_xorriso_error(
                 "mkisofs", output.status.code(), &output.stderr,
+            )));
+        }
+    }
+
+    // The image is complete, so its size is exact: refuse now rather than fail halfway through
+    // writing the disc.
+    if msinfo.is_none() {
+        let iso_bytes = std::fs::metadata(&iso_path).map(|m| m.len()).unwrap_or(0);
+        if iso_bytes > disc_capacity() {
+            let _ = std::fs::remove_file(&iso_path);
+            return Err(Error::validation(format!(
+                "The disc image is {:.1} MB, which is more than a {:.0} MB disc holds. Split the files across more discs.",
+                iso_bytes as f64 / 1_048_576.0,
+                disc_capacity() as f64 / 1_048_576.0,
             )));
         }
     }

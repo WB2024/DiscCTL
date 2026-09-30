@@ -1,12 +1,6 @@
 use std::process::Command;
 use crate::error::Error;
 
-/// Usable data capacity per disc (700MB minus ISO9660 overhead allowance)
-pub const DATA_DISC_CAPACITY_BYTES: u64 = 690 * 1024 * 1024;
-
-/// Conservative audio capacity: 74-minute CD minus 30-second safety margin
-pub const AUDIO_DISC_CAPACITY_SECS: u64 = 74 * 60 - 30;
-
 /// Red Book maximum tracks per disc
 pub const AUDIO_MAX_TRACKS: usize = 99;
 
@@ -20,46 +14,6 @@ pub struct DataItem {
     pub rel_path: String,
     pub size_bytes: u64,
 }
-
-#[derive(Debug)]
-pub struct DataSlice {
-    pub items: Vec<DataItem>,
-    pub total_bytes: u64,
-}
-
-/// Greedy bin-pack: fill each disc to `capacity_bytes`, then start a new one.
-pub fn split_data(items: Vec<DataItem>, capacity_bytes: u64) -> Vec<DataSlice> {
-    let mut slices: Vec<DataSlice> = Vec::new();
-    let mut current: Vec<DataItem> = Vec::new();
-    let mut current_bytes: u64 = 0;
-
-    for item in items {
-        if item.size_bytes > capacity_bytes {
-            eprintln!(
-                "Warning: '{}' ({:.1}MB) exceeds single-disc capacity ({:.0}MB) — skipping.",
-                item.path,
-                item.size_bytes as f64 / 1_048_576.0,
-                capacity_bytes as f64 / 1_048_576.0,
-            );
-            continue;
-        }
-        if current_bytes + item.size_bytes > capacity_bytes && !current.is_empty() {
-            slices.push(DataSlice {
-                total_bytes: current_bytes,
-                items: std::mem::take(&mut current),
-            });
-            current_bytes = 0;
-        }
-        current_bytes += item.size_bytes;
-        current.push(item);
-    }
-    if !current.is_empty() {
-        slices.push(DataSlice { total_bytes: current_bytes, items: current });
-    }
-    slices
-}
-
-// ── Audio disc items ─────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
 pub struct AudioItem {
@@ -219,43 +173,6 @@ mod tests {
 
     const MB: u64 = 1_048_576;
     const CAP: u64 = 700 * MB;
-
-    #[test]
-    fn single_disc_when_fits() {
-        let slices = split_data(items(&[100 * MB, 200 * MB, 300 * MB]), CAP);
-        assert_eq!(slices.len(), 1);
-        assert_eq!(slices[0].items.len(), 3);
-    }
-
-    #[test]
-    fn splits_into_two_discs() {
-        // 400MB + 400MB = needs 2 discs at 700MB capacity
-        let slices = split_data(items(&[400 * MB, 400 * MB]), CAP);
-        assert_eq!(slices.len(), 2);
-    }
-
-    #[test]
-    fn three_disc_split() {
-        let slices = split_data(items(&[600 * MB, 600 * MB, 600 * MB]), CAP);
-        assert_eq!(slices.len(), 3);
-    }
-
-    #[test]
-    fn packs_tightly() {
-        // 3 × 300MB fits in 2 discs of 700MB: [300+300, 300]
-        let slices = split_data(items(&[300 * MB, 300 * MB, 300 * MB]), CAP);
-        assert_eq!(slices.len(), 2);
-        assert_eq!(slices[0].items.len(), 2);
-        assert_eq!(slices[1].items.len(), 1);
-    }
-
-    #[test]
-    fn skips_oversized_file() {
-        let slices = split_data(items(&[800 * MB, 300 * MB]), CAP);
-        assert_eq!(slices.len(), 1);
-        assert_eq!(slices[0].items.len(), 1);
-        assert_eq!(slices[0].items[0].path, "track01.flac"); // only the 300MB one
-    }
 
     #[test]
     fn audio_splits_by_duration() {
