@@ -964,6 +964,14 @@ function trackRows(session) {
     <td class="num mono muted">${t.lba_start}–${t.lba_end}</td></tr>`).join("");
 }
 
+// Oddities in the disc's table of contents, in plain words (see analyzer::toc_check).
+function tocFindingsHtml(findings) {
+  if (!findings || !findings.length) return "";
+  const warn = findings.some(f => f.level === "warning");
+  return `<div class="notice ${warn ? "warn" : ""}" style="margin:12px 0"><b>${warn ? "Worth knowing about this disc" : "About this disc"}</b>
+    ${findings.map(f => `<div style="margin-top:4px">${f.level === "warning" ? "⚠" : "ℹ"} ${esc(f.message)}</div>`).join("")}</div>`;
+}
+
 function renderDisc(info) {
   const names = { redbook: "Red Book Audio CD", datacd: "Data CD", bluebook: "Enhanced CD (Blue Book)", unknown: "Unknown disc" };
   const audioTracks = info.sessions.flatMap(s => s.tracks).filter(t => t.kind === "audio");
@@ -988,6 +996,7 @@ function renderDisc(info) {
           ${info.discid ? `<div class="mono muted" style="margin-top:4px">MusicBrainz DiscID: ${esc(info.discid)}</div>` : ""}
         </div>
       </div>
+      ${tocFindingsHtml(info.toc_findings)}
       ${sessions}
     </div>
     <div id="mb-card"></div>`;

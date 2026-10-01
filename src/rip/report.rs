@@ -106,6 +106,9 @@ pub struct RipReport {
     /// Gaps before tracks that a gap scan found (empty when no scan was done, or none exist).
     #[serde(default)]
     pub gaps: Vec<super::gaps::TrackGap>,
+    /// What looked unusual about the disc's table of contents.
+    #[serde(default)]
+    pub toc_findings: Vec<crate::analyzer::toc_check::Finding>,
     pub warnings: Vec<String>,
 }
 
@@ -196,6 +199,12 @@ pub fn build(i: Inputs) -> RipReport {
 
     let mut warnings = i.notes.clone();
     warnings.extend(i.hidden.note());
+    let mut toc_findings = crate::analyzer::toc_check::check(i.info);
+    if let Some(r) = i.mb {
+        toc_findings.extend(crate::analyzer::toc_check::release_mismatch(i.info, r.tracks.len()));
+    }
+    // Real problems are repeated in the Notes; plain information stays in the disc checks.
+    warnings.extend(toc_findings.iter().filter(|f| f.level == crate::analyzer::toc_check::Level::Warning).map(|f| f.message.clone()));
     match i.accuraterip {
         Some(r) if !r.found => warnings.push("This disc is not in the AccurateRip database, so the rip could not be checked against other people's.".into()),
         Some(r) if r.verified < r.total => warnings.push(format!("Only {} of {} tracks matched AccurateRip.", r.verified, r.total)),
@@ -256,6 +265,7 @@ pub fn build(i: Inputs) -> RipReport {
         tracks,
         hidden_audio: i.hidden.clone(),
         gaps: i.gaps.clone(),
+        toc_findings,
         read_quality: i.health.map(|h| {
             use super::readhealth::Status;
             ReadSummary {
@@ -401,6 +411,13 @@ pub fn render(r: &RipReport) -> String {
         s.push_str(&format!("    AccurateRip: {}\n    Read SHA-256: {}\n", ar, t.read_sha256));
     }
 
+    if !r.toc_findings.is_empty() {
+        s.push_str(&format!("\nDisc checks\n{rule}\n"));
+        for f in &r.toc_findings {
+            s.push_str(&format!("{} {}\n", if f.level == crate::analyzer::toc_check::Level::Warning { "Warning:" } else { "Note:   " }, f.message));
+        }
+    }
+
     if let Some(q) = &r.read_quality {
         s.push_str(&format!("\nRead quality\n{rule}\n{} clean, {} repaired, {} suspect", q.clean, q.repaired, q.suspect));
         if q.reduced_checking {
@@ -471,6 +488,7 @@ mod tests {
             accuraterip: Some(AccurateRipSummary { found: true, pressings: 3, verified: 1, total: 1, detected_shift_samples: Some(6) }),
             hidden_audio: crate::rip::gaps::HiddenOutcome::None,
             gaps: vec![],
+            toc_findings: vec![],
             warnings: vec![],
         }
     }
@@ -494,6 +512,20 @@ mod tests {
             assert!(log.contains(needle), "missing {needle:?} in:\n{log}");
         }
         let _ = ReadHealth::default();
+    }
+
+    #[test]
+    fn disc_checks_appear_in_the_log() {
+        use crate::analyzer::toc_check::{Finding, Level};
+        let mut r = sample();
+        r.toc_findings = vec![
+            Finding { level: Level::Warning, code: "leadout_unreadable".into(), message: "The end of the disc could not be read.".into(), tracks: vec![1] },
+            Finding { level: Level::Note, code: "hidden_audio".into(), message: "Track 1 starts 1:35 into the disc.".into(), tracks: vec![1] },
+        ];
+        let log = render(&r);
+        for needle in ["Disc checks", "Warning: The end of the disc could not be read.", "Note:    Track 1 starts 1:35"] {
+            assert!(log.contains(needle), "missing {needle:?} in:\n{log}");
+        }
     }
 
     #[test]

@@ -77,6 +77,11 @@ pub fn rip(opts: &RipOptions) -> Result<(), Error> {
         }
     }
 
+    for f in analyzer::toc_check::check(&info) {
+        let line = format!("{} {}", if f.level == analyzer::toc_check::Level::Warning { "Disc check warning:" } else { "Disc check:" }, f.message);
+        if opts.progress_json { emit_step(&line); } else { eprintln!("{line}"); }
+    }
+
     // Step 2: MusicBrainz lookup (once — used for both folder naming and tags)
     let mb: Option<ReleaseInfo> = if let Some(ref wanted) = opts.mb_release {
         // The user picked the release explicitly: no DiscID guesswork, and no silent fallback.

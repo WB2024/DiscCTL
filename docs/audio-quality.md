@@ -123,3 +123,19 @@ The album page shows the cover file's pixel size, format and weight with a plain
 | **Keep each gap with its own track** (`own-track`) | As above, and each gap is moved to the start of the track it leads into, so every track begins where its gap does. Together the tracks still make exactly the same continuous audio. |
 
 The scan runs after AccurateRip has checked the tracks, because AccurateRip is defined on the official track starts. Gaps are never moved across a break in the disc.
+
+## Disc checks
+
+Before ripping, RustyDisc looks over the disc's table of contents for things that are unusual, damaged or built to confuse rippers, and says so on the Rip page, in `rustydisc info`, in the job, and in the rip log under *Disc checks*. Plain information is marked *Note*; things that may affect the rip are *Warning*.
+
+| Check | Level | Meaning |
+|---|---|---|
+| Track numbers not 1, 2, 3 … | Warning | Missing or repeated numbers: the table of contents may be damaged. |
+| Tracks out of order, or with no length | Warning | A track starts at or before the one before it. |
+| End of disc unreadable | Warning | The last track's length is a guess and AccurateRip can't check the rip. |
+| Audio after a data session | Warning | The reverse of the usual Enhanced CD order. |
+| MusicBrainz track count differs from the disc | Warning | The titles and tags may belong to a different edition. |
+| Very short track (under 4 s) | Note | Unusual, but real discs have them. |
+| Longer than 80 minutes | Note | An extended or overburned disc. |
+| Hidden audio before track 1 | Note | See *Hidden tracks and gaps* above. |
+| Data track before the audio | Note | A mixed-mode disc; the data is skipped when ripping audio. |

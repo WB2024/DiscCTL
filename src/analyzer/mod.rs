@@ -4,6 +4,8 @@ use sha1::Digest as _;
 use base64::Engine as _;
 use crate::error::Error;
 
+pub mod toc_check;
+
 // ── Public types ──────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -548,6 +550,9 @@ pub fn display(info: &DiscInfo) {
     }
     println!();
 
+    for f in toc_check::check(info) {
+        println!("{} {}", if f.level == toc_check::Level::Warning { "Warning:" } else { "Note:   " }, f.message);
+    }
     for session in &info.sessions {
         match &session.kind {
             SessionKind::Audio => {

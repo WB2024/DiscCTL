@@ -11,7 +11,7 @@ A working checklist of the ripping and burning topics RustyDisc should cover, wh
 | 3 | [Burn and write speeds](#3-burn-and-write-speeds) | ✅ | Auto or chosen speed (v1.6.0) |
 | 4 | [Jitter and read-error reporting](#4-jitter-and-read-error-reporting) | ✅ | Per-track clean / repaired / suspect (v1.7.0) |
 | 5 | [Pregaps, hidden tracks, track boundaries](#5-pregaps-hidden-tracks-and-track-boundaries) | ✅ | Hidden track as 00; optional gap scan (v1.9.0) |
-| 6 | [TOC anomaly checks](#6-toc-anomaly-checks) | ⬜ | TOC read, not validated |
+| 6 | [TOC anomaly checks](#6-toc-anomaly-checks) | ✅ | Disc checks before and after ripping (v1.10.0) |
 | 7 | [Disc-at-once vs track-at-once](#7-disc-at-once-vs-track-at-once) | ⬜ | DAO only, undocumented |
 | 8 | [Normalization](#8-normalization) | ⬜ | ReplayGain tags only |
 | 9 | [Exact disc images](#9-exact-disc-images) | ⬜ | ISO build for data only |
@@ -109,7 +109,11 @@ Open questions that need a real disc or drive to settle are marked **(verify on 
 **Done when:** a disc with a known hidden track yields that audio. **(verify on hardware: whether the drive allows reading before track 1)**
 
 ## 6. TOC anomaly checks
-**Status:** ⬜
+**Status:** ✅ complete in v1.10.0 (built while a rip was running; not deployed until that finished)
+
+**What was built:** `analyzer::toc_check` examines the table of contents already read from the disc and reports, as Notes or Warnings: track numbers not 1, 2, 3 …, tracks out of order or with no length, a very short track, an unreadable end of disc (which stops AccurateRip), audio after a data session, a data track before the audio (mixed mode), a disc longer than 80 minutes, hidden audio before track 1, and a MusicBrainz track count that differs from the disc. They show on the Rip page's disc card, in `rustydisc info`, in the job output before ripping, in the rip log (*Disc checks*, with warnings repeated in the Notes) and in the report JSON. Tests cover every rule with synthetic tables of contents, plus the real Morrissey disc, which correctly comes out clean.
+
+**Left for you to check:** a disc that is genuinely odd (a mixed-mode or Enhanced CD, or a damaged disc). Ordinary discs should show nothing.
 
 **Plan:**
 - Add validation rules in the analyzer: track 1 not starting at the standard offset, overlapping or zero-length tracks, an unexpected data track position, session inconsistencies, and a lead-out that doesn't fit.
@@ -237,3 +241,4 @@ Both meanings of "streams" are in scope.
 | 2026-10-01 | 4 Jitter and read-error reporting | Built (v1.7.0); parser tested on real drive output; verdicts on a flawed disc pending your check |
 | 2026-10-01 | Side fixes (v1.8.0) | Loudness and DR results kept and shown again; cover size, format and quality rating; albums found by folder structure (Archive/Artist/Album) in Library and Import |
 | 2026-10-01 | 5 Pregaps, hidden tracks, track boundaries | Built (v1.9.0); hidden track and gap handling tested with stand-in tools; real hidden-track and gap discs pending |
+| 2026-10-01 | 6 TOC anomaly checks | Built (v1.10.0), unit tested on synthetic tables and the real disc (clean); an odd real disc pending |

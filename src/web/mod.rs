@@ -362,7 +362,9 @@ async fn info(State(st): S, Query(q): Query<InfoQuery>) -> ApiResult<Json<Value>
     let info = tokio::task::spawn_blocking(move || analyzer::analyze(&device))
         .await
         .map_err(|e| Error::backend(e.to_string()))??;
-    Ok(Json(serde_json::to_value(info).map_err(Error::from)?))
+    let mut v = serde_json::to_value(&info).map_err(Error::from)?;
+    v["toc_findings"] = serde_json::to_value(analyzer::toc_check::check(&info)).map_err(Error::from)?;
+    Ok(Json(v))
 }
 
 #[derive(Deserialize)]
