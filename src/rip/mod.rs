@@ -6,6 +6,7 @@ pub mod engine;
 pub mod mb_enrich;
 pub mod metadata;
 pub mod musicbrainz;
+pub mod offset;
 pub mod report;
 pub mod tagging;
 
@@ -41,6 +42,8 @@ pub struct RipOptions {
     pub replaygain: bool,
     /// Measure dynamic range (DR) after ripping and write DR tags.
     pub dynamic_range: bool,
+    /// What to do about the drive's read offset.
+    pub offset: offset::OffsetMode,
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
@@ -333,11 +336,7 @@ fn rip_redbook(
         &opts.device, &wav_dir, track_count, opts.debug, opts.progress_json,
     )?;
 
-    let ar = if opts.no_accuraterip {
-        None
-    } else {
-        accuraterip::check(info, &wav_tracks, opts.debug, opts.progress_json)
-    };
+    let (ar, offset_applied, offset_notes) = verify_with_offset(info, opts, &wav_tracks);
 
     let ext   = opts.format.extension();
     let total = wav_tracks.len();
@@ -388,7 +387,7 @@ fn rip_redbook(
     }
 
     let report_dir = if opts.archive { format!("{}/metadata", output_dir) } else { output_dir.to_string() };
-    write_rip_report(info, mb, opts, ar.as_ref(), started, &ripped, &report_dir);
+    write_rip_report(info, mb, opts, ar.as_ref(), started, &ripped, &report_dir, offset_applied, &offset_notes);
     let _ = std::fs::remove_dir_all(&wav_dir);
     post_rip(opts, &outputs);
 
@@ -460,6 +459,8 @@ fn rip_bluebook(
 
     let audio_session = info.sessions.iter().find(|s| matches!(s.kind, SessionKind::Audio));
     let mut ar: Option<accuraterip::Report> = None;
+    let mut offset_applied = 0i32;
+    let mut offset_notes: Vec<String> = Vec::new();
 
     if let Some(session) = audio_session {
         let track_count = session.tracks.iter().filter(|t| t.kind == TrackKind::Audio).count();
@@ -477,9 +478,10 @@ fn rip_bluebook(
             &opts.device, &wav_dir, track_count, opts.debug, opts.progress_json,
         )?;
 
-        if !opts.no_accuraterip {
-            ar = accuraterip::check(info, &wav_tracks, opts.debug, opts.progress_json);
-        }
+        let (checked, applied, notes) = verify_with_offset(info, opts, &wav_tracks);
+        ar = checked;
+        offset_applied = applied;
+        offset_notes = notes;
 
         let ext   = opts.format.extension();
         let total = wav_tracks.len();
@@ -528,7 +530,7 @@ fn rip_bluebook(
             ripped.push(RippedEntry { number: *track_num, title: title.map(str::to_string), file: filename.clone(), raw_path: wav_path.clone() });
         }
 
-        write_rip_report(info, mb, opts, ar.as_ref(), started, &ripped, &meta_dir);
+        write_rip_report(info, mb, opts, ar.as_ref(), started, &ripped, &meta_dir, offset_applied, &offset_notes);
         let _ = std::fs::remove_dir_all(&wav_dir);
         post_rip(opts, &outputs);
     }
@@ -557,6 +559,88 @@ fn rip_bluebook(
     Ok(())
 }
 
+/// Which tracks follow each other directly on the disc, so audio can be borrowed across the boundary.
+fn contiguity(info: &analyzer::DiscInfo, wavs: &[(usize, String)]) -> Vec<bool> {
+    let tracks: Vec<&analyzer::TrackInfo> = info.sessions.iter().flat_map(|s| s.tracks.iter()).collect();
+    wavs.windows(2)
+        .map(|w| {
+            let a = tracks.iter().find(|t| t.number == w[0].0);
+            let b = tracks.iter().find(|t| t.number == w[1].0);
+            matches!((a, b), (Some(a), Some(b)) if b.number == a.number + 1 && a.lba_end == b.lba_start)
+        })
+        .collect()
+}
+
+/// Check the rip against AccurateRip, correcting the drive's read offset as the options ask.
+/// Returns the final report, the offset applied (samples) and notes for the rip log.
+fn verify_with_offset(
+    info: &analyzer::DiscInfo,
+    opts: &RipOptions,
+    wavs: &[(usize, String)],
+) -> (Option<accuraterip::Report>, i32, Vec<String>) {
+    use offset::OffsetMode;
+    let say = |m: &str| if opts.progress_json { emit_step(m) } else { eprintln!("{m}") };
+    let check = || if opts.no_accuraterip { None } else { accuraterip::check(info, wavs, opts.debug, opts.progress_json) };
+    let mut notes = Vec::new();
+    let padding_note = |o: &offset::Outcome| if o.padded_samples > 0 {
+        Some(format!("{} samples at the very {} of the disc had nothing to borrow from and are silence.", o.padded_samples, if o.offset > 0 { "end" } else { "start" }))
+    } else { None };
+
+    match opts.offset {
+        OffsetMode::Off => (check(), 0, notes),
+        OffsetMode::Fixed(n) => {
+            say(&format!("Correcting the drive's read offset ({n:+} samples)..."));
+            match offset::apply(wavs, &contiguity(info, wavs), n) {
+                Ok(out) => {
+                    offset::discard_originals(wavs);
+                    notes.push(format!("Read offset corrected by {n:+} samples (set by you)."));
+                    notes.extend(padding_note(&out));
+                    (check(), n, notes)
+                }
+                Err(e) => {
+                    offset::restore(wavs);
+                    notes.push(format!("The read offset could not be corrected ({e}); the audio is as the drive returned it."));
+                    (check(), 0, notes)
+                }
+            }
+        }
+        OffsetMode::Auto => {
+            if opts.no_accuraterip {
+                notes.push("Automatic read offset correction needs AccurateRip, which was turned off.".into());
+                return (None, 0, notes);
+            }
+            let first = check();
+            let Some(shift) = first.as_ref().and_then(|r| r.detected_shift_samples).filter(|s| *s != 0) else {
+                return (first, 0, notes);
+            };
+            say(&format!("AccurateRip proves the drive reads {shift:+} samples off; correcting it..."));
+            let out = match offset::apply(wavs, &contiguity(info, wavs), shift) {
+                Ok(o) => o,
+                Err(e) => {
+                    offset::restore(wavs);
+                    notes.push(format!("The read offset could not be corrected ({e}); the audio is as the drive returned it."));
+                    return (first, 0, notes);
+                }
+            };
+            let second = check();
+            let before = first.as_ref().map(|r| r.verified).unwrap_or(0);
+            let better = second.as_ref().is_some_and(|r| r.verified >= before && r.detected_shift_samples.is_none());
+            if better {
+                offset::discard_originals(wavs);
+                say(&format!("Read offset corrected: all {} verified tracks now match exactly", second.as_ref().map(|r| r.verified).unwrap_or(0)));
+                notes.push(format!("Read offset of {shift:+} samples corrected automatically (found by AccurateRip), and the result re-checked."));
+                notes.extend(padding_note(&out));
+                (second, shift, notes)
+            } else {
+                offset::restore(wavs);
+                say("The correction did not improve the AccurateRip result, so the audio was left as the drive returned it");
+                notes.push(format!("A {shift:+} sample correction was tried but did not improve the AccurateRip result, so it was undone."));
+                (first, 0, notes)
+            }
+        }
+    }
+}
+
 /// One track as it was ripped, kept until the rip report is written.
 struct RippedEntry {
     number: usize,
@@ -574,6 +658,8 @@ fn write_rip_report(
     started: std::time::SystemTime,
     ripped: &[RippedEntry],
     dir: &str,
+    offset_applied: i32,
+    offset_notes: &[String],
 ) {
     if opts.progress_json { emit_step("Writing the rip log..."); }
     let report = report::build(report::Inputs {
@@ -582,7 +668,7 @@ fn write_rip_report(
         settings: report::Settings {
             reader: "cdparanoia".into(),
             read_mode: "full paranoia (rereads and verifies every sector)".into(),
-            offset_applied_samples: 0,
+            offset_applied_samples: offset_applied,
             format: opts.format.extension().to_uppercase(),
             quality: encoder::quality_choices(&opts.format)
                 .into_iter()
@@ -595,6 +681,7 @@ fn write_rip_report(
         tracks: ripped.iter().map(|t| report::RippedTrack { number: t.number, title: t.title.as_deref(), file: &t.file, raw_path: &t.raw_path }).collect(),
         accuraterip: ar,
         no_accuraterip: opts.no_accuraterip,
+        notes: offset_notes.to_vec(),
     });
     if let Err(e) = report::write(&report, dir) {
         eprintln!("Could not write the rip log: {e}");

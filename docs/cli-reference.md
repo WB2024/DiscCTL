@@ -134,6 +134,8 @@ rustydisc rip [OPTIONS]
 | `--format <fmt>` | Audio format: `wav`, `flac`, `alac`, `aiff`, `ogg`, `mp3`, `opus`, `aac` (default: `flac`) |
 | `--quality <q>` | Encoder quality, best by default: FLAC `0`–`12` (level), MP3 `v0`/`v2`/`cbr320`/`cbr192`/`cbr128`, AAC and Opus a bitrate in kbps, OGG `4`–`10`. See [Audio quality](audio-quality.md) |
 | `--replaygain` | Measure loudness after ripping and write ReplayGain 2.0 tags |
+| `--dynamic-range` | Measure dynamic range (DR) after ripping and write DR tags |
+| `--offset <off\|auto\|N>` | Drive read offset: leave the audio as read (default), correct by the shift AccurateRip proves, or by N samples. See [Read offset correction](audio-quality.md#read-offset-correction) |
 | `--cover-file <file>` | Use this JPEG or PNG as the cover instead of looking one up |
 | `--archive` | Archive mode: store in `audio/` + `metadata/` subdirs; add `musicbrainz.json` + `checksums.json` |
 | `--mb-release <id\|url>` | Use this MusicBrainz release for tags, cover art and folder name instead of the DiscID lookup — see [Choosing the MusicBrainz release](#choosing-the-musicbrainz-release) |

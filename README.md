@@ -7,7 +7,7 @@
 **Rip, burn and archive CDs and DVDs — and fill USB sticks — from your browser.**<br>
 Built in Rust for Linux. Runs headless in Docker, so the drive can live in a server and you drive it from anywhere.
 
-[![Version](https://img.shields.io/badge/version-1.4-e8743b?style=flat-square)](https://github.com/WB2024/DiscCTL)
+[![Version](https://img.shields.io/badge/version-1.5-e8743b?style=flat-square)](https://github.com/WB2024/DiscCTL)
 [![Docker pulls](https://img.shields.io/docker/pulls/wb20244/rustydisc?style=flat-square&logo=docker&logoColor=white&color=2496ED)](https://hub.docker.com/r/wb20244/rustydisc)
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange?style=flat-square&logo=rust)](docs/install.md)
 [![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](#license)
@@ -43,6 +43,7 @@ Built in Rust for Linux. Runs headless in Docker, so the drive can live in a ser
 - Secure extraction with error correction
 - **FLAC, ALAC, WAV, AIFF, MP3, AAC, Opus, OGG**, each with quality choices (best by default)
 - **Proper file ownership:** set a user, group and umask and everything RustyDisc creates belongs to them instead of root, with a one-click fix for existing files ([details](docs/web-ui-and-docker.md#file-ownership))
+- **Read offset correction:** fixes your drive's read offset in the files (automatically, using AccurateRip, or by a number you set) so rips match any other drive's exactly ([details](docs/audio-quality.md#read-offset-correction))
 - **Rip log:** every rip saves a readable `rip.log` and a JSON report: drive, read settings, table of contents, per-track AccurateRip results and checksums, and notes
 - **Quality report:** bit depth, sample rate and bitrate after ripping, plus an integrity test, **loudness / ReplayGain**, **dynamic range (DR)** and **spectrograms** that expose fake lossless
 - **Every MusicBrainz tag** on every file: IDs, sort names, disc, label, ISRCs, credits

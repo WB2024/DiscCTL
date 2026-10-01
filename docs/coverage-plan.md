@@ -7,7 +7,7 @@ A working checklist of the ripping and burning topics RustyDisc should cover, wh
 | # | Topic | Status | Today |
 |---|---|---|---|
 | 1 | [Rip log and disc report](#1-rip-log-and-disc-report) | ✅ | `rip.log` + `rip-report.json` on every rip (v1.3.0) |
-| 2 | [Read offset correction](#2-read-offset-correction) | ⬜ | Detected, not applied |
+| 2 | [Read offset correction](#2-read-offset-correction) | ✅ | Off / Auto / fixed number (v1.5.0) |
 | 3 | [Burn and write speeds](#3-burn-and-write-speeds) | ⬜ | No control |
 | 4 | [Jitter and read-error reporting](#4-jitter-and-read-error-reporting) | ⬜ | Done by cdparanoia, not shown |
 | 5 | [Pregaps, hidden tracks, track boundaries](#5-pregaps-hidden-tracks-and-track-boundaries) | ⬜ | TOC read only |
@@ -43,7 +43,11 @@ Open questions that need a real disc or drive to settle are marked **(verify on 
 **Done when:** every rip, from the CLI and the web UI, produces both files; the Library shows the report; tests cover formatting.
 
 ## 2. Read offset correction
-**Status:** ⬜
+**Status:** ✅ complete in v1.5.0 (awaiting your check on a real rip)
+
+**What was built:** a drive read offset choice: **Off** (default, audio as returned), **Auto** (rip, let AccurateRip prove the shift, correct by it, re-check, and undo it if the result isn't at least as good) or a fixed number of samples. Available in Settings → Rip defaults, on the Rip page, and as `--offset off|auto|N`. The correction re-cuts the whole disc's audio at the track boundaries (borrowing from the neighbouring track; only the disc's very start or end is padded with silence). The rip log records the offset applied and how it was found. Code: `src/rip/offset.rs`, wired in `verify_with_offset` in `src/rip/mod.rs`. Tests include an end-to-end one: a disc ripped with a +6 and a -30 drive offset is detected, corrected, and then matches AccurateRip at shift 0 on every track.
+
+**Left for you to check:** a real rip with Auto on (your drive should come out at +6 and re-verify at exactly 0). Writing the offset to your setting is a one-time choice; I left the default Off.
 
 **Today:** AccurateRip matching searches ±2939 samples and reports a likely drive offset. The saved audio is not shifted.
 
@@ -212,3 +216,4 @@ Both meanings of "streams" are in scope.
 | | | |
 | 2026-10-01 | Side fix: file ownership | v1.4.0: RUSTYDISC_PUID/PGID/UMASK, fix-permissions command and Settings card; server set to 1000:1000, existing files fixed |
 | 2026-10-01 | 1 Rip log and disc report | Built, unit tested, UI checked with a sample report; real rip pending your check |
+| 2026-10-01 | 2 Read offset correction | Built (v1.5.0); tests prove detect, correct and re-verify at shift 0 for +6 and -30; real rip pending your check |

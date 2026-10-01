@@ -66,3 +66,24 @@ The database has no public API or export, so RustyDisc links to it instead of re
 Every rip writes two files describing how it went: `rip.log` to read, and `rip-report.json` for scripts. They sit next to the audio, or in `metadata/` in archive mode.
 
 The log records the drive (model and firmware), the reader and its mode, whether a read offset was corrected, the disc's table of contents, and for each track the file written, its AccurateRip result and a SHA-256 of the raw track exactly as the drive delivered it. A Notes section lists anything worth knowing, such as a disc missing from AccurateRip or only some tracks matching. In the web UI the Library album page shows it in a **Rip log** card, with a download button.
+
+## Read offset correction
+
+Every drive reads the disc a fixed number of samples early or late. The audio is fine, but the whole disc is shifted, so a rip from your drive differs by a few samples from the same disc ripped on another drive. AccurateRip still recognises it (it searches for the shift, and the rip log reports it), but the files themselves are slightly off.
+
+**Settings → Rip defaults → Drive read offset** (or the option on the Rip page, or `--offset` on the command line) chooses what to do:
+
+| Choice | What happens |
+|---|---|
+| **Off** (default) | The audio is saved exactly as the drive returned it. |
+| **Auto** | The rip is checked against AccurateRip first. If every verified track matches at the same shift, RustyDisc corrects the audio by that amount and checks again. If the second check is not at least as good, the correction is undone and the original audio kept. |
+| **A number** | Always correct by that many samples, for example `6` or `-30` (the value your drive has in the AccurateRip drive list). |
+
+Correcting shifts the whole disc's audio and re-cuts it at the track boundaries: each track loses its first N samples and takes the next track's first N (the reverse for a negative offset), so nothing is lost between tracks. Only the very start or end of the disc, where there is nothing to borrow from, is filled with silence (a drive can't read past the lead-out), and the rip log says how many samples that was. The log also records the offset applied, and whether it was found automatically or set by you.
+
+Auto needs AccurateRip, so it does nothing for discs that aren't in the database. For those, set the number yourself once; your drive's offset doesn't change.
+
+```bash
+rustydisc rip --dir /rips --offset auto     # let AccurateRip decide
+rustydisc rip --dir /rips --offset 6        # your drive's known offset
+```

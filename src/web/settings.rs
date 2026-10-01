@@ -26,6 +26,8 @@ pub struct Settings {
     pub rip_replaygain: bool,
     /// Measure dynamic range (DR) after ripping.
     pub rip_dynamic_range: bool,
+    /// Drive read offset: "off", "auto", or a number of samples.
+    pub rip_offset: String,
 
     // Cover art
     /// Enabled sources, best first: "fanart" and/or "caa".
@@ -100,6 +102,7 @@ impl Default for Settings {
             rip_quality: String::new(),
             rip_replaygain: false,
             rip_dynamic_range: false,
+            rip_offset: "off".into(),
             cover_sources: vec!["caa".into()],
             cover_save_file: true,
             cover_embed: true,

@@ -58,6 +58,11 @@ pub struct RipArgs {
     #[arg(long)]
     pub dynamic_range: bool,
 
+    /// Drive read offset: "off" (audio exactly as read), "auto" (correct by the shift AccurateRip
+    /// proves), or a number of samples such as 6 or -30.
+    #[arg(long, default_value = "off", value_name = "off|auto|N", allow_hyphen_values = true)]
+    pub offset: String,
+
     /// Use this picture (JPEG or PNG) as the cover instead of looking one up
     #[arg(long, value_name = "FILE")]
     pub cover_file: Option<String>,
@@ -123,6 +128,7 @@ pub fn run(args: RipArgs) -> Result<(), Error> {
         quality:        args.quality.filter(|q| !q.trim().is_empty()),
         replaygain:     args.replaygain,
         dynamic_range:  args.dynamic_range,
+        offset:         rip::offset::OffsetMode::parse(&args.offset).map_err(Error::validation)?,
     };
 
     rip::rip(&opts)?;

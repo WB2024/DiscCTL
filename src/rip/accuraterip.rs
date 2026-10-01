@@ -337,13 +337,13 @@ fn find_shift_v2(y: &[u32], first: bool, last: bool, targets: &[u32]) -> Option<
 
 // ── WAV access ───────────────────────────────────────────────────────────────
 
-struct Wav {
+pub(crate) struct Wav {
     path: String,
     data_start: u64,
-    words: usize,
+    pub(crate) words: usize,
 }
 
-fn open_wav(path: &str) -> Result<Wav, Error> {
+pub(crate) fn open_wav(path: &str) -> Result<Wav, Error> {
     let mut f = File::open(path)?;
     let mut riff = [0u8; 12];
     f.read_exact(&mut riff)?;
@@ -366,7 +366,7 @@ fn open_wav(path: &str) -> Result<Wav, Error> {
 }
 
 impl Wav {
-    fn read(&self, from: usize, count: usize) -> Result<Vec<u32>, Error> {
+    pub(crate) fn read(&self, from: usize, count: usize) -> Result<Vec<u32>, Error> {
         let count = count.min(self.words.saturating_sub(from));
         let mut f = File::open(&self.path)?;
         f.seek(SeekFrom::Start(self.data_start + from as u64 * 4))?;
@@ -851,6 +851,54 @@ mod tests {
         assert_eq!(report[1].version, Some(2)); // matched through the consensus shift
         assert_eq!(report[0].confidence, Some(30));
         assert_eq!(detected_shift(&report), Some(-6));
+    }
+
+    // The whole point of offset correction: a rip from a drive that reads late (or early) is
+    // shifted, AccurateRip finds the shift, and after correcting it every track matches exactly.
+    #[test]
+    fn correcting_the_detected_offset_makes_every_track_match_at_zero() {
+        for drive_offset in [6i32, -30] {
+            let lens = [9000usize, 12000, 15000, 10000];
+            let disc = noise(lens.iter().sum(), 77);
+            let mut starts = vec![0usize];
+            for l in &lens { starts.push(starts.last().unwrap() + l); }
+            let n = lens.len();
+            let entries: Vec<(u8, u32)> = (0..n)
+                .map(|i| (20, checksum_v1(&disc[starts[i]..starts[i + 1]], i == 0, i == n - 1)))
+                .collect();
+            let responses = vec![Response { tracks: entries }];
+
+            // A drive with offset +N delivers the disc N samples late; -N, N samples early.
+            let total = disc.len();
+            let ripped: Vec<u32> = (0..total as i64)
+                .map(|i| { let j = i - drive_offset as i64; if j >= 0 && (j as usize) < total { disc[j as usize] } else { 0 } })
+                .collect();
+
+            let dir = std::env::temp_dir().join(format!("rustydisc_ar_fix_{}_{}", drive_offset, std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            let wavs: Vec<(usize, String)> = (0..n)
+                .map(|i| {
+                    let path = dir.join(format!("track{:02}.cdda.wav", i + 1));
+                    write_wav(&path, &ripped[starts[i]..starts[i + 1]]);
+                    (i + 1, path.to_string_lossy().to_string())
+                })
+                .collect();
+            let toc = toc_from_lengths(&[400, 400, 400, 400], 0, 0);
+
+            let before = verify_disc(&toc, &responses, &wavs, false);
+            let found = detected_shift(&before).expect("the offset is detected");
+            assert_eq!(found, drive_offset, "AccurateRip reports the drive's offset");
+
+            crate::rip::offset::apply(&wavs, &[true, true, true], found).unwrap();
+            crate::rip::offset::discard_originals(&wavs);
+            let after = verify_disc(&toc, &responses, &wavs, false);
+            let _ = std::fs::remove_dir_all(&dir);
+
+            assert!(after.iter().all(|t| t.status == "verified"), "{drive_offset}: {after:?}");
+            assert!(after.iter().all(|t| t.shift_samples == Some(0)), "{drive_offset}: matches exactly, no shift");
+            assert_eq!(detected_shift(&after), None);
+        }
     }
 
     // Database entries that only hold v2 checksums, from a drive with a read offset: no

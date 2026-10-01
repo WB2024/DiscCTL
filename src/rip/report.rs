@@ -115,6 +115,8 @@ pub struct Inputs<'a> {
     pub tracks: Vec<RippedTrack<'a>>,
     pub accuraterip: Option<&'a accuraterip::Report>,
     pub no_accuraterip: bool,
+    /// Things worth recording about how the rip was handled (e.g. a read offset correction).
+    pub notes: Vec<String>,
 }
 
 pub fn build(i: Inputs) -> RipReport {
@@ -149,7 +151,7 @@ pub fn build(i: Inputs) -> RipReport {
         })
         .collect();
 
-    let mut warnings = Vec::new();
+    let mut warnings = i.notes.clone();
     match i.accuraterip {
         Some(r) if !r.found => warnings.push("This disc is not in the AccurateRip database, so the rip could not be checked against other people's.".into()),
         Some(r) if r.verified < r.total => warnings.push(format!("Only {} of {} tracks matched AccurateRip.", r.verified, r.total)),
@@ -157,8 +159,12 @@ pub fn build(i: Inputs) -> RipReport {
         None => warnings.push("The AccurateRip check could not be completed.".into()),
         _ => {}
     }
-    if let Some(shift) = i.accuraterip.and_then(|r| r.detected_shift_samples).filter(|s| *s != 0 && i.settings.offset_applied_samples == 0) {
-        warnings.push(format!("Your drive appears to read {shift:+} samples off. The audio was saved as the drive returned it, so it matches AccurateRip only at that shift."));
+    if let Some(shift) = i.accuraterip.and_then(|r| r.detected_shift_samples).filter(|s| *s != 0) {
+        if i.settings.offset_applied_samples == 0 {
+            warnings.push(format!("Your drive appears to read {shift:+} samples off. The audio was saved as the drive returned it, so it matches AccurateRip only at that shift. Turn on read offset correction (Settings → Rip defaults) to fix this."));
+        } else {
+            warnings.push(format!("After correcting {:+} samples, AccurateRip still finds the rip {shift:+} samples off, so the offset looks wrong.", i.settings.offset_applied_samples));
+        }
     }
     if i.mb.is_none() {
         warnings.push("No MusicBrainz release was used, so tags come from CD-TEXT or are missing.".into());
