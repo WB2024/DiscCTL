@@ -70,6 +70,9 @@ pub struct TrackEntry {
     /// SHA-256 of the raw track exactly as the drive delivered it, before encoding.
     pub read_sha256: String,
     pub accuraterip: Option<AccurateRipTrack>,
+    /// How cleanly the drive read this track.
+    #[serde(default)]
+    pub read: Option<super::readhealth::TrackHealth>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -94,7 +97,22 @@ pub struct RipReport {
     pub settings: Settings,
     pub tracks: Vec<TrackEntry>,
     pub accuraterip: Option<AccurateRipSummary>,
+    /// How cleanly the drive read the disc as a whole.
+    #[serde(default)]
+    pub read_quality: Option<ReadSummary>,
     pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReadSummary {
+    pub clean: usize,
+    pub repaired: usize,
+    pub suspect: usize,
+    /// Times cdparanoia warned the drive caches audio reads.
+    pub cache_errors: u64,
+    /// Harmless drive resets (unit attention) that were ignored.
+    pub harmless_resets: u32,
+    pub reduced_checking: bool,
 }
 
 // ── Building ──────────────────────────────────────────────────────────────────
@@ -117,6 +135,10 @@ pub struct Inputs<'a> {
     pub no_accuraterip: bool,
     /// Things worth recording about how the rip was handled (e.g. a read offset correction).
     pub notes: Vec<String>,
+    /// How cleanly each track was read.
+    pub health: Option<&'a super::readhealth::ReadHealth>,
+    /// cdparanoia was run with less than full checking.
+    pub paranoia_reduced: bool,
 }
 
 pub fn build(i: Inputs) -> RipReport {
@@ -142,6 +164,7 @@ pub fn build(i: Inputs) -> RipReport {
             title: t.title.map(str::to_string),
             file: t.file.to_string(),
             read_sha256: sha256_file(t.raw_path).unwrap_or_default(),
+            read: i.health.and_then(|h| h.track(t.number).cloned()),
             accuraterip: i.accuraterip.and_then(|r| r.tracks.iter().find(|x| x.track == t.number)).map(|x| AccurateRipTrack {
                 status: x.status.clone(),
                 confidence: x.confidence,
@@ -158,6 +181,27 @@ pub fn build(i: Inputs) -> RipReport {
         None if i.no_accuraterip => warnings.push("The AccurateRip check was turned off.".into()),
         None => warnings.push("The AccurateRip check could not be completed.".into()),
         _ => {}
+    }
+    if let Some(h) = i.health {
+        use super::readhealth::Status;
+        let verified = |n: usize| i.accuraterip.and_then(|r| r.tracks.iter().find(|t| t.track == n)).is_some_and(|t| t.status == "verified");
+        for t in &h.tracks {
+            match (t.status, verified(t.number)) {
+                (Status::Suspect, false) => warnings.push(format!("Track {:02}: cdparanoia could not read some sectors cleanly ({}), and AccurateRip can't confirm the result, so it may have glitches. Cleaning the disc and ripping again can help.", t.number, t.describe())),
+                (Status::Suspect, true) => warnings.push(format!("Track {:02}: cdparanoia reported trouble ({}), but AccurateRip confirms the audio is correct.", t.number, t.describe())),
+                (Status::Repaired, false) => warnings.push(format!("Track {:02} needed repairs ({}). cdparanoia fixed them, but AccurateRip can't confirm it.", t.number, t.describe())),
+                _ => {}
+            }
+        }
+        if h.cache_errors > 0 {
+            warnings.push(format!("cdparanoia warned {} times that this drive appears to cache audio reads, which can hide read errors. Its analysis mode (`cdparanoia -A`) can check.", h.cache_errors));
+        }
+        if let Some(e) = &h.first_drive_error {
+            warnings.push(format!("The drive reported an error while reading: {e}"));
+        }
+    }
+    if i.paranoia_reduced {
+        warnings.push("Read checking was reduced (a lower paranoia level), so errors may not have been caught or corrected.".into());
     }
     if let Some(shift) = i.accuraterip.and_then(|r| r.detected_shift_samples).filter(|s| *s != 0) {
         if i.settings.offset_applied_samples == 0 {
@@ -189,6 +233,17 @@ pub fn build(i: Inputs) -> RipReport {
         }),
         settings: i.settings,
         tracks,
+        read_quality: i.health.map(|h| {
+            use super::readhealth::Status;
+            ReadSummary {
+                clean: h.count(Status::Clean),
+                repaired: h.count(Status::Repaired),
+                suspect: h.count(Status::Suspect),
+                cache_errors: h.cache_errors,
+                harmless_resets: h.harmless_resets,
+                reduced_checking: i.paranoia_reduced,
+            }
+        }),
         accuraterip: i.accuraterip.map(|r| AccurateRipSummary {
             found: r.found,
             pressings: r.pressings,
@@ -316,7 +371,23 @@ pub fn render(r: &RipReport) -> String {
             None => "not checked".to_string(),
         };
         s.push_str(&format!("Track {:02}  {}\n", t.number, t.title.as_deref().unwrap_or("(untitled)")));
-        s.push_str(&format!("    File:        {}\n    AccurateRip: {}\n    Read SHA-256: {}\n", t.file, ar, t.read_sha256));
+        s.push_str(&format!("    File:        {}\n", t.file));
+        if let Some(h) = &t.read {
+            s.push_str(&format!("    Read:        {}\n", h.describe()));
+        }
+        s.push_str(&format!("    AccurateRip: {}\n    Read SHA-256: {}\n", ar, t.read_sha256));
+    }
+
+    if let Some(q) = &r.read_quality {
+        s.push_str(&format!("\nRead quality\n{rule}\n{} clean, {} repaired, {} suspect", q.clean, q.repaired, q.suspect));
+        if q.reduced_checking {
+            s.push_str(" (reduced checking)");
+        }
+        s.push_str(".\n");
+        if q.harmless_resets > 0 {
+            s.push_str(&format!("The drive reset itself {} time{} (normal after a disc is loaded); that is not held against the disc.\n", q.harmless_resets, if q.harmless_resets == 1 { "" } else { "s" }));
+        }
+        s.push_str("Edge jitter is routine and fixed by cdparanoia; it is listed only for information.\n");
     }
 
     if let Some(a) = &r.accuraterip {
@@ -371,7 +442,9 @@ mod tests {
                 file: "01.flac".into(),
                 read_sha256: "ff".into(),
                 accuraterip: Some(AccurateRipTrack { status: "verified".into(), confidence: Some(12), version: Some(2), shift_samples: Some(6) }),
+                read: None,
             }],
+            read_quality: None,
             accuraterip: Some(AccurateRipSummary { found: true, pressings: 3, verified: 1, total: 1, detected_shift_samples: Some(6) }),
             warnings: vec![],
         }
@@ -383,6 +456,19 @@ mod tests {
         for needle in ["ASUS SDRW-08D2S-U", "firmware B901", "not corrected", "3:20", "accurately ripped (v2, confidence 12, +6 sample shift)", "1 of 1 tracks verified against 3 pressings", "No problems found."] {
             assert!(log.contains(needle), "missing {needle:?} in:\n{log}");
         }
+    }
+
+    #[test]
+    fn read_quality_appears_in_the_log_with_warnings() {
+        use crate::rip::readhealth::{ReadHealth, Status, TrackHealth};
+        let mut r = sample();
+        r.tracks[0].read = Some(TrackHealth { number: 1, status: Status::Repaired, corrections: 2, scratches: 1, jitter: 4, ..Default::default() });
+        r.read_quality = Some(ReadSummary { clean: 0, repaired: 1, suspect: 0, cache_errors: 0, harmless_resets: 1, reduced_checking: false });
+        let log = render(&r);
+        for needle in ["Read:        repaired: 1 scratch, 2 corrections", "Read quality", "0 clean, 1 repaired, 0 suspect", "reset itself 1 time"] {
+            assert!(log.contains(needle), "missing {needle:?} in:\n{log}");
+        }
+        let _ = ReadHealth::default();
     }
 
     #[test]

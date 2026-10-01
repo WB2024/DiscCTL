@@ -63,6 +63,11 @@ pub struct RipArgs {
     #[arg(long, default_value = "off", value_name = "off|auto|N", allow_hyphen_values = true)]
     pub offset: String,
 
+    /// How hard to check what the drive reads: full (reread and verify every sector, the default),
+    /// fast (overlap checking only) or off (no checking at all)
+    #[arg(long, default_value = "full", value_name = "full|fast|off")]
+    pub paranoia: String,
+
     /// Use this picture (JPEG or PNG) as the cover instead of looking one up
     #[arg(long, value_name = "FILE")]
     pub cover_file: Option<String>,
@@ -129,6 +134,7 @@ pub fn run(args: RipArgs) -> Result<(), Error> {
         replaygain:     args.replaygain,
         dynamic_range:  args.dynamic_range,
         offset:         rip::offset::OffsetMode::parse(&args.offset).map_err(Error::validation)?,
+        paranoia:       rip::engine::Paranoia::parse(&args.paranoia).map_err(Error::validation)?,
     };
 
     rip::rip(&opts)?;

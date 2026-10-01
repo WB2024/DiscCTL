@@ -28,6 +28,8 @@ pub struct Settings {
     pub rip_dynamic_range: bool,
     /// Drive read offset: "off", "auto", or a number of samples.
     pub rip_offset: String,
+    /// How hard cdparanoia checks what it reads: "full", "fast" or "off".
+    pub rip_paranoia: String,
 
     // Cover art
     /// Enabled sources, best first: "fanart" and/or "caa".
@@ -103,6 +105,7 @@ impl Default for Settings {
             rip_replaygain: false,
             rip_dynamic_range: false,
             rip_offset: "off".into(),
+            rip_paranoia: "full".into(),
             cover_sources: vec!["caa".into()],
             cover_save_file: true,
             cover_embed: true,

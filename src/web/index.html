@@ -229,6 +229,7 @@ pre.json { background: var(--bg); border: 1px solid var(--line); border-radius: 
             </label>
             <label class="check"><input type="checkbox" id="rip-replaygain"><span>Add ReplayGain tags<small>measures loudness so players can level tracks and albums without changing the audio</small></span></label>
             <label class="check"><input type="checkbox" id="rip-dr"><span>Measure dynamic range (DR)<small>the loudness-war number listed on dr.loudness-war.info; also saved as a tag</small></span></label>
+            <label class="field" style="max-width:420px">Read checking<select id="rip-paranoia"><option value="full">Full: reread and verify every sector (slowest, safest)</option><option value="fast">Fast: overlap checking only</option><option value="off">Off: no checking (fastest, no protection)</option></select></label>
             <label class="field" style="max-width:420px">Drive read offset<select id="rip-offset"><option value="off">Off: audio exactly as the drive returned it</option><option value="auto">Auto: correct what AccurateRip proves</option></select></label>
             <label class="check"><input type="checkbox" id="rip-archive"><span>Archive mode<small>audio/ + metadata/ folders with disc.json, cdtext.json, musicbrainz.json and SHA-256 checksums</small></span></label>
             <label class="check"><input type="checkbox" id="rip-nomb"><span>Skip MusicBrainz lookup<small>for offline use or discs that aren't in the database</small></span></label>
@@ -568,6 +569,8 @@ pre.json { background: var(--bg); border: 1px solid var(--line); border-radius: 
           <div style="display:flex;flex-direction:column;gap:12px">
             <label class="check"><input type="checkbox" id="set-replaygain"><span>Add ReplayGain tags</span></label>
             <label class="check"><input type="checkbox" id="set-dr"><span>Measure dynamic range (DR)</span></label>
+            <label class="field">Read checking <small>How hard cdparanoia checks what the drive reads. Full catches and repairs scratches and glitches; the lower levels are faster but protect less.</small>
+              <select id="set-paranoia"><option value="full">Full: reread and verify every sector (default)</option><option value="fast">Fast: overlap checking only</option><option value="off">Off: no checking at all</option></select></label>
             <label class="field">Drive read offset <small>Drives read a few samples early or late. Auto fixes it using AccurateRip, which proves the amount.</small>
               <select id="set-offset"><option value="off">Off: audio exactly as the drive returned it</option><option value="auto">Auto: correct what AccurateRip proves</option><option value="custom">Custom number of samples…</option></select></label>
             <label class="field hidden" id="set-offset-n-wrap">Samples <small>e.g. 6 or -30</small><input type="text" id="set-offset-n" inputmode="numeric" placeholder="6"></label>
@@ -785,6 +788,16 @@ async function wireReport(name) {
     $("#rl-dl").onclick = () => { const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([r.log], { type: "text/plain" })); a.download = "rip.log"; a.click(); };
   } catch { /* an album with no log simply shows no card */ }
 }
+// How cleanly the drive read the tracks (cdparanoia's report), in plain words.
+function readHealthNote(d) {
+  const bad = d.tracks.filter(t => t.status !== "clean");
+  const head = `<span class="${d.suspect ? "ar-bad" : "ar-ok"}">${d.suspect ? "⚠" : "✔"}</span> <b>Read quality:</b> ${d.clean} clean, ${d.repaired} repaired, ${d.suspect} suspect`;
+  const word = t => t.status === "suspect" ? "suspect" : "repaired";
+  const rows = bad.map(t => `<div style="margin-top:3px">Track ${String(t.number).padStart(2, "0")}: <b>${word(t)}</b>. ${[t.skips && `${t.skips} skipped sector${t.skips === 1 ? "" : "s"}`, t.drive_errors && `${t.drive_errors} drive error${t.drive_errors === 1 ? "" : "s"}`, t.scratches && `${t.scratches} scratch${t.scratches === 1 ? "" : "es"}`, t.corrections && `${t.corrections} correction${t.corrections === 1 ? "" : "s"}`, t.dropped_or_duped && `${t.dropped_or_duped} dropped/duplicated block${t.dropped_or_duped === 1 ? "" : "s"}`].filter(Boolean).join(", ")}</div>`).join("");
+  const note = bad.length ? `<div class="muted" style="font-size:12.5px;margin-top:6px">"Repaired" means cdparanoia hit trouble and fixed it; AccurateRip tells you whether the result is right. "Suspect" means it had to skip sectors and the audio may glitch.</div>` : "";
+  return `<div class="notice" style="margin-top:8px">${head}${rows}${note}</div>`;
+}
+
 function qualityNote(s) {
   const rate = s.avg_bitrate_kbps ? ` · average ${Math.round(s.avg_bitrate_kbps)} kbps${s.min_bitrate_kbps && s.max_bitrate_kbps && Math.round(s.min_bitrate_kbps) !== Math.round(s.max_bitrate_kbps) ? ` (${Math.round(s.min_bitrate_kbps)}–${Math.round(s.max_bitrate_kbps)})` : ""}` : "";
   const badge = s.cd_quality ? `<span class="badge ok">lossless · CD quality</span>` : s.lossless ? `<span class="badge ok">lossless</span>` : `<span class="badge">lossy</span>`;
@@ -864,6 +877,7 @@ function jobPanel(container, jobId, { onEnd } = {}) {
         if (ev.name === "accuraterip") q(".jp-result").innerHTML = arTable(ev.data);
         if (ev.name === "cover") q(".jp-cover").innerHTML = coverNote(ev.data);
         if (ev.name === "quality") q(".jp-quality").innerHTML = qualityNote(ev.data);
+        if (ev.name === "read_health") q(".jp-quality").innerHTML += readHealthNote(ev.data);
         if (ev.name === "dynamic_range") q(".jp-quality").innerHTML += `<div class="notice" style="margin-top:8px"><b>Dynamic range</b>${drSummary(ev.data.album_dr)}<div class="muted" style="font-size:12.5px;margin-top:6px">Open the album in the <a href="#library">Library</a> and use Dynamic range → Submit to Dynamic Range DB to share it.</div></div>`;
         if (ev.name === "replaygain") q(".jp-quality").innerHTML += `<div class="notice" style="margin-top:8px"><b>ReplayGain</b> written to ${ev.data.files} file${ev.data.files === 1 ? "" : "s"} · album gain ${ev.data.album_gain_db >= 0 ? "+" : ""}${(+ev.data.album_gain_db).toFixed(2)} dB · loudness ${(+ev.data.album_lufs).toFixed(1)} LUFS</div>`;
         if (ev.name === "stick") q(".jp-stick").innerHTML = stickDone(ev.data);
@@ -1228,7 +1242,7 @@ async function startRip() {
   const folder = $('input[name=dest]:checked').value === "custom" ? $("#rip-folder").value.trim() : "";
   if ($('input[name=dest]:checked').value === "custom" && !folder) return toast("Enter a folder name or choose auto-naming", "err");
   const body = {
-    device: selectedDevice(), format: $("#rip-format").value, quality: $("#rip-quality").value || null, replaygain: $("#rip-replaygain").checked, dynamic_range: $("#rip-dr").checked, offset: $("#rip-offset").value, archive: $("#rip-archive").checked,
+    device: selectedDevice(), format: $("#rip-format").value, quality: $("#rip-quality").value || null, replaygain: $("#rip-replaygain").checked, dynamic_range: $("#rip-dr").checked, offset: $("#rip-offset").value, paranoia: $("#rip-paranoia").value, archive: $("#rip-archive").checked,
     no_musicbrainz: $("#rip-nomb").checked, mb_release: MB.over ? MB.over.input : null, no_accuraterip: $("#rip-noar").checked, debug: $("#rip-debug").checked, folder: folder || null,
     cover_upload: RIPCOVER.token,
   };
@@ -2475,6 +2489,7 @@ function applyRipDefaults() {
   fillQuality($("#rip-quality"), SET.rip_format, SET.rip_quality);
   $("#rip-replaygain").checked = !!SET.rip_replaygain;
   $("#rip-dr").checked = !!SET.rip_dynamic_range;
+  $("#rip-paranoia").value = SET.rip_paranoia || "full";
   { // the rip page offers the saved choice; a fixed number shows as its own option
     const sel = $("#rip-offset"), o = SET.rip_offset || "off";
     [...sel.querySelectorAll("option.fixed")].forEach(x => x.remove());
@@ -2523,6 +2538,7 @@ function renderSettings() {
   $("#set-format").onchange = () => fillQuality($("#set-quality"), $("#set-format").value, "");
   $("#set-replaygain").checked = !!SET.rip_replaygain;
   $("#set-dr").checked = !!SET.rip_dynamic_range;
+  $("#set-paranoia").value = SET.rip_paranoia || "full";
   { const o = SET.rip_offset || "off", sel = $("#set-offset"), n = $("#set-offset-n");
     sel.value = o === "off" || o === "auto" ? o : "custom"; n.value = sel.value === "custom" ? o : "";
     const sync = () => $("#set-offset-n-wrap").classList.toggle("hidden", sel.value !== "custom");
@@ -2758,7 +2774,7 @@ async function loadCacheUsage() {
 
 async function saveSettings(extra = {}) {
   const body = {
-    rip_format: $("#set-format").value, rip_quality: $("#set-quality").value, rip_replaygain: $("#set-replaygain").checked, rip_dynamic_range: $("#set-dr").checked, rip_offset: $("#set-offset").value === "custom" ? ($("#set-offset-n").value.trim() || "off") : $("#set-offset").value, rip_archive: $("#set-archive").checked,
+    rip_format: $("#set-format").value, rip_quality: $("#set-quality").value, rip_replaygain: $("#set-replaygain").checked, rip_dynamic_range: $("#set-dr").checked, rip_paranoia: $("#set-paranoia").value, rip_offset: $("#set-offset").value === "custom" ? ($("#set-offset-n").value.trim() || "off") : $("#set-offset").value, rip_archive: $("#set-archive").checked,
     rip_skip_musicbrainz: $("#set-nomb").checked, rip_skip_accuraterip: $("#set-noar").checked,
     cover_sources: enabledSources(), cover_save_file: $("#cover-save").checked, cover_embed: $("#cover-embed").checked,
     stick_extra_folders: $("#set-stick-folders").value.split("\n").map(l => l.trim()).filter(Boolean),

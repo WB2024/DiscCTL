@@ -9,7 +9,7 @@ A working checklist of the ripping and burning topics RustyDisc should cover, wh
 | 1 | [Rip log and disc report](#1-rip-log-and-disc-report) | ✅ | `rip.log` + `rip-report.json` on every rip (v1.3.0) |
 | 2 | [Read offset correction](#2-read-offset-correction) | ✅ | Off / Auto / fixed number (v1.5.0) |
 | 3 | [Burn and write speeds](#3-burn-and-write-speeds) | ✅ | Auto or chosen speed (v1.6.0) |
-| 4 | [Jitter and read-error reporting](#4-jitter-and-read-error-reporting) | ⬜ | Done by cdparanoia, not shown |
+| 4 | [Jitter and read-error reporting](#4-jitter-and-read-error-reporting) | ✅ | Per-track clean / repaired / suspect (v1.7.0) |
 | 5 | [Pregaps, hidden tracks, track boundaries](#5-pregaps-hidden-tracks-and-track-boundaries) | ⬜ | TOC read only |
 | 6 | [TOC anomaly checks](#6-toc-anomaly-checks) | ⬜ | TOC read, not validated |
 | 7 | [Disc-at-once vs track-at-once](#7-disc-at-once-vs-track-at-once) | ⬜ | DAO only, undocumented |
@@ -74,7 +74,11 @@ Open questions that need a real disc or drive to settle are marked **(verify on 
 **Done when:** `plan` shows the speed, the burn command carries it, and validation rejects speeds the drive doesn't support. **(verify on hardware)**
 
 ## 4. Jitter and read-error reporting
-**Status:** ⬜
+**Status:** ✅ complete in v1.7.0 (awaiting your check)
+
+**What was built:** cdparanoia now runs with `--stderr-progress`, so it reports every event (jitter fix-ups, corrections, scratches, skipped sectors, drift, dropped or duplicated samples, drive errors, cache warnings). RustyDisc parses those, maps each event to its track from the TOC, and gives every track a verdict: **clean** (routine edge jitter only), **repaired** (real trouble, fixed) or **suspect** (sectors skipped). Verdicts show in the job panel, the rip log (per track and a Read quality section, with Notes that say whether AccurateRip confirms the repaired or suspect tracks), and the report JSON. Real-hardware finding, now handled: the first read after a disc is loaded produces a harmless "unit attention" drive error (sense key 6) plus a couple of corrections, which is not counted against the disc. A **paranoia level** (Full / Fast / Off, `--paranoia`, Settings, Rip page) controls how hard cdparanoia checks. Code: `src/rip/readhealth.rs`, `src/rip/engine.rs`. Tests: the parser against lines captured from your real drive, the verdict rules, an end-to-end test with a stand-in cdparanoia, and the log output.
+
+**Left for you to check:** a rip of a disc with a real flaw (a light scratch or fingerprint) to see a "repaired" or "suspect" verdict. Healthy discs should read "clean".
 
 **Today:** cdparanoia corrects jitter and rereads bad sectors, but RustyDisc doesn't report what happened.
 
@@ -222,3 +226,4 @@ Both meanings of "streams" are in scope.
 | 2026-10-01 | 1 Rip log and disc report | Built, unit tested, UI checked with a sample report; real rip pending your check |
 | 2026-10-01 | 2 Read offset correction | Built (v1.5.0); tests prove detect, correct and re-verify at shift 0 for +6 and -30; real rip pending your check |
 | 2026-10-01 | 3 Burn and write speeds | Built (v1.6.0); arguments verified by tests and a dry run; real burn at a chosen speed pending your check |
+| 2026-10-01 | 4 Jitter and read-error reporting | Built (v1.7.0); parser tested on real drive output; verdicts on a flawed disc pending your check |

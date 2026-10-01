@@ -7,6 +7,7 @@ pub mod mb_enrich;
 pub mod metadata;
 pub mod musicbrainz;
 pub mod offset;
+pub mod readhealth;
 pub mod report;
 pub mod tagging;
 
@@ -44,6 +45,8 @@ pub struct RipOptions {
     pub dynamic_range: bool,
     /// What to do about the drive's read offset.
     pub offset: offset::OffsetMode,
+    /// How hard cdparanoia checks what it reads.
+    pub paranoia: engine::Paranoia,
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
@@ -332,9 +335,11 @@ fn rip_redbook(
     let mb_artist_id_alb = mb.as_ref().and_then(|r| r.mb_artist_id.clone());
 
     let wav_dir = format!("/tmp/rustydisc_rip_{}", std::process::id());
-    let wav_tracks = engine::rip_all_tracks(
-        &opts.device, &wav_dir, track_count, opts.debug, opts.progress_json,
+    let read = engine::rip_all_tracks(
+        &opts.device, &wav_dir, track_count, opts.paranoia, opts.debug, opts.progress_json,
     )?;
+    let health = read_health(info, opts, &read);
+    let wav_tracks = read.tracks;
 
     let (ar, offset_applied, offset_notes) = verify_with_offset(info, opts, &wav_tracks);
 
@@ -387,7 +392,7 @@ fn rip_redbook(
     }
 
     let report_dir = if opts.archive { format!("{}/metadata", output_dir) } else { output_dir.to_string() };
-    write_rip_report(info, mb, opts, ar.as_ref(), started, &ripped, &report_dir, offset_applied, &offset_notes);
+    write_rip_report(info, mb, opts, ar.as_ref(), started, &ripped, &report_dir, offset_applied, &offset_notes, Some(&health));
     let _ = std::fs::remove_dir_all(&wav_dir);
     post_rip(opts, &outputs);
 
@@ -461,6 +466,7 @@ fn rip_bluebook(
     let mut ar: Option<accuraterip::Report> = None;
     let mut offset_applied = 0i32;
     let mut offset_notes: Vec<String> = Vec::new();
+    let mut health: Option<readhealth::ReadHealth> = None;
 
     if let Some(session) = audio_session {
         let track_count = session.tracks.iter().filter(|t| t.kind == TrackKind::Audio).count();
@@ -474,9 +480,11 @@ fn rip_bluebook(
         let mb_artist_id_alb = mb.as_ref().and_then(|r| r.mb_artist_id.clone());
 
         let wav_dir = format!("/tmp/rustydisc_rip_{}", std::process::id());
-        let wav_tracks = engine::rip_all_tracks(
-            &opts.device, &wav_dir, track_count, opts.debug, opts.progress_json,
+        let read = engine::rip_all_tracks(
+            &opts.device, &wav_dir, track_count, opts.paranoia, opts.debug, opts.progress_json,
         )?;
+        health = Some(read_health(info, opts, &read));
+        let wav_tracks = read.tracks;
 
         let (checked, applied, notes) = verify_with_offset(info, opts, &wav_tracks);
         ar = checked;
@@ -530,7 +538,7 @@ fn rip_bluebook(
             ripped.push(RippedEntry { number: *track_num, title: title.map(str::to_string), file: filename.clone(), raw_path: wav_path.clone() });
         }
 
-        write_rip_report(info, mb, opts, ar.as_ref(), started, &ripped, &meta_dir, offset_applied, &offset_notes);
+        write_rip_report(info, mb, opts, ar.as_ref(), started, &ripped, &meta_dir, offset_applied, &offset_notes, health.as_ref());
         let _ = std::fs::remove_dir_all(&wav_dir);
         post_rip(opts, &outputs);
     }
@@ -557,6 +565,29 @@ fn rip_bluebook(
 
     if opts.progress_json { emit_progress(100.0); }
     Ok(())
+}
+
+/// Judge how cleanly each track was read, and tell the user.
+fn read_health(info: &analyzer::DiscInfo, opts: &RipOptions, read: &engine::RipRead) -> readhealth::ReadHealth {
+    let tracks: Vec<&analyzer::TrackInfo> = info.sessions.iter().flat_map(|s| s.tracks.iter()).collect();
+    let ranges: Vec<(usize, u32, u32)> = read
+        .tracks
+        .iter()
+        .filter_map(|(n, _)| tracks.iter().find(|t| t.number == *n).map(|t| (*n, t.lba_start, t.lba_end)))
+        .collect();
+    let health = read.events.summarize(&ranges);
+    let (clean, repaired, suspect) = (health.count(readhealth::Status::Clean), health.count(readhealth::Status::Repaired), health.count(readhealth::Status::Suspect));
+    let line = format!("Read quality: {clean} clean, {repaired} repaired, {suspect} suspect{}", if opts.paranoia == engine::Paranoia::Full { "" } else { " (reduced checking)" });
+    if opts.progress_json {
+        emit_step(&line);
+        println!("{}", serde_json::json!({"type": "read_health", "clean": clean, "repaired": repaired, "suspect": suspect, "tracks": health.tracks, "cache_errors": health.cache_errors}));
+    } else {
+        eprintln!("{line}");
+        for t in health.tracks.iter().filter(|t| t.status != readhealth::Status::Clean) {
+            eprintln!("  Track {:02}: {}", t.number, t.describe());
+        }
+    }
+    health
 }
 
 /// Which tracks follow each other directly on the disc, so audio can be borrowed across the boundary.
@@ -660,6 +691,7 @@ fn write_rip_report(
     dir: &str,
     offset_applied: i32,
     offset_notes: &[String],
+    health: Option<&readhealth::ReadHealth>,
 ) {
     if opts.progress_json { emit_step("Writing the rip log..."); }
     let report = report::build(report::Inputs {
@@ -667,7 +699,7 @@ fn write_rip_report(
         mb: mb.as_ref(),
         settings: report::Settings {
             reader: "cdparanoia".into(),
-            read_mode: "full paranoia (rereads and verifies every sector)".into(),
+            read_mode: opts.paranoia.describe().into(),
             offset_applied_samples: offset_applied,
             format: opts.format.extension().to_uppercase(),
             quality: encoder::quality_choices(&opts.format)
@@ -682,6 +714,8 @@ fn write_rip_report(
         accuraterip: ar,
         no_accuraterip: opts.no_accuraterip,
         notes: offset_notes.to_vec(),
+        health,
+        paranoia_reduced: opts.paranoia != engine::Paranoia::Full,
     });
     if let Err(e) = report::write(&report, dir) {
         eprintln!("Could not write the rip log: {e}");

@@ -547,6 +547,7 @@ struct SettingsUpdate {
     rip_replaygain: Option<bool>,
     rip_dynamic_range: Option<bool>,
     rip_offset: Option<String>,
+    rip_paranoia: Option<String>,
     cover_sources: Vec<String>,
     cover_save_file: bool,
     cover_embed: bool,
@@ -589,6 +590,13 @@ async fn put_settings(State(st): S, Json(u): Json<SettingsUpdate>) -> ApiResult<
         rip_quality: u.rip_quality.unwrap_or(current.rip_quality.clone()),
         rip_replaygain: u.rip_replaygain.unwrap_or(current.rip_replaygain),
         rip_dynamic_range: u.rip_dynamic_range.unwrap_or(current.rip_dynamic_range),
+        rip_paranoia: match u.rip_paranoia {
+            Some(p) => {
+                crate::rip::engine::Paranoia::parse(&p).map_err(ApiError::bad)?;
+                p.trim().to_lowercase()
+            }
+            None => current.rip_paranoia.clone(),
+        },
         rip_offset: match u.rip_offset {
             Some(o) => {
                 crate::rip::offset::OffsetMode::parse(&o).map_err(ApiError::bad)?;
@@ -1195,11 +1203,13 @@ struct RipReq {
     dynamic_range: bool,
     /// Drive read offset: "off", "auto" or a number of samples (empty = off).
     offset: Option<String>,
+    /// How hard cdparanoia checks what it reads: "full", "fast" or "off" (empty = full).
+    paranoia: Option<String>,
 }
 
 impl Default for RipReq {
     fn default() -> Self {
-        RipReq { device: None, format: None, archive: false, no_musicbrainz: false, no_accuraterip: false, debug: false, mb_release: None, folder: None, cover_upload: None, quality: None, replaygain: false, dynamic_range: false, offset: None }
+        RipReq { device: None, format: None, archive: false, no_musicbrainz: false, no_accuraterip: false, debug: false, mb_release: None, folder: None, cover_upload: None, quality: None, replaygain: false, dynamic_range: false, offset: None, paranoia: None }
     }
 }
 
@@ -1258,6 +1268,10 @@ async fn start_rip(State(st): S, Json(req): Json<RipReq>) -> ApiResult<Json<Valu
     }
     if req.replaygain { args.push("--replaygain".into()); }
     if req.dynamic_range { args.push("--dynamic-range".into()); }
+    if let Some(p) = req.paranoia.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+        crate::rip::engine::Paranoia::parse(p).map_err(ApiError::bad)?;
+        args.extend(["--paranoia".into(), p.to_string()]);
+    }
     if let Some(o) = req.offset.as_deref().map(str::trim).filter(|o| !o.is_empty()) {
         crate::rip::offset::OffsetMode::parse(o).map_err(ApiError::bad)?;
         args.extend(["--offset".into(), o.to_string()]);

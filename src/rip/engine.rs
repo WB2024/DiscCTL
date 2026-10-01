@@ -3,8 +3,63 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use crate::error::Error;
 
+/// How hard cdparanoia checks what it reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Paranoia {
+    /// Reread and verify every sector (cdparanoia's default; the safest).
+    #[default]
+    Full,
+    /// Only the overlap checking that cdda2wav does (`-Y`): faster, catches less.
+    Fast,
+    /// No verification or correction at all (`-Z`): fastest, no protection.
+    Off,
+}
+
+impl Paranoia {
+    pub fn parse(s: &str) -> Result<Self, String> {
+        match s.trim().to_lowercase().as_str() {
+            "" | "full" | "max" | "default" => Ok(Paranoia::Full),
+            "fast" | "overlap" => Ok(Paranoia::Fast),
+            "off" | "none" => Ok(Paranoia::Off),
+            other => Err(format!("'{other}' is not a paranoia level (use full, fast or off)")),
+        }
+    }
+
+    pub fn flag(self) -> Option<&'static str> {
+        match self {
+            Paranoia::Full => None,
+            Paranoia::Fast => Some("-Y"),
+            Paranoia::Off => Some("-Z"),
+        }
+    }
+
+    /// What the rip log says about the read mode.
+    pub fn describe(self) -> &'static str {
+        match self {
+            Paranoia::Full => "full paranoia (rereads and verifies every sector)",
+            Paranoia::Fast => "overlap checking only (no sector verification)",
+            Paranoia::Off => "no verification or correction",
+        }
+    }
+}
+
+/// What cdparanoia is called: `RUSTYDISC_CDPARANOIA` can point at another program (used by tests).
+fn program() -> String {
+    std::env::var("RUSTYDISC_CDPARANOIA").ok().filter(|p| !p.is_empty()).unwrap_or_else(|| "cdparanoia".to_string())
+}
+
+/// What a rip read, and how cleanly.
+pub struct RipRead {
+    /// (track number, WAV path) in track order.
+    pub tracks: Vec<(usize, String)>,
+    pub events: super::readhealth::Collector,
+}
+
 /// Verify cdparanoia is available on this system.
 pub fn check_available() -> Result<(), Error> {
+    if std::env::var("RUSTYDISC_CDPARANOIA").is_ok_and(|p| !p.is_empty()) {
+        return Ok(());
+    }
     if Path::new("/usr/bin/cdparanoia").exists()
         || Path::new("/usr/local/bin/cdparanoia").exists()
     {
@@ -16,14 +71,15 @@ pub fn check_available() -> Result<(), Error> {
 }
 
 /// Rip all audio tracks from `device` into `output_dir` as numbered WAV files.
-/// Returns a Vec of (track_number, wav_path) in track order.
+/// Returns the tracks in order, and what cdparanoia reported about reading them.
 pub fn rip_all_tracks(
     device: &str,
     output_dir: &str,
     track_count: usize,
+    paranoia: Paranoia,
     debug: bool,
     progress_json: bool,
-) -> Result<Vec<(usize, String)>, Error> {
+) -> Result<RipRead, Error> {
     check_available()?;
     std::fs::create_dir_all(output_dir)?;
 
@@ -34,10 +90,14 @@ pub fn rip_all_tracks(
         eprintln!("Ripping {} tracks from disc (this takes a while)...", track_count);
     }
 
-    let mut cmd = Command::new("cdparanoia");
+    let mut cmd = Command::new(program());
     cmd.arg("-d").arg(device)
        .arg("-B")   // batch mode: one WAV per track
-       .arg("-w");  // force WAV output
+       .arg("-w")   // force WAV output
+       .arg("-e");  // report every read event on stderr, so the quality of the read can be judged
+    if let Some(f) = paranoia.flag() {
+        cmd.arg(f);
+    }
     cmd.current_dir(output_dir);
     cmd.stdout(Stdio::null());
     cmd.stderr(Stdio::piped());
@@ -45,6 +105,7 @@ pub fn rip_all_tracks(
     if debug { eprintln!("Running: {:?}", cmd); }
 
     let mut child = cmd.spawn()?;
+    let mut events = super::readhealth::Collector::default();
 
     // Parse cdparanoia's stderr so we can report per-track progress.
     // Key line patterns:
@@ -55,6 +116,10 @@ pub fn rip_all_tracks(
         let mut last_reported: usize = 0;
 
         for line in reader.lines().map_while(Result::ok) {
+            // The per-event lines are collected, not echoed: there is one for every sector.
+            if events.feed(&line) {
+                continue;
+            }
             if debug { eprintln!("[cdparanoia] {}", line); }
 
             // "outputting to track01.cdda.wav"
@@ -105,7 +170,7 @@ pub fn rip_all_tracks(
         ));
     }
 
-    Ok(tracks)
+    Ok(RipRead { tracks, events })
 }
 
 /// Parse "outputting to track01.cdda.wav" → Some(1)
@@ -124,4 +189,66 @@ pub(super) fn emit_progress(pct: f32) {
 pub(super) fn emit_step(msg: &str) {
     let escaped = msg.replace('\\', "\\\\").replace('"', "\\\"");
     println!("{{\"type\":\"step\",\"msg\":\"{}\"}}", escaped);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rip::readhealth::Status;
+    use std::os::unix::fs::PermissionsExt;
+
+    /// A stand-in for cdparanoia that writes two tracks and reports what the real one does:
+    /// a harmless first-read reset, plain jitter on track 1, and a scratch plus a skip on track 2.
+    const FAKE: &str = r###"#!/bin/sh
+echo "cdparanoia III release 10.2 (September 11, 2008)" >&2
+echo "outputting to track01.cdda.wav" >&2
+touch track01.cdda.wav
+echo "scsi_read error: sector=5 length=27 retry=0" >&2
+echo "                 Sense key: 6 ASC: 29 ASCQ: 0" >&2
+echo "##: 12 [transport error] @ 5880" >&2
+echo "##: 3 [correction] @ 5880" >&2
+echo "##: 2 [jitter] @ 588000" >&2
+echo "##: 2 [jitter] @ 600000" >&2
+echo "outputting to track02.cdda.wav" >&2
+touch track02.cdda.wav
+echo "##: 4 [scratch] @ 1470000" >&2
+echo "##: 5 [scratch repair] @ 1470000" >&2
+echo "##: 3 [correction] @ 1470000" >&2
+echo "##: 6 [skip] @ 1764000" >&2
+echo "##: -1 [finished] @ 1999000" >&2
+"###;
+
+    #[test]
+    fn the_rip_collects_what_cdparanoia_reports() {
+        let dir = std::env::temp_dir().join(format!("rustydisc_fakeparanoia_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("cdparanoia");
+        std::fs::write(&script, FAKE).unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // SAFETY: only this test spawns the ripper, and it sets the variable before doing so.
+        unsafe { std::env::set_var("RUSTYDISC_CDPARANOIA", &script) };
+
+        let out = dir.join("wav");
+        let read = rip_all_tracks("/dev/null", out.to_str().unwrap(), 2, Paranoia::Full, false, false).unwrap();
+        unsafe { std::env::remove_var("RUSTYDISC_CDPARANOIA") };
+
+        assert_eq!(read.tracks.iter().map(|t| t.0).collect::<Vec<_>>(), vec![1, 2]);
+        // Track 1 is sectors 0..1000 (588000 words = sector 500), track 2 is 1000..2000.
+        let h = read.events.summarize(&[(1, 0, 1000), (2, 1000, 2000)]);
+        assert_eq!(h.tracks[0].status, Status::Clean, "{:?}", h.tracks[0]);
+        assert_eq!(h.tracks[0].jitter, 2);
+        assert_eq!(h.harmless_resets, 1);
+        assert_eq!(h.tracks[1].status, Status::Suspect);
+        assert_eq!((h.tracks[1].scratches, h.tracks[1].corrections, h.tracks[1].skips), (1, 1, 1));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn paranoia_levels_map_to_cdparanoia_flags() {
+        assert_eq!(Paranoia::parse("full").unwrap().flag(), None);
+        assert_eq!(Paranoia::parse("fast").unwrap().flag(), Some("-Y"));
+        assert_eq!(Paranoia::parse("off").unwrap().flag(), Some("-Z"));
+        assert!(Paranoia::parse("extreme").is_err());
+    }
 }

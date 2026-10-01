@@ -87,3 +87,17 @@ Auto needs AccurateRip, so it does nothing for discs that aren't in the database
 rustydisc rip --dir /rips --offset auto     # let AccurateRip decide
 rustydisc rip --dir /rips --offset 6        # your drive's known offset
 ```
+
+## How cleanly the disc was read
+
+cdparanoia reads each sector more than once and compares, fixing what it can. RustyDisc listens to its report while ripping and gives every track a plain verdict, shown in the job, in the rip log and on the Library album page:
+
+| Verdict | Meaning |
+|---|---|
+| **Clean** | Nothing beyond routine edge jitter, which every drive produces and cdparanoia quietly fixes. The jitter count is listed for interest only. |
+| **Repaired** | cdparanoia hit real trouble (corrections, a scratch, dropped or duplicated samples, a drive error) and fixed it. AccurateRip tells you whether the result is right. |
+| **Suspect** | cdparanoia had to skip sectors, so the audio may glitch there. Clean the disc and rip again, or try another drive. |
+
+The rip log's Notes say which of these AccurateRip did or didn't confirm. A drive reset right after a disc is loaded (a "unit attention" error) is normal and is not held against the disc. If cdparanoia warns the drive appears to **cache** audio reads, that is noted too, because caching can hide errors.
+
+**Read checking** (Settings → Rip defaults, the Rip page, or `--paranoia full|fast|off` on the command line) chooses how hard cdparanoia checks: **Full** (default) rereads and verifies every sector; **Fast** only does overlap checking; **Off** does no checking and is quickest. Lower levels make the verdicts less meaningful, and the log says so.

@@ -136,6 +136,7 @@ rustydisc rip [OPTIONS]
 | `--quality <q>` | Encoder quality, best by default: FLAC `0`–`12` (level), MP3 `v0`/`v2`/`cbr320`/`cbr192`/`cbr128`, AAC and Opus a bitrate in kbps, OGG `4`–`10`. See [Audio quality](audio-quality.md) |
 | `--replaygain` | Measure loudness after ripping and write ReplayGain 2.0 tags |
 | `--dynamic-range` | Measure dynamic range (DR) after ripping and write DR tags |
+| `--paranoia <full\|fast\|off>` | How hard to check what the drive reads: full (default), fast (overlap checking only) or off. See [How cleanly the disc was read](audio-quality.md#how-cleanly-the-disc-was-read) |
 | `--offset <off\|auto\|N>` | Drive read offset: leave the audio as read (default), correct by the shift AccurateRip proves, or by N samples. See [Read offset correction](audio-quality.md#read-offset-correction) |
 | `--cover-file <file>` | Use this JPEG or PNG as the cover instead of looking one up |
 | `--archive` | Archive mode: store in `audio/` + `metadata/` subdirs; add `musicbrainz.json` + `checksums.json` |
