@@ -317,8 +317,9 @@ pre.json { background: var(--bg); border: 1px solid var(--line); border-radius: 
               <small id="label-help">Filled in from the playlist's name; change it if you like. Jobs that need several discs are labelled “… - Disc 1”, “… - Disc 2” and so on.</small></label>
             <div class="field" id="speed-wrap">
               <label for="burn-speed" style="display:block">Write speed</label>
-              <div class="row" style="gap:8px"><select id="burn-speed" style="flex:1"><option value="">Auto: the drive chooses</option></select><button class="btn small" id="speed-refresh" type="button">Ask the drive</button></div>
-              <small id="speed-help" class="muted">Slower writes are often more reliable, especially for audio discs. Put a blank disc in and ask the drive what it offers. The drive treats this as an upper limit and may settle on a nearby speed.</small>
+              <div class="row" style="gap:8px"><select id="burn-speed" style="flex:1"><option value="">Auto: the drive chooses</option></select><button class="btn small" id="speed-refresh" type="button" title="Ask the drive again, for example after putting in a new blank disc">Refresh</button></div>
+              <small id="speed-status" class="muted">The speeds the drive offers are filled in here when you open this page.</small>
+              <small class="muted">The drive treats the speed you pick as an upper limit and may settle on a nearby one.</small>
             </div>
             <label class="field" id="discsize-wrap">Blank disc
               <select id="burn-discsize"></select>
@@ -728,6 +729,7 @@ function showPage(name) {
   if (name === "settings") loadSettings();
   if (name === "stick") loadStick();
   if (name === "import") loadImport();
+  if (name === "burn") askDriveSpeeds();
 }
 window.addEventListener("hashchange", () => showPage(location.hash.slice(1)));
 $("#nav").addEventListener("click", e => { const b = e.target.closest("button"); if (b) showPage(b.dataset.page); });
@@ -1523,20 +1525,41 @@ function renderPlan(res) {
   return `<h2 style="margin-top:16px">Plan</h2><div class="notice">${head}</div>${body}${warnings}${skipped}${foot}`;
 }
 
-// Ask the drive which write speeds it offers for the disc that is in it.
-async function askDriveSpeeds() {
-  const btn = $("#speed-refresh"), sel = $("#burn-speed"), help = $("#speed-help"), keep = sel.value;
-  btn.disabled = true; btn.textContent = "Asking…";
+// Ask the drive which write speeds it offers for the disc that is in it, and fill the menu with them.
+// It runs by itself when the Burn page opens or the disc type changes; the button re-checks (say,
+// after a new blank disc goes in).
+let speedBusy = false;
+async function askDriveSpeeds(manual) {
+  if (speedBusy) return;
+  speedBusy = true;
+  const btn = $("#speed-refresh"), sel = $("#burn-speed"), st = $("#speed-status"), keep = sel.value;
+  btn.disabled = true; btn.textContent = "Checking…";
+  st.className = "muted"; st.textContent = "Asking the drive what it can do with the disc in it…";
+  const audio = burn.fmt === "redbook" || burn.fmt === "bluebook";
+  const setAuto = max => `<option value="">Auto: the drive chooses${max ? ` (up to ${max}x)` : ""}</option>`;
   try {
     const r = await api("/api/drive/speeds?device=" + encodeURIComponent(selectedDevice() || ""));
     const list = (r.speeds || []).filter((x, i, a) => a.findIndex(y => y.x === x.x) === i);
-    sel.innerHTML = `<option value="">Auto: the drive chooses</option>` + list.map(x => `<option value="${Math.round(x.x)}">${x.x}x ${esc(x.media)}${x === list[0] && list.length > 1 ? " (slowest)" : x === list[list.length - 1] && list.length > 1 ? " (fastest)" : ""}</option>`).join("");
+    const good = audio && list.length > 1 ? list.reduce((p, x) => Math.abs(x.x - 16) < Math.abs(p.x - 16) ? x : p) : null;
+    const tag = x => x === good ? " (good for audio)" : "";
+    sel.innerHTML = setAuto(list.length ? list[list.length - 1].x : 0)
+      + list.map(x => `<option value="${Math.round(x.x)}">${x.x}x${tag(x)}</option>`).join("");
     if ([...sel.options].some(o => o.value === keep)) sel.value = keep;
-    help.textContent = list.length
-      ? (list.length === 1 ? `The drive offers one speed for this disc: ${list[0].x}x.` : `The drive offers ${list.map(x => x.x + "x").join(", ")}. Slower is usually kinder to audio discs.`)
-      : "The drive didn't list any speeds. This usually means there's no blank disc in it, so Auto is used.";
-  } catch (e) { toast(e.message, "err", 8000); }
-  btn.disabled = false; btn.textContent = "Ask the drive";
+    if (!list.length) {
+      st.className = "muted"; st.textContent = "The drive didn't list any speeds. That usually means there's no blank disc in it. Put one in and press Refresh; until then Auto is used.";
+    } else if (list.length === 1) {
+      st.className = ""; st.innerHTML = `<span class="ar-ok">✔</span> The drive offers one speed for this disc: <b>${list[0].x}x</b>. A pressed or already-written disc shows just one; a blank disc shows the choices.`;
+    } else {
+      st.className = ""; st.innerHTML = `<span class="ar-ok">✔</span> The drive offers <b>${list.map(x => x.x + "x").join(", ")}</b> for the disc in it. Auto means the fastest, ${list[list.length - 1].x}x. Slower is usually kinder to audio discs${good ? `; ${good.x}x is a good choice` : ""}.`;
+    }
+    if (manual) toast(list.length ? `The drive offers ${list.map(x => x.x + "x").join(", ")}` : "The drive reported no speeds (is there a blank disc in it?)", list.length ? "ok" : "info", 5000);
+  } catch (e) {
+    st.className = "muted";
+    st.textContent = e.message || "Couldn't ask the drive.";
+    if (manual) toast(e.message, "err", 8000);
+  }
+  btn.disabled = false; btn.textContent = "Refresh";
+  speedBusy = false;
 }
 
 async function burnPlan() {
@@ -2824,7 +2847,7 @@ async function init() {
   $$("input[name=dest]").forEach(r => r.onchange = () => { $("#rip-folder").disabled = $('input[name=dest]:checked').value !== "custom"; });
   $("#rip-start").onclick = startRip;
 
-  $("#burn-tabs").onclick = e => { const b = e.target.closest("button"); if (!b) return; burn.fmt = b.dataset.fmt; if (burn.fmt === "graph" && !$("#graph-text").value) $("#graph-text").value = JSON.stringify(GRAPH_EXAMPLE, null, 2); renderBurn(); };
+  $("#burn-tabs").onclick = e => { const b = e.target.closest("button"); if (!b) return; burn.fmt = b.dataset.fmt; if (burn.fmt === "graph" && !$("#graph-text").value) $("#graph-text").value = JSON.stringify(GRAPH_EXAMPLE, null, 2); renderBurn(); if (burn.fmt !== "graph") askDriveSpeeds(); };
   const addTo = (list, r) => r.forEach(p => list.includes(p) || list.push(p));
   $("#add-audio").onclick = async () => { const r = await pickPath({ mode: "files", title: "Add audio files" }); if (r?.length) { addTo(burn.audio, r); burn.playlist = null; renderBurn(); } };
   $("#add-audio-folder").onclick = async () => { const r = await pickPath({ mode: "audiofolder", title: "Add the audio in a folder" }); if (r?.length) { addTo(burn.audio, r); burn.playlist = null; renderBurn(); } };
@@ -2851,7 +2874,7 @@ async function init() {
   $("#dvd-still-clear").onclick = () => { burn.still = null; renderBurn(); };
   $("#burn-plan").onclick = burnPlan;
   $("#burn-start").onclick = burnStart;
-  $("#speed-refresh").onclick = askDriveSpeeds;
+  $("#speed-refresh").onclick = () => askDriveSpeeds(true);
   renderBurn();
 
   $("#lib-refresh").onclick = loadLibrary;

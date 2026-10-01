@@ -47,7 +47,7 @@ sudo usermod -aG cdrom $USER   # then log out and back in
 
 Burns use the speed the drive picks unless you choose one. Slower writing is often kinder to audio discs: older players are fussier about discs burned fast, and cheap media can burn better below its rated speed.
 
-- **Web UI:** on the Burn page, put a blank disc in and press **Ask the drive** under *Write speed*. It lists the speeds the drive offers for that disc (for example 8x, 16x, 24x). Choose one, or leave it on Auto.
+- **Web UI:** the Burn page asks the drive when it opens (and when you switch between CD and DVD formats) and fills the *Write speed* menu with what it offers for the disc in it, for example 8x, 16x, 24x. **Auto** says what it will use ("Auto: the drive chooses (up to 24x)"), which is the fastest. Pick a slower speed if you want one; for audio CDs the nearest to 16x is marked as a good choice. Press **Refresh** after changing the disc. With no blank disc in the drive it can't list speeds and Auto is used.
 - **Command line:** `rustydisc burn --speed 8 ...` (a multiple of the media's base speed; CD 1x = 176.4 kB/s, DVD 1x = 1385 kB/s). `rustydisc plan --speed 8` shows it in the plan. A disc graph file can carry `"speed": 8`; a `--speed` on the command line wins.
 
 RustyDisc refuses a speed above what the drive reports for the disc in it, before writing anything. A speed between two the drive offers is accepted: drives treat the number as an upper limit and may settle on a nearby speed, and some quietly ignore it. Audio CDs pass it to `cdrdao --speed`; data CDs and DVDs pass it to `xorriso` as `speed=8c` (CD) or `speed=4d` (DVD), so the number can't be read as the wrong media's speed.
