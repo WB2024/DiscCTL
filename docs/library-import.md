@@ -101,3 +101,14 @@ Open a rip in the **Library** to fix it up after the fact:
 - **Tags** on each track shows and edits that file's tags: title, artist, track and disc numbers, dates, genre, label, sort names, credits and all the MusicBrainz IDs, plus a list of every tag in the file (edit, remove, or add your own).
 
 Editing changes tags only: file names, and the saved `metadata/musicbrainz.json` of an archive rip, stay as they were. Pictures can't be embedded in WAV files.
+
+## How albums are found in the rips folder
+
+The Library and Import pages find albums by the folder structure, not by taking every top-level folder as one album:
+
+- A folder that holds audio (or an `audio/` folder, as archive-mode rips do) is one album, and everything beneath it (artwork folders, `data/`, `metadata/`) belongs to it.
+- A folder with no audio of its own that contains albums is only a container. Its albums are listed one by one, for example `Archive/Avril Lavigne/Let Go` and `Archive/Morrissey/Your Arsenal`, each with its own tracks, cover and tags.
+- A folder that is neither (a data disc, video files) stays a single entry.
+- `CD1` / `Disc 2` folders under an album do not split it: a multi-disc album is one album.
+
+For albums without a MusicBrainz file (older rips), the album, artist and year come from the first track's tags, and a lone picture in the folder is used as the cover when there is no `cover.jpg`. Folders are the unit rather than tags: a flat folder mixing several albums is still one entry.

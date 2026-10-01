@@ -1663,6 +1663,7 @@ async function openRip(name) {
           <div class="muted mono" style="margin:6px 0">${esc(d.name)}</div>
           <div class="row"><span class="badge">${d.audio_files} audio files</span><span class="badge">${fmtBytes(d.total_bytes)}</span>
             ${d.archive ? `<span class="badge accent">archive</span>` : ""}${d.has_data ? `<span class="badge">data session</span>` : ""}</div>
+          ${coverInfoHtml(d.cover_info)}
           ${d.archive ? "" : `<div class="muted" style="margin-top:8px;font-size:13px">This rip has no checksums yet (they're made by archive mode). <b>Create checksums</b> records a SHA-256 of every file now, so you can verify the rip later.</div>`}
           <div class="row" style="margin-top:12px">
             <button class="btn primary" id="verify">${d.archive ? "Verify checksums" : "Create checksums"}</button>
@@ -1731,45 +1732,96 @@ async function wireQuality(name) {
     } catch (e) { toast(e.message, "err", 8000); }
     btn.disabled = false; btn.textContent = "Test the audio";
   };
+  const showDr = (r, at) => {
+    const out = $("#q-drout");
+    out.innerHTML = `<div class="notice" style="margin-top:10px"><b>Dynamic range</b>${measuredNote(at)}${drSummary(r.album_dr)}
+    <table style="margin-top:8px"><thead><tr><th style="text-align:left">Track</th><th class="num">DR</th><th class="num">Peak</th><th class="num">RMS</th></tr></thead><tbody>${r.tracks.map(t => t.error ? `<tr><td>${esc(t.title)}</td><td colspan="3" class="ar-bad">${esc(t.error)}</td></tr>` : `<tr><td>${esc(t.title)}</td><td class="num">${drBadge(t.dr)}</td><td class="num">${t.peak_db.toFixed(2)} dB</td><td class="num">${t.rms_db.toFixed(2)} dB</td></tr>`).join("")}</tbody></table>
+    <div class="row" style="margin-top:10px;gap:8px"><button class="btn small primary" id="dr-tags">Save DR as tags</button><button class="btn small" id="dr-log">Download DR log</button><button class="btn small" id="dr-submit" title="Opens the Dynamic Range DB upload form with this album filled in. Needs the userscript (Settings) in your browser.">Submit to Dynamic Range DB ↗</button>
+      <a class="btn small" href="${esc(r.database_url)}" target="_blank" rel="noopener">Compare on the Dynamic Range DB ↗</a><span class="muted" id="dr-note"></span></div>
+    <div class="muted" style="margin-top:8px;font-size:12.5px">Measured with the published DR method (3-second blocks, loudest 20%); a value can differ from a listed one by a point. The database lists other pressings of ${esc(r.artist || "this artist")}, which is the way to find the least-compressed edition.</div></div>`;
+    $("#dr-log").onclick = () => { const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([r.log], { type: "text/plain" })); a.download = `dr-${(r.album || name).replace(/[^\w.-]+/g, "_")}.txt`; a.click(); };
+    $("#dr-submit").onclick = () => {
+    const enc = btoa(unescape(encodeURIComponent(JSON.stringify(r.submit))));
+    window.open("https://dr.loudness-war.info/album/add#rdb=" + encodeURIComponent(enc), "_blank", "noopener");
+    $("#dr-note").textContent = "The upload form opens pre-filled if the RustyDisc userscript is installed (Settings).";
+    };
+    $("#dr-tags").onclick = async () => {
+    $("#dr-tags").disabled = true;
+    try { const w = await api(base + "/quality/dynamic-range", { body: { write_tags: true } }); $("#dr-note").textContent = `Saved to ${w.written} file${w.written === 1 ? "" : "s"}.`; }
+    catch (e) { toast(e.message, "err", 8000); $("#dr-tags").disabled = false; }
+    };
+    $("#q-dr").textContent = "Measure dynamic range again";
+  };
   $("#q-dr").onclick = async () => {
-    const btn = $("#q-dr"), out = $("#q-drout"); btn.disabled = true; btn.textContent = "Measuring…";
+    const btn = $("#q-dr"); btn.disabled = true; btn.textContent = "Measuring…";
     try {
       const r = await api(base + "/quality/dynamic-range", { body: {} });
-      out.innerHTML = `<div class="notice" style="margin-top:10px"><b>Dynamic range</b>${drSummary(r.album_dr)}
-        <table style="margin-top:8px"><thead><tr><th style="text-align:left">Track</th><th class="num">DR</th><th class="num">Peak</th><th class="num">RMS</th></tr></thead><tbody>${r.tracks.map(t => t.error ? `<tr><td>${esc(t.title)}</td><td colspan="3" class="ar-bad">${esc(t.error)}</td></tr>` : `<tr><td>${esc(t.title)}</td><td class="num">${drBadge(t.dr)}</td><td class="num">${t.peak_db.toFixed(2)} dB</td><td class="num">${t.rms_db.toFixed(2)} dB</td></tr>`).join("")}</tbody></table>
-        <div class="row" style="margin-top:10px;gap:8px"><button class="btn small primary" id="dr-tags">Save DR as tags</button><button class="btn small" id="dr-log">Download DR log</button><button class="btn small" id="dr-submit" title="Opens the Dynamic Range DB upload form with this album filled in. Needs the userscript (Settings) in your browser.">Submit to Dynamic Range DB ↗</button>
-          <a class="btn small" href="${esc(r.database_url)}" target="_blank" rel="noopener">Compare on the Dynamic Range DB ↗</a><span class="muted" id="dr-note"></span></div>
-        <div class="muted" style="margin-top:8px;font-size:12.5px">Measured with the published DR method (3-second blocks, loudest 20%); a value can differ from a listed one by a point. The database lists other pressings of ${esc(r.artist || "this artist")}, which is the way to find the least-compressed edition.</div></div>`;
-      $("#dr-log").onclick = () => { const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([r.log], { type: "text/plain" })); a.download = `dr-${(r.album || name).replace(/[^\w.-]+/g, "_")}.txt`; a.click(); };
-      $("#dr-submit").onclick = () => {
-        const enc = btoa(unescape(encodeURIComponent(JSON.stringify(r.submit))));
-        window.open("https://dr.loudness-war.info/album/add#rdb=" + encodeURIComponent(enc), "_blank", "noopener");
-        $("#dr-note").textContent = "The upload form opens pre-filled if the RustyDisc userscript is installed (Settings).";
-      };
-      $("#dr-tags").onclick = async () => {
-        $("#dr-tags").disabled = true;
-        try { const w = await api(base + "/quality/dynamic-range", { body: { write_tags: true } }); $("#dr-note").textContent = `Saved to ${w.written} file${w.written === 1 ? "" : "s"}.`; }
-        catch (e) { toast(e.message, "err", 8000); $("#dr-tags").disabled = false; }
-      };
-    } catch (e) { toast(e.message, "err", 8000); }
-    btn.disabled = false; btn.textContent = "Dynamic range";
+      showDr(r, Date.now() / 1000);
+    } catch (e) { toast(e.message, "err", 8000); btn.textContent = "Dynamic range"; }
+    btn.disabled = false;
+  };
+  const showLoud = (r, at) => {
+    const a = r.album;
+    loudOut.innerHTML = `<div class="notice" style="margin-top:10px"><b>Loudness</b>${measuredNote(at)} — album ${a.lufs.toFixed(1)} LUFS · range ${a.lra?.toFixed(1) ?? "–"} LU · true peak ${a.true_peak_db?.toFixed(1) ?? "–"} dBFS · ReplayGain ${a.gain_db >= 0 ? "+" : ""}${a.gain_db.toFixed(2)} dB
+    <table style="margin-top:8px"><thead><tr><th style="text-align:left">Track</th><th class="num">LUFS</th><th class="num">Range</th><th class="num">True peak</th><th class="num">Gain</th></tr></thead><tbody>${r.tracks.map(t => t.error ? `<tr><td>${esc(t.path)}</td><td colspan="4" class="ar-bad">${esc(t.error)}</td></tr>` : `<tr><td class="mono" style="word-break:break-all">${esc(t.path.split("/").pop())}</td><td class="num">${t.lufs.toFixed(1)}</td><td class="num">${t.lra?.toFixed(1) ?? "–"} LU</td><td class="num ${t.clips ? "ar-bad" : ""}">${t.true_peak_db?.toFixed(1)} dBFS${t.clips ? " ⚠ clips" : ""}</td><td class="num">${t.gain_db >= 0 ? "+" : ""}${t.gain_db.toFixed(2)} dB</td></tr>`).join("")}</tbody></table>
+    <div class="row" style="margin-top:10px"><button class="btn small primary" id="q-rg">Write ReplayGain tags to the files</button><span class="muted" id="q-rg-note"></span></div></div>`;
+    $("#q-rg").onclick = async () => {
+    $("#q-rg").disabled = true;
+    try { const w = await api(base + "/quality/loudness", { body: { write_replaygain: true } }); $("#q-rg-note").textContent = `Written to ${w.written} file${w.written === 1 ? "" : "s"}.`; toast("ReplayGain tags written", "ok", 3000); }
+    catch (e) { toast(e.message, "err", 8000); $("#q-rg").disabled = false; }
+    };
+    $("#q-loud").textContent = "Measure loudness again";
   };
   $("#q-loud").onclick = async () => {
     const btn = $("#q-loud"); btn.disabled = true; btn.textContent = "Measuring…";
     try {
       const r = await api(base + "/quality/loudness", { body: {} });
-      const a = r.album;
-      loudOut.innerHTML = `<div class="notice" style="margin-top:10px"><b>Loudness</b> — album ${a.lufs.toFixed(1)} LUFS · range ${a.lra?.toFixed(1) ?? "–"} LU · true peak ${a.true_peak_db?.toFixed(1) ?? "–"} dBFS · ReplayGain ${a.gain_db >= 0 ? "+" : ""}${a.gain_db.toFixed(2)} dB
-        <table style="margin-top:8px"><thead><tr><th style="text-align:left">Track</th><th class="num">LUFS</th><th class="num">Range</th><th class="num">True peak</th><th class="num">Gain</th></tr></thead><tbody>${r.tracks.map(t => t.error ? `<tr><td>${esc(t.path)}</td><td colspan="4" class="ar-bad">${esc(t.error)}</td></tr>` : `<tr><td class="mono" style="word-break:break-all">${esc(t.path.split("/").pop())}</td><td class="num">${t.lufs.toFixed(1)}</td><td class="num">${t.lra?.toFixed(1) ?? "–"} LU</td><td class="num ${t.clips ? "ar-bad" : ""}">${t.true_peak_db?.toFixed(1)} dBFS${t.clips ? " ⚠ clips" : ""}</td><td class="num">${t.gain_db >= 0 ? "+" : ""}${t.gain_db.toFixed(2)} dB</td></tr>`).join("")}</tbody></table>
-        <div class="row" style="margin-top:10px"><button class="btn small primary" id="q-rg">Write ReplayGain tags to the files</button><span class="muted" id="q-rg-note"></span></div></div>`;
-      $("#q-rg").onclick = async () => {
-        $("#q-rg").disabled = true;
-        try { const w = await api(base + "/quality/loudness", { body: { write_replaygain: true } }); $("#q-rg-note").textContent = `Written to ${w.written} file${w.written === 1 ? "" : "s"}.`; toast("ReplayGain tags written", "ok", 3000); }
-        catch (e) { toast(e.message, "err", 8000); $("#q-rg").disabled = false; }
-      };
-    } catch (e) { toast(e.message, "err", 8000); }
-    btn.disabled = false; btn.textContent = "Measure loudness";
+      showLoud(r, Date.now() / 1000);
+    } catch (e) { toast(e.message, "err", 8000); btn.textContent = "Measure loudness"; }
+    btn.disabled = false;
   };
+  // Results measured before are kept, so they are simply there when the album is opened again.
+  api(base + "/analysis").then(a => {
+    if (a.loudness) showLoud(a.loudness.data, a.loudness.at);
+    if (a.dynamic_range) showDr(a.dynamic_range.data, a.dynamic_range.at);
+  }).catch(() => {});
+}
+
+// What the cover is like: size, format, weight, and whether the audio files carry the same picture.
+function coverBand(w, h) {
+  const m = Math.min(w || 0, h || 0);
+  if (!m) return null;
+  if (m >= 1400) return { label: "Excellent", color: "#3fb97a" };
+  if (m >= 1000) return { label: "High resolution", color: "#8bc34a" };
+  if (m >= 600) return { label: "Good", color: "#e0b341" };
+  if (m >= 400) return { label: "Fair", color: "#e8743b" };
+  return { label: "Low resolution", color: "#ef5b5b" };
+}
+function coverLine(label, c) {
+  if (!c) return "";
+  const band = coverBand(c.width, c.height);
+  const square = c.width && c.height && Math.abs(c.width - c.height) / Math.max(c.width, c.height) > 0.03;
+  const size = c.width ? `<b>${c.width} × ${c.height} px</b>` : `<span class="muted">size unknown</span>`;
+  return `<div style="margin-top:4px">${label}: ${size} · ${esc(c.format || "image")} · ${fmtBytes(c.bytes)}
+    ${band ? `<span class="badge" style="background:${band.color};border-color:${band.color};color:#111;margin-left:6px">${band.label}</span>` : ""}${square ? ` <span class="muted">(not square)</span>` : ""}</div>`;
+}
+function coverInfoHtml(ci) {
+  if (!ci) return "";
+  const f = ci.file, e = ci.embedded;
+  if (!f && !e) return `<div class="muted" style="margin-top:8px">No cover art in this album yet.</div>`;
+  let notes = "";
+  if (f && e && f.width && e.width && Math.min(e.width, e.height) < Math.min(f.width, f.height) * 0.9)
+    notes += `<div class="muted" style="margin-top:4px">The picture embedded in the files (${e.width} × ${e.height}) is smaller than the cover file (${f.width} × ${f.height}). Use <b>Change cover…</b> to embed the better one.</div>`;
+  if (e && e.differs_between_files) notes += `<div class="muted" style="margin-top:4px">The files don't all carry the same picture.</div>`;
+  if (f && !e && ci.files_checked) notes += `<div class="muted" style="margin-top:4px">None of the audio files has the picture embedded; <b>Change cover…</b> can embed it.</div>`;
+  if (e && e.files_checked && e.files_with_cover < e.files_checked) notes += `<div class="muted" style="margin-top:4px">Only ${e.files_with_cover} of ${e.files_checked} files have a picture embedded.</div>`;
+  return `<div style="margin-top:10px;font-size:13px">${coverLine("Cover file", f)}${coverLine(e ? `Embedded in ${e.files_with_cover} of ${e.files_checked} file${e.files_checked === 1 ? "" : "s"}` : "", e)}${notes}</div>`;
+}
+
+function measuredNote(at) {
+  if (!at) return "";
+  const d = new Date(at * 1000).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+  return ` <span class="muted" style="font-size:12.5px;font-weight:400">· measured ${esc(d)} (press the button again to re-measure)</span>`;
 }
 
 function showSpectrogram(name, path) {

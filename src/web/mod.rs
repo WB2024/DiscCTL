@@ -253,6 +253,7 @@ pub async fn serve(cfg: Config, bind: SocketAddr) -> Result<(), Error> {
         .route("/api/library/{name}/quality/loudness", post(quality::loudness))
         .route("/api/library/{name}/quality/dynamic-range", post(quality::dynamic_range))
         .route("/api/library/{name}/report", get(quality::rip_report))
+        .route("/api/library/{name}/analysis", get(quality::analysis))
         .route("/api/library/{name}/spectrogram", get(quality::spectrogram))
         .route("/api/library/{name}/tags", get(library_edit::tags).put(library_edit::save_tags))
         .route("/api/library/{name}/cover", post(library_edit::set_cover).layer(axum::extract::DefaultBodyLimit::max(library_edit::MAX_IMAGE)))
@@ -769,6 +770,23 @@ fn walk(base: &Path, dir: &Path, depth: usize, out: &mut Vec<(String, u64)>) {
     }
 }
 
+/// The album's cover picture: `cover.jpg` and friends, or the only picture in the folder.
+fn find_cover(dir: &Path) -> Option<String> {
+    let mut pics: Vec<String> = std::fs::read_dir(dir)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().is_file())
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .filter(|n| matches!(n.rsplit('.').next().map(str::to_lowercase).as_deref(), Some("jpg" | "jpeg" | "png")))
+        .collect();
+    pics.sort();
+    let stem = |n: &str| n.rsplit_once('.').map(|(s, _)| s.to_lowercase()).unwrap_or_default();
+    ["cover", "folder", "front", "albumart", "album"]
+        .iter()
+        .find_map(|want| pics.iter().find(|n| stem(n) == *want).cloned())
+        .or_else(|| if pics.len() == 1 { pics.first().cloned() } else { None })
+}
+
 fn describe_rip(dir: &Path) -> Value {
     let name = dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
     let mut files = Vec::new();
@@ -776,15 +794,24 @@ fn describe_rip(dir: &Path) -> Value {
     files.sort();
 
     let archive = dir.join("metadata/checksums.json").exists() || dir.join("checksums.json").exists();
-    let cover = ["cover.jpg", "cover.png"].iter().find(|c| dir.join(c).exists()).map(|c| c.to_string());
+    let cover = find_cover(dir);
     let audio: Vec<&(String, u64)> = files.iter().filter(|(p, _)| is_audio(p)).collect();
     let has_data = files.iter().any(|(p, _)| p.starts_with("data/") || p.ends_with(".iso"));
     let total: u64 = files.iter().map(|(_, s)| s).sum();
 
     let mb = read_json(&dir.join("metadata/musicbrainz.json")).or_else(|| read_json(&dir.join("musicbrainz.json")));
-    let album = mb.as_ref().and_then(|m| m["album"].as_str()).map(String::from);
-    let artist = mb.as_ref().and_then(|m| m["album_artist"].as_str()).map(String::from);
-    let year = mb.as_ref().and_then(|m| m["year"].as_str()).map(String::from);
+    let mut album = mb.as_ref().and_then(|m| m["album"].as_str()).map(String::from);
+    let mut artist = mb.as_ref().and_then(|m| m["album_artist"].as_str()).map(String::from);
+    let mut year = mb.as_ref().and_then(|m| m["year"].as_str()).map(String::from);
+    // Older rips have no MusicBrainz file; the first track's tags say what the album is.
+    if album.is_none() || artist.is_none() {
+        if let Some((p, _)) = audio.first() {
+            let t = crate::library::tags::read(&dir.join(p));
+            album = album.or_else(|| t.vars.get("album").cloned());
+            artist = artist.or_else(|| t.vars.get("albumartist").or_else(|| t.vars.get("artist")).cloned());
+            year = year.or_else(|| t.vars.get("originalyear").or_else(|| t.vars.get("date")).map(|d| d.chars().take(4).collect()));
+        }
+    }
 
     let ar = read_json(&dir.join("metadata/accuraterip.json"));
     let accuraterip = ar.as_ref().map(|r| json!({
@@ -811,24 +838,55 @@ fn describe_rip(dir: &Path) -> Value {
 async fn library(State(st): S) -> ApiResult<Json<Value>> {
     let dir = st.cfg.rips_dir.clone();
     let entries = tokio::task::spawn_blocking(move || {
-        let mut out: Vec<Value> = std::fs::read_dir(&dir)
-            .map(|rd| {
-                rd.filter_map(|e| e.ok())
-                    .filter(|e| e.path().is_dir() && !e.file_name().to_string_lossy().starts_with('.'))
-                    .map(|e| {
-                        let mut v = describe_rip(&e.path());
-                        v.as_object_mut().map(|o| o.remove("files"));
-                        v
-                    })
-                    .collect()
+        // Albums are found by structure, so an `Archive/Artist/Album/...` tree lists each album
+        // instead of one giant entry for the container folder.
+        let mut out: Vec<Value> = crate::library::albums::discover(&dir)
+            .into_iter()
+            .map(|p| {
+                let mut v = describe_rip(&p);
+                v["name"] = json!(crate::library::albums::relative(&dir, &p));
+                v.as_object_mut().map(|o| o.remove("files"));
+                v
             })
-            .unwrap_or_default();
+            .collect();
         out.sort_by_key(|v| std::cmp::Reverse(v["modified"].as_u64().unwrap_or(0)));
         out
     })
     .await
     .map_err(|e| Error::backend(e.to_string()))?;
     Ok(Json(json!({"path": path_str(&st.cfg.rips_dir), "entries": entries})))
+}
+
+/// How big and good the cover is: the picture file's size, and what is embedded in the audio files.
+fn cover_details(dir: &Path, cover: Option<&str>) -> Value {
+    use crate::{library::tagedit, rip::cover::image_info};
+    let file = cover.and_then(|c| std::fs::read(dir.join(c)).ok()).map(|b| {
+        let i = image_info(&b);
+        json!({"name": cover, "bytes": b.len(), "width": i.as_ref().map(|i| i.width), "height": i.as_ref().map(|i| i.height), "format": i.as_ref().map(|i| i.format)})
+    });
+    let mut checked = 0usize;
+    let mut with = 0usize;
+    let mut first: Option<Vec<u8>> = None;
+    let mut differing = false;
+    let mut files = Vec::new();
+    walk(dir, dir, 0, &mut files);
+    files.sort();
+    for (p, _) in files.iter().filter(|(p, _)| is_audio(p)).take(60) {
+        checked += 1;
+        if let Some(bytes) = tagedit::embedded_cover(&dir.join(p)) {
+            with += 1;
+            match &first {
+                None => first = Some(bytes),
+                Some(f) if *f != bytes => differing = true,
+                _ => {}
+            }
+        }
+    }
+    let embedded = first.map(|b| {
+        let i = image_info(&b);
+        json!({"files_with_cover": with, "files_checked": checked, "bytes": b.len(), "width": i.as_ref().map(|i| i.width), "height": i.as_ref().map(|i| i.height), "format": i.as_ref().map(|i| i.format), "differs_between_files": differing})
+    });
+    json!({"file": file, "embedded": embedded, "files_checked": checked})
 }
 
 async fn library_entry(State(st): S, UrlPath(name): UrlPath<String>) -> ApiResult<Json<Value>> {
@@ -841,6 +899,7 @@ async fn library_entry(State(st): S, UrlPath(name): UrlPath<String>) -> ApiResul
         let mb = read_json(&dir.join("metadata/musicbrainz.json")).or_else(|| read_json(&dir.join("musicbrainz.json")));
         v["musicbrainz"] = mb.unwrap_or(Value::Null);
         v["accuraterip_report"] = read_json(&dir.join("metadata/accuraterip.json")).unwrap_or(Value::Null);
+        v["cover_info"] = cover_details(&dir, v["cover"].as_str());
         v
     })
     .await

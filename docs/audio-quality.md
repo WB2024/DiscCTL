@@ -101,3 +101,11 @@ cdparanoia reads each sector more than once and compares, fixing what it can. Ru
 The rip log's Notes say which of these AccurateRip did or didn't confirm. A drive reset right after a disc is loaded (a "unit attention" error) is normal and is not held against the disc. If cdparanoia warns the drive appears to **cache** audio reads, that is noted too, because caching can hide errors.
 
 **Read checking** (Settings → Rip defaults, the Rip page, or `--paranoia full|fast|off` on the command line) chooses how hard cdparanoia checks: **Full** (default) rereads and verifies every sector; **Fast** only does overlap checking; **Off** does no checking and is quickest. Lower levels make the verdicts less meaningful, and the log says so.
+
+## Measurements are kept
+
+Loudness and dynamic range take a while to measure, so the results are saved (in RustyDisc's config folder, so the album and its checksums are untouched) and shown again whenever you open the album, with the date they were measured. The buttons then read "Measure … again". If the album's audio files change (files added, removed or renamed) the saved results are ignored and measured fresh.
+
+## The cover
+
+The album page shows the cover file's pixel size, format and weight with a plain rating (Excellent from 1400 px, High resolution from 1000 px, Good from 600 px, Fair from 400 px, otherwise Low resolution), and what is embedded in the audio files: how many files carry a picture and its size. It points out when the embedded picture is smaller than the cover file, when files carry different pictures, or when none has one embedded, which tells you whether to look for a better cover or keep the one you have.

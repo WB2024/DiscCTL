@@ -58,20 +58,17 @@ pub async fn list(State(st): S) -> ApiResult<Json<Value>> {
     let lib = library(&st);
     let entries = tokio::task::spawn_blocking(move || {
         let mut out: Vec<Value> = Vec::new();
-        let Ok(rd) = std::fs::read_dir(&dir) else { return out };
-        let mut names: Vec<_> = rd.filter_map(|e| e.ok()).filter(|e| e.path().is_dir()).collect();
-        names.sort_by_key(|e| e.file_name().to_string_lossy().to_lowercase());
-        for e in names {
-            let name = e.file_name().to_string_lossy().to_string();
-            if name.starts_with('.') {
-                continue;
-            }
-            let peek = import::peek(&e.path());
+        // Albums are found by structure (see library::albums), so a container folder such as
+        // `Archive/Artist/Album/...` lists each album, not one entry holding every track.
+        for path in crate::library::albums::discover(&dir) {
+            let name = crate::library::albums::relative(&dir, &path);
+            let e = path;
+            let peek = import::peek(&e);
             let tracks: usize = peek.get("tracks").and_then(|t| t.parse().ok()).unwrap_or(0);
             if tracks == 0 {
                 continue;
             }
-            let marker = import::imported_marker(&e.path());
+            let marker = import::imported_marker(&e);
             out.push(json!({
                 "name": name, "tracks": tracks,
                 "album": peek.get("album"), "artist": peek.get("artist"),

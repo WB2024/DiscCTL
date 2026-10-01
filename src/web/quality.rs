@@ -47,6 +47,63 @@ fn rel(dir: &std::path::Path, p: &std::path::Path) -> String {
     p.strip_prefix(dir).unwrap_or(p).to_string_lossy().to_string()
 }
 
+// ── Kept measurements ────────────────────────────────────────────────────────
+//
+// Loudness and dynamic range take a while to measure, so the results are kept in the config
+// folder (not in the album, so checksums are untouched) and shown again when the album is opened.
+// They are only used while the album still has the same audio files.
+
+fn analysis_path(st: &super::AppState, name: &str) -> std::path::PathBuf {
+    use sha2::{Digest, Sha256};
+    let key = hex::encode(&Sha256::digest(name.as_bytes())[..12]);
+    st.cfg.config_dir.join("analysis").join(format!("{key}.json"))
+}
+
+fn file_list(dir: &std::path::Path) -> Vec<String> {
+    let mut v: Vec<String> = audio_files(dir).iter().map(|p| rel(dir, p)).collect();
+    v.sort();
+    v
+}
+
+fn load_analysis(st: &super::AppState, name: &str) -> Value {
+    std::fs::read(analysis_path(st, name)).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_else(|| json!({}))
+}
+
+/// Keep a result. A failure to save never fails the measurement.
+fn save_analysis(st: &super::AppState, name: &str, dir: &std::path::Path, kind: &str, data: &Value) {
+    let mut all = load_analysis(st, name);
+    let files = file_list(dir);
+    // Results for a different set of files are out of date.
+    if all.get("files") != Some(&json!(files)) {
+        all = json!({});
+    }
+    all["files"] = json!(files);
+    let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    all[kind] = json!({"at": at, "data": data});
+    let path = analysis_path(st, name);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+        crate::perms::own_parents(&parent.join("x"));
+    }
+    if std::fs::write(&path, serde_json::to_vec(&all).unwrap_or_default()).is_ok() {
+        crate::perms::own(&path);
+    }
+}
+
+/// What was measured before for this album (loudness and dynamic range), if still current.
+pub async fn analysis(State(st): S, UrlPath(name): UrlPath<String>) -> ApiResult<Json<Value>> {
+    let dir = rip_dir(&st, &name)?;
+    let all = load_analysis(&st, &name);
+    let current = tokio::task::spawn_blocking(move || file_list(&dir)).await.map_err(|e| Error::backend(e.to_string()))?;
+    if all.get("files") != Some(&json!(current)) {
+        return Ok(Json(json!({"loudness": null, "dynamic_range": null})));
+    }
+    Ok(Json(json!({
+        "loudness": all.get("loudness").cloned().unwrap_or(Value::Null),
+        "dynamic_range": all.get("dynamic_range").cloned().unwrap_or(Value::Null),
+    })))
+}
+
 /// Format, bit depth, sample rate and bitrate of every file, and a summary.
 pub async fn facts(State(st): S, UrlPath(name): UrlPath<String>) -> ApiResult<Json<Value>> {
     let dir = rip_dir(&st, &name)?;
@@ -135,6 +192,7 @@ pub async fn loudness(State(st): S, UrlPath(name): UrlPath<String>, Json(req): J
     .await
     .map_err(|e| Error::backend(e.to_string()))?
     .map_err(ApiError::bad)?;
+    save_analysis(&st, &name, &rip_dir(&st, &name)?, "loudness", &out);
     Ok(Json(out))
 }
 
@@ -178,6 +236,7 @@ pub struct DrReq {
 pub async fn dynamic_range(State(st): S, UrlPath(name): UrlPath<String>, Json(req): Json<DrReq>) -> ApiResult<Json<Value>> {
     use crate::library::{dynrange, tags};
     let dir = rip_dir(&st, &name)?;
+    let album_key = name.clone();
     let out = tokio::task::spawn_blocking(move || -> Result<Value, String> {
         let files = audio_files(&dir);
         if files.is_empty() {
@@ -237,6 +296,7 @@ pub async fn dynamic_range(State(st): S, UrlPath(name): UrlPath<String>, Json(re
     .await
     .map_err(|e| Error::backend(e.to_string()))?
     .map_err(ApiError::bad)?;
+    save_analysis(&st, &album_key, &rip_dir(&st, &album_key)?, "dynamic_range", &out);
     Ok(Json(out))
 }
 

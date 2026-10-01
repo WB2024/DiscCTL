@@ -142,6 +142,14 @@ pub fn view(path: &Path) -> TagView {
     v
 }
 
+/// The picture embedded in a file (the front cover if there is one), exactly as stored.
+pub fn embedded_cover(path: &Path) -> Option<Vec<u8>> {
+    let file = Probe::open(path).ok()?.read().ok()?;
+    let tag = file.primary_tag().or_else(|| file.first_tag())?;
+    let pics = tag.pictures();
+    pics.iter().find(|p| p.pic_type() == PictureType::CoverFront).or_else(|| pics.first()).map(|p| p.data().to_vec())
+}
+
 #[derive(Debug, Default)]
 pub struct Edit {
     /// Editor fields by name; an empty value removes the field.

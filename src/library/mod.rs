@@ -1,5 +1,6 @@
 //! Importing ripped music into the library.
 
+pub mod albums;
 pub mod audioinfo;
 pub mod dynrange;
 pub mod import;

@@ -113,6 +113,57 @@ pub fn sniff_ext(bytes: &[u8]) -> Option<&'static str> {
     }
 }
 
+/// What an image is, read from its own header.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ImageInfo {
+    pub format: &'static str,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// The format and pixel size of a JPEG or PNG, without decoding it.
+pub fn image_info(b: &[u8]) -> Option<ImageInfo> {
+    match sniff_ext(b)? {
+        "png" => {
+            // 8-byte signature, then the IHDR chunk: length, "IHDR", width, height.
+            if b.len() < 24 || &b[12..16] != b"IHDR" {
+                return None;
+            }
+            let be = |i: usize| u32::from_be_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]]);
+            Some(ImageInfo { format: "PNG", width: be(16), height: be(20) })
+        }
+        _ => {
+            // JPEG: walk the segments until a start-of-frame marker, which holds the size.
+            let mut i = 2;
+            while i + 9 < b.len() {
+                if b[i] != 0xFF {
+                    i += 1;
+                    continue;
+                }
+                let marker = b[i + 1];
+                if marker == 0xFF {
+                    i += 1;
+                    continue;
+                }
+                // Markers with no length: standalone, restart and start/end of image.
+                if marker == 0x01 || (0xD0..=0xD9).contains(&marker) {
+                    i += 2;
+                    continue;
+                }
+                let len = u16::from_be_bytes([b[i + 2], b[i + 3]]) as usize;
+                // SOF0..SOF15, except DHT (C4), JPG (C8) and DAC (CC).
+                if (0xC0..=0xCF).contains(&marker) && !matches!(marker, 0xC4 | 0xC8 | 0xCC) {
+                    let h = u16::from_be_bytes([b[i + 5], b[i + 6]]) as u32;
+                    let w = u16::from_be_bytes([b[i + 7], b[i + 8]]) as u32;
+                    return (w > 0 && h > 0).then_some(ImageInfo { format: "JPEG", width: w, height: h });
+                }
+                i += 2 + len.max(2);
+            }
+            None
+        }
+    }
+}
+
 /// Try each source in order and return the first image found.
 pub fn fetch(release_id: &str, release_group_id: Option<&str>, opts: &CoverOptions, debug: bool) -> Option<Cover> {
     for &source in &opts.sources {
@@ -236,6 +287,23 @@ fn fetch_fanart(release_group_id: &str, key: &str, debug: bool) -> Option<(Vec<u
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn reads_png_and_jpeg_sizes_from_the_header() {
+        // A 1x1 PNG.
+        let png = [
+            0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13, b'I', b'H', b'D', b'R', 0, 0, 2, 0x58, 0, 0, 1, 0x2C, 8, 2, 0, 0, 0,
+        ];
+        let i = super::image_info(&png).unwrap();
+        assert_eq!((i.format, i.width, i.height), ("PNG", 600, 300));
+        // A JPEG with an APP0 segment, then SOF0 for 1400 x 1400.
+        let mut jpg = vec![0xFF, 0xD8, 0xFF, 0xE0, 0, 16, b'J', b'F', b'I', b'F', 0, 1, 1, 0, 0, 1, 0, 1, 0, 0];
+        jpg.extend([0xFF, 0xC0, 0, 17, 8, 0x05, 0x78, 0x05, 0x78, 3, 1, 0x22, 0, 2, 0x11, 1, 3, 0x11, 1]);
+        let i = super::image_info(&jpg).unwrap();
+        assert_eq!((i.format, i.width, i.height), ("JPEG", 1400, 1400));
+        assert!(super::image_info(b"not an image at all, just text").is_none());
+        assert!(super::image_info(&[0xFF, 0xD8, 0xFF]).is_none(), "truncated");
+    }
+
     use super::*;
 
     #[test]
