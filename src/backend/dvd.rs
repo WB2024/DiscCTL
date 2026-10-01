@@ -289,7 +289,7 @@ fn finish_image(
             return Err(e);
         }
     }
-    write_iso_image(iso_path, device, false, debug, progress_json, write_from_pct)
+    write_iso_image(iso_path, device, true, false, debug, progress_json, write_from_pct)
 }
 
 /// Is this job going to a file rather than a drive?

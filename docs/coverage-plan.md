@@ -8,7 +8,7 @@ A working checklist of the ripping and burning topics RustyDisc should cover, wh
 |---|---|---|---|
 | 1 | [Rip log and disc report](#1-rip-log-and-disc-report) | ✅ | `rip.log` + `rip-report.json` on every rip (v1.3.0) |
 | 2 | [Read offset correction](#2-read-offset-correction) | ✅ | Off / Auto / fixed number (v1.5.0) |
-| 3 | [Burn and write speeds](#3-burn-and-write-speeds) | ⬜ | No control |
+| 3 | [Burn and write speeds](#3-burn-and-write-speeds) | ✅ | Auto or chosen speed (v1.6.0) |
 | 4 | [Jitter and read-error reporting](#4-jitter-and-read-error-reporting) | ⬜ | Done by cdparanoia, not shown |
 | 5 | [Pregaps, hidden tracks, track boundaries](#5-pregaps-hidden-tracks-and-track-boundaries) | ⬜ | TOC read only |
 | 6 | [TOC anomaly checks](#6-toc-anomaly-checks) | ⬜ | TOC read, not validated |
@@ -60,7 +60,11 @@ Open questions that need a real disc or drive to settle are marked **(verify on 
 **Done when:** a test disc rip with a known offset matches AccurateRip at zero shift after correction. **(verify on hardware)**
 
 ## 3. Burn and write speeds
-**Status:** ⬜
+**Status:** ✅ complete in v1.6.0 (awaiting your check with a blank disc)
+
+**What was built:** a write speed choice for every burn: **Auto** (default, as before) or an "x" multiple. On the Burn page, **Ask the drive** lists the speeds the drive offers for the blank disc in it (`xorriso -list_speeds`) and fills the *Write speed* menu. On the command line it is `burn --speed N` and `plan --speed N`, and a disc graph file can carry `"speed": N`. The speed is shown in the plan, validated (1 to 100), and refused before anything is written if it is above what the drive reports. It is passed as `cdrdao --speed N` (audio CDs) or `xorriso -as cdrecord speed=Nc` / `speed=Nd` (data CDs, DVDs). Code: `src/backend/speed.rs`. Tests cover parsing, the drive's speed list (including the real drive's output), the limit check, and the exact tool arguments.
+
+**Left for you to check (hardware):** that your drive actually writes at the chosen speed. Drives treat the number as an upper limit and some ignore it, so the proof is a burn with a blank disc and a look at the speed the tool reports. The "ask the drive" list needs a blank disc in the drive; with a pressed CD in it the drive offers only one speed.
 
 **Plan:**
 - Add a speed choice in the burn options and Settings: Auto, or a specific speed. Offer the speeds the drive reports.
@@ -217,3 +221,4 @@ Both meanings of "streams" are in scope.
 | 2026-10-01 | Side fix: file ownership | v1.4.0: RUSTYDISC_PUID/PGID/UMASK, fix-permissions command and Settings card; server set to 1000:1000, existing files fixed |
 | 2026-10-01 | 1 Rip log and disc report | Built, unit tested, UI checked with a sample report; real rip pending your check |
 | 2026-10-01 | 2 Read offset correction | Built (v1.5.0); tests prove detect, correct and re-verify at shift 0 for +6 and -30; real rip pending your check |
+| 2026-10-01 | 3 Burn and write speeds | Built (v1.6.0); arguments verified by tests and a dry run; real burn at a chosen speed pending your check |

@@ -100,6 +100,7 @@ rustydisc burn [OPTIONS]
 | Flag | Description |
 |------|-------------|
 | `--transcode <spec>` | Data CD: convert audio before burning: `mp3:256`, `aac:320`, `opus:192`, `flac`, `wav` (only files that would shrink are converted) |
+| `--speed <auto\|N>` | Write speed: `auto` (the drive chooses, the default) or a multiple such as `8` for 8x. See [Write speed](hardware-notes.md#write-speed) |
 | `--disc-size <size>` | Blank disc: a size in MB or a name — `cd650`, `cd700` (default for CDs), `cd800`, `dvd` (default for DVDs), `dvd-dl`, `bd`, `bd-dl` |
 | `--dvd-audio-kbps <n>` | Music DVD: Dolby Digital bitrate: 192, 256, 384 or 448 (default) |
 | `--dvd-standard <pal\|ntsc>` | Music DVD: picture standard (default `pal`) |
@@ -256,7 +257,7 @@ Exit code `0` on success, `1` on failure (with structured JSON error on stderr).
 
 ## `rustydisc plan`
 
-Prints the burn plan as JSON without writing to any device: how many discs are needed, what goes on each and how full it is (counting the converted size when `--transcode` is given), plus the burn steps for a single disc. Useful for scripting and verifying disc layout before committing to media. It accepts the same source flags as `burn` (`--audio`, `--playlist`, `--data`, `--files`, `--transcode`, `--disc-size`).
+Prints the burn plan as JSON without writing to any device: how many discs are needed, what goes on each and how full it is (counting the converted size when `--transcode` is given), plus the burn steps for a single disc. Useful for scripting and verifying disc layout before committing to media. It accepts the same source flags as `burn` (`--audio`, `--playlist`, `--data`, `--files`, `--transcode`, `--disc-size`), and `--speed` to show the chosen write speed in the plan.
 
 ```
 rustydisc plan --format redbook --audio ~/music/*.wav --label "Preview"

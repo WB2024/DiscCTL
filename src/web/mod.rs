@@ -220,6 +220,7 @@ pub async fn serve(cfg: Config, bind: SocketAddr) -> Result<(), Error> {
         .route("/api/cache", get(cache::info))
         .route("/api/cache/clear", post(cache::clear))
         .route("/api/status", get(status))
+        .route("/api/drive/speeds", get(drive_speeds))
         .route("/api/login", post(auth::login))
         .route("/api/logout", post(auth::logout))
         .route("/api/auth/status", get(auth::status))
@@ -862,6 +863,8 @@ struct BurnReq {
     device: Option<String>,
     /// Disc capacity in MB (see the presets in /api/status).
     disc_size_mb: Option<u64>,
+    /// Write speed as an "x" multiple (8 = 8x). Absent: the drive chooses.
+    speed: Option<u32>,
     /// Music DVD: Dolby Digital bitrate in kbps.
     dvd_audio_kbps: Option<u32>,
     /// Music DVD: "pal" or "ntsc".
@@ -943,6 +946,13 @@ fn burn_args(cmd: &str, req: &BurnReq, cfg: &Config) -> ApiResult<(Vec<String>, 
                 a.extend(["--dvd-still".into(), path_str(&safe_join(&cfg.media_dir, img)?)]);
             }
         }
+    }
+
+    if let Some(x) = req.speed {
+        if !(1..=crate::backend::speed::MAX_X).contains(&x) {
+            return Err(ApiError::bad(format!("Write speed must be between 1x and {}x (or Auto)", crate::backend::speed::MAX_X)));
+        }
+        a.extend(["--speed".into(), x.to_string()]);
     }
 
     if is_burn {
@@ -1467,4 +1477,27 @@ async fn permissions_fix(State(st): S) -> ApiResult<Json<Value>> {
         .await
         .map_err(|e| Error::backend(e.to_string()))?;
     Ok(Json(json!({ "changed": changed })))
+}
+
+#[derive(Deserialize)]
+struct SpeedQuery {
+    device: Option<String>,
+}
+
+/// The write speeds the drive offers for the disc that is in it.
+async fn drive_speeds(State(st): S, Query(q): Query<SpeedQuery>) -> ApiResult<Json<Value>> {
+    require_drive_free(&st)?;
+    let device = q.device.unwrap_or_else(|| st.cfg.device.clone());
+    check_device(&device)?;
+    if st.cfg.mock {
+        let speeds: Vec<Value> = [8.0, 16.0, 24.0, 32.0, 48.0]
+            .iter()
+            .map(|x| json!({"kbps": (x * 176.4) as u32, "x": x, "media": "CD"}))
+            .collect();
+        return Ok(Json(json!({ "speeds": speeds })));
+    }
+    let speeds = tokio::task::spawn_blocking(move || crate::backend::speed::query(&device))
+        .await
+        .map_err(|e| Error::backend(e.to_string()))??;
+    Ok(Json(json!({ "speeds": speeds })))
 }

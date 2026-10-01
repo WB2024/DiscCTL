@@ -24,5 +24,8 @@ pub enum BurnStep {
 pub struct BurnPlan {
     pub format: String,
     pub label: String,
+    /// Write speed as an "x" multiple; absent means the drive chooses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speed: Option<u32>,
     pub steps: Vec<BurnStep>,
 }

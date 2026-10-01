@@ -38,6 +38,19 @@ impl Drop for PreparedSession {
     }
 }
 
+/// The `cdrdao write` arguments for an audio session.
+pub(crate) fn cdrdao_write_args(device: &str, keep_open: bool, speed: Option<u32>, toc_path: &str) -> Vec<String> {
+    let mut a: Vec<String> = ["write", "--device", device, "--driver", "generic-mmc-raw"].iter().map(|s| s.to_string()).collect();
+    if keep_open {
+        a.push("--multi".into());
+    }
+    if let Some(x) = speed {
+        a.extend(["--speed".into(), x.to_string()]);
+    }
+    a.push(toc_path.to_string());
+    a
+}
+
 pub fn write_audio_session(
     session: &PreparedSession,
     device: &str,
@@ -54,14 +67,7 @@ pub fn write_audio_session(
     }
 
     let mut cmd = Command::new("cdrdao");
-    cmd.arg("write")
-        .arg("--device").arg(device)
-        .arg("--driver").arg("generic-mmc-raw");
-
-    if keep_open {
-        cmd.arg("--multi");
-    }
-    cmd.arg(&toc_path);
+    cmd.args(cdrdao_write_args(device, keep_open, super::speed::get(), &toc_path));
 
     if debug {
         eprintln!("Running: {:?}", cmd);
@@ -228,6 +234,14 @@ fn generate_toc(session: &PreparedSession) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn cdrdao_gets_the_speed_before_the_toc() {
+        let a = super::cdrdao_write_args("/dev/sr0", true, Some(8), "x.toc");
+        assert_eq!(a, ["write", "--device", "/dev/sr0", "--driver", "generic-mmc-raw", "--multi", "--speed", "8", "x.toc"]);
+        let auto = super::cdrdao_write_args("/dev/sr0", false, None, "x.toc");
+        assert!(!auto.iter().any(|x| x == "--speed"), "auto sends no speed");
+    }
+
     use super::*;
     use crate::model::disc::CdText;
 

@@ -101,6 +101,9 @@ pub struct DiscGraph {
     /// Settings for `musicdvd` discs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dvd: Option<DvdOptions>,
+    /// Write speed as an "x" multiple (8 = 8x). Absent: the drive chooses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speed: Option<u32>,
 }
 
 /// How the audio on a Music DVD is encoded and presented.

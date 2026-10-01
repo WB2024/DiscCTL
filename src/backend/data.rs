@@ -98,7 +98,20 @@ pub fn append_data_session(
     }
 
     // ── Phase 2: write ISO to disc ────────────────────────────────────────────
-    write_iso_image(&iso_path, device, msinfo.is_some(), debug, progress_json, 45.0)
+    write_iso_image(&iso_path, device, false, msinfo.is_some(), debug, progress_json, 45.0)
+}
+
+/// The `xorriso -as cdrecord` arguments that write an ISO image.
+pub(crate) fn xorriso_write_args(iso_path: &str, device: &str, dvd: bool, multi: bool, speed: Option<u32>) -> Vec<String> {
+    let mut a: Vec<String> = vec!["-as".into(), "cdrecord".into(), format!("dev={device}"), "-data".into()];
+    if let Some(x) = speed {
+        a.push(super::speed::xorriso_arg(x, dvd));
+    }
+    if multi {
+        a.push("-multi".into());
+    }
+    a.push(iso_path.to_string());
+    a
 }
 
 /// Write a finished ISO image to the disc in `device` with xorriso and delete the image.
@@ -106,21 +119,14 @@ pub fn append_data_session(
 pub(crate) fn write_iso_image(
     iso_path: &str,
     device: &str,
+    dvd: bool,
     multi: bool,
     debug: bool,
     progress_json: bool,
     start_pct: f32,
 ) -> Result<(), Error> {
     let mut write_cmd = stdbuf_cmd("xorriso");
-    write_cmd
-        .arg("-as").arg("cdrecord")
-        .arg(format!("dev={}", device))
-        .arg("-data");
-
-    if multi {
-        write_cmd.arg("-multi");
-    }
-    write_cmd.arg(iso_path);
+    write_cmd.args(xorriso_write_args(iso_path, device, dvd, multi, super::speed::get()));
 
     if debug { eprintln!("Running: {:?}", write_cmd); }
 
@@ -241,4 +247,18 @@ pub(crate) fn emit_progress(pct: f32) {
 pub(crate) fn emit_step(msg: &str) {
     let escaped = msg.replace('\\', "\\\\").replace('"', "\\\"");
     println!("{{\"type\":\"step\",\"msg\":\"{}\"}}", escaped);
+}
+
+#[cfg(test)]
+mod speed_tests {
+    use super::xorriso_write_args;
+
+    #[test]
+    fn cd_and_dvd_speeds_carry_their_own_unit() {
+        let cd = xorriso_write_args("a.iso", "/dev/sr0", false, true, Some(8));
+        assert_eq!(cd, ["-as", "cdrecord", "dev=/dev/sr0", "-data", "speed=8c", "-multi", "a.iso"]);
+        let dvd = xorriso_write_args("a.iso", "/dev/sr0", true, false, Some(4));
+        assert_eq!(dvd, ["-as", "cdrecord", "dev=/dev/sr0", "-data", "speed=4d", "a.iso"]);
+        assert!(!xorriso_write_args("a.iso", "/dev/sr0", false, false, None).iter().any(|a| a.starts_with("speed=")));
+    }
 }

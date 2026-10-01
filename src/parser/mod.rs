@@ -58,6 +58,7 @@ pub fn from_cli(
         label: label.to_string(),
         sessions,
         dvd: None,
+        speed: None,
     })
 }
 

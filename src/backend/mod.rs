@@ -4,6 +4,7 @@ pub mod convert;
 pub mod data;
 pub mod device;
 pub mod dvd;
+pub mod speed;
 pub mod transcode;
 
 use crate::{
@@ -46,6 +47,16 @@ fn execute_dvd(graph: &DiscGraph, plan: &BurnPlan, dev: &str, debug: bool, progr
 }
 
 pub fn execute(graph: &DiscGraph, plan: &BurnPlan, dev: &str, debug: bool, progress_json: bool) -> Result<(), Error> {
+    // The write speed: refuse one the drive can't do before anything is written, then let the
+    // backends read it when they build their commands.
+    speed::set(graph.speed);
+    if let Some(x) = graph.speed {
+        if !(graph.format.is_dvd() && dvd::writing_to_file()) {
+            if let Ok(list) = speed::query(dev) {
+                speed::check_supported(x, &list)?;
+            }
+        }
+    }
     if graph.format.is_dvd() {
         return execute_dvd(graph, plan, dev, debug, progress_json);
     }

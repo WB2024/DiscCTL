@@ -18,6 +18,9 @@ pub struct PlanArgs {
     /// Source directory for data session
     #[arg(long)]
     pub data: Option<String>,
+    /// Write speed to show in the plan: auto (default) or a multiple like 8 for 8x
+    #[arg(long, default_value = "auto", value_name = "auto|N")]
+    pub speed: String,
     /// Disc label
     #[arg(long, default_value = "Untitled")]
     pub label: String,
@@ -45,7 +48,10 @@ pub struct PlanArgs {
 pub fn run(args: PlanArgs) -> Result<(), Error> {
     // A hand-written disc graph is a single disc: show its steps as before.
     if let Some(ref path) = args.input {
-        let graph = parser::from_file(path)?;
+        let mut graph = parser::from_file(path)?;
+        if let Some(x) = crate::backend::speed::parse(&args.speed).map_err(Error::validation)? {
+            graph.speed = Some(x);
+        }
         let plan = planner::plan(&graph)?;
         println!("{}", serde_json::to_string_pretty(&plan)?);
         return Ok(());
@@ -65,6 +71,10 @@ pub fn run(args: PlanArgs) -> Result<(), Error> {
         disc_size_mb: args.disc_size.as_deref().map(planner::discs::DiscSize::parse).transpose()?.map(|s| s.mb),
         dvd_audio_kbps: Some(args.dvd_audio_kbps),
     })?;
+
+    if let Some(x) = crate::backend::speed::parse(&args.speed).map_err(Error::validation)? {
+        out["speed"] = serde_json::json!(x);
+    }
 
     // The burn steps for one disc, when they can be worked out from the flags alone.
     let single_source = args.files.is_none() && (args.playlist.is_none() || format != "datacd");

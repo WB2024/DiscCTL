@@ -59,6 +59,10 @@ pub struct BurnArgs {
     /// Load disc graph from JSON file instead of flags
     #[arg(long)]
     pub input: Option<String>,
+    /// Write speed: auto (the drive chooses, default) or a multiple like 8 for 8x. Slower is often
+    /// kinder to audio discs; the drive's own limits apply
+    #[arg(long, default_value = "auto", value_name = "auto|N")]
+    pub speed: String,
     /// Target optical drive device
     #[arg(long, default_value = "/dev/sr0")]
     pub device: String,
@@ -548,6 +552,12 @@ fn burn_graph(
     args: &BurnArgs,
     _staged: Option<&StagedDir>,
 ) -> Result<(), Error> {
+    // A speed on the command line wins over one in the graph file.
+    let mut graph = graph.clone();
+    if let Some(x) = backend::speed::parse(&args.speed).map_err(Error::validation)? {
+        graph.speed = Some(x);
+    }
+    let graph = &graph;
     let plan = planner::plan(graph)?;
 
     if args.debug || args.dry_run {
@@ -701,7 +711,7 @@ mod tests {
     fn data_sources_are_exclusive() {
         let args = |files: Option<Vec<String>>, data: Option<String>| BurnArgs {
             format: "datacd".into(), audio: None, playlist: None, data, files, playlist_root: None, disc_size: None, dvd_audio_kbps: 448, dvd_standard: "pal".into(), dvd_still: None, iso_out: None,
-            label: "T".into(), input: None, device: "/dev/null".into(), debug: false, dry_run: true,
+            label: "T".into(), speed: "auto".into(), input: None, device: "/dev/null".into(), debug: false, dry_run: true,
             cd_text: false, transcode: None, stage_dir: None, keep_staged: false, cache: Default::default(), progress_json: false,
         };
         let resolve = |a: BurnArgs| discs::resolve_data(&DataSpec { playlist: a.playlist, files: a.files, data: a.data, playlist_root: None });

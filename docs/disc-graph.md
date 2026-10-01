@@ -86,3 +86,10 @@ Exit codes:
 - `0` — success
 - `1` — error (details on stderr as JSON)
 
+## Write speed
+
+An optional top-level `"speed"` sets the write speed as an "x" multiple (`8` means 8x), from 1 to 100. Leave it out and the drive chooses. A `--speed` given to `burn` or `plan` overrides it.
+
+```json
+{ "format": "redbook", "label": "Mix", "speed": 8, "sessions": [ { "type": "audio", "tracks": ["01.flac", "02.flac"] } ] }
+```

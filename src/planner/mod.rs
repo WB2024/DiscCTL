@@ -15,6 +15,7 @@ pub fn plan(graph: &DiscGraph) -> Result<BurnPlan, Error> {
     Ok(BurnPlan {
         format: graph.format.to_string(),
         label: graph.label.clone(),
+        speed: graph.speed,
         steps,
     })
 }
@@ -25,6 +26,11 @@ pub fn validate(graph: &DiscGraph) -> Result<(), Error> {
 }
 
 pub fn validate_structure(graph: &DiscGraph) -> Result<(), Error> {
+    if let Some(x) = graph.speed {
+        if !(1..=crate::backend::speed::MAX_X).contains(&x) {
+            return Err(Error::validation(format!("Write speed must be between 1x and {}x (or left out for Auto), got {x}x", crate::backend::speed::MAX_X)));
+        }
+    }
     match graph.format {
         DiscFormat::RedBook => validate_redbook_structure(graph),
         DiscFormat::DataCD => validate_datacd_structure(graph),
@@ -342,6 +348,7 @@ mod tests {
             label: "Test".to_string(),
             sessions,
             dvd: None,
+            speed: None,
         }
     }
 

@@ -315,6 +315,11 @@ pre.json { background: var(--bg); border: 1px solid var(--line); border-radius: 
           <div style="display:flex;flex-direction:column;gap:12px">
             <label class="field" id="label-wrap">Disc label<input type="text" id="burn-label" placeholder="Untitled">
               <small id="label-help">Filled in from the playlist's name; change it if you like. Jobs that need several discs are labelled “… - Disc 1”, “… - Disc 2” and so on.</small></label>
+            <div class="field" id="speed-wrap">
+              <label for="burn-speed" style="display:block">Write speed</label>
+              <div class="row" style="gap:8px"><select id="burn-speed" style="flex:1"><option value="">Auto: the drive chooses</option></select><button class="btn small" id="speed-refresh" type="button">Ask the drive</button></div>
+              <small id="speed-help" class="muted">Slower writes are often more reliable, especially for audio discs. Put a blank disc in and ask the drive what it offers. The drive treats this as an upper limit and may settle on a nearby speed.</small>
+            </div>
             <label class="field" id="discsize-wrap">Blank disc
               <select id="burn-discsize"></select>
             </label>
@@ -1442,9 +1447,9 @@ function burnBody() {
   if (f === "graph") {
     let graph;
     try { graph = JSON.parse($("#graph-text").value); } catch (e) { throw new Error("Disc graph is not valid JSON: " + e.message); }
-    return { graph, dry_run: $("#burn-dry").checked, debug: $("#burn-debug").checked, device: selectedDevice() };
+    return { graph, speed: +$("#burn-speed").value || null, dry_run: $("#burn-dry").checked, debug: $("#burn-debug").checked, device: selectedDevice() };
   }
-  const common = { format: f, disc_size_mb: +$("#burn-discsize").value, label: $("#burn-label").value.trim() || null, dry_run: $("#burn-dry").checked, debug: $("#burn-debug").checked, device: selectedDevice() };
+  const common = { format: f, speed: +$("#burn-speed").value || null, disc_size_mb: +$("#burn-discsize").value, label: $("#burn-label").value.trim() || null, dry_run: $("#burn-dry").checked, debug: $("#burn-debug").checked, device: selectedDevice() };
   if (f === "datacd" || f === "datadvd") {
     if (!burn.data && !burn.dfiles.length && !burn.dplaylist) throw new Error("Choose what to put on the disc: files, a folder or a playlist");
     return { ...common, data: burn.dplaylist || burn.dfiles.length ? null : burn.data, files: burn.dplaylist ? [] : burn.dfiles,
@@ -1518,6 +1523,22 @@ function renderPlan(res) {
   return `<h2 style="margin-top:16px">Plan</h2><div class="notice">${head}</div>${body}${warnings}${skipped}${foot}`;
 }
 
+// Ask the drive which write speeds it offers for the disc that is in it.
+async function askDriveSpeeds() {
+  const btn = $("#speed-refresh"), sel = $("#burn-speed"), help = $("#speed-help"), keep = sel.value;
+  btn.disabled = true; btn.textContent = "Asking…";
+  try {
+    const r = await api("/api/drive/speeds?device=" + encodeURIComponent(selectedDevice() || ""));
+    const list = (r.speeds || []).filter((x, i, a) => a.findIndex(y => y.x === x.x) === i);
+    sel.innerHTML = `<option value="">Auto: the drive chooses</option>` + list.map(x => `<option value="${Math.round(x.x)}">${x.x}x ${esc(x.media)}${x === list[0] && list.length > 1 ? " (slowest)" : x === list[list.length - 1] && list.length > 1 ? " (fastest)" : ""}</option>`).join("");
+    if ([...sel.options].some(o => o.value === keep)) sel.value = keep;
+    help.textContent = list.length
+      ? (list.length === 1 ? `The drive offers one speed for this disc: ${list[0].x}x.` : `The drive offers ${list.map(x => x.x + "x").join(", ")}. Slower is usually kinder to audio discs.`)
+      : "The drive didn't list any speeds. This usually means there's no blank disc in it, so Auto is used.";
+  } catch (e) { toast(e.message, "err", 8000); }
+  btn.disabled = false; btn.textContent = "Ask the drive";
+}
+
 async function burnPlan() {
   const out = $("#burn-plan-out"), btn = $("#burn-plan");
   let body;
@@ -1526,7 +1547,7 @@ async function burnPlan() {
   out.innerHTML = `<div class="muted" style="margin-top:16px">Reading the files and working out how many discs are needed — this can take a little while for large jobs…</div>`;
   try {
     const plan = await api("/api/plan", { body });
-    out.innerHTML = renderPlan(plan);
+    out.innerHTML = renderPlan(plan) + (body.speed ? `<div class="muted" style="margin-top:8px">Write speed: ${body.speed}x (the drive treats this as an upper limit)</div>` : `<div class="muted" style="margin-top:8px">Write speed: Auto</div>`);
   } catch (e) { out.innerHTML = `<div class="notice err" style="margin-top:16px"><b>${esc(e.code || "Error")}</b> — ${esc(e.message)}</div>`; }
   finally { btn.disabled = false; btn.textContent = label; out.scrollIntoView({ behavior: "smooth", block: "nearest" }); }
 }
@@ -2830,6 +2851,7 @@ async function init() {
   $("#dvd-still-clear").onclick = () => { burn.still = null; renderBurn(); };
   $("#burn-plan").onclick = burnPlan;
   $("#burn-start").onclick = burnStart;
+  $("#speed-refresh").onclick = askDriveSpeeds;
   renderBurn();
 
   $("#lib-refresh").onclick = loadLibrary;
