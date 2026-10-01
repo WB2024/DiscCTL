@@ -17,7 +17,7 @@ A working checklist of the ripping and burning topics RustyDisc should cover, wh
 | 9 | [Exact disc images](#9-exact-disc-images) | ⬜ | ISO build for data only |
 | 10 | [Subchannels and subcode data](#10-subchannels-and-subcode-data) | ⬜ | CD-TEXT read; ISRC from MusicBrainz |
 | 11 | [Batch ripping](#11-batch-ripping) | ⬜ | One disc at a time |
-| 12 | [Streams](#12-streams) | ⬜ | File inputs only |
+| 12 | [Streams](#12-streams) (URL inputs and stream choice) | ⬜ | File inputs only, default stream |
 | 13 | [Forensic examination](#13-forensic-examination) | ⬜ | Parts exist, no combined report |
 | 14 | [Non-compliant and difficult discs](#14-non-compliant-and-difficult-discs) | ⬜ | Not handled |
 
@@ -157,12 +157,30 @@ Open questions that need a real disc or drive to settle are marked **(verify on 
 ## 12. Streams
 **Status:** ⬜
 
-**Plan:**
-- Let burn inputs be a URL or other ffmpeg-readable source, converted through the existing cache.
-- Let a file with several audio streams use a chosen one.
-- Needs a closer look at what "streams" should mean here before work starts; I'll confirm with you first.
+Both meanings of "streams" are in scope.
 
-**Done when:** agreed scope is built and tested.
+### 12a. Burning from a stream or URL
+**What it means:** Today every track has to be a file already on disk. This would let a track come from a URL (an HTTP/HTTPS link to an audio file or a stream) or another source ffmpeg can read.
+
+**Plan:**
+- Let a track source in the disc graph be a URL as well as a path. Validation checks that it looks like a URL and, where possible, that it is reachable before any hardware is touched.
+- Fetch and convert it through the existing converted-files cache to 44.1 kHz 16-bit stereo PCM, like any other input, so the burn step is unchanged.
+- Show download and conversion progress in the job panel, and apply the cache retention settings to the result.
+- Bound it sensibly: a size and duration limit, a timeout, and clear errors for unreachable links. Live endless streams are rejected, since a disc needs a finite length.
+- Only for content the user has the right to use; the docs will say so.
+
+**Done when:** a burn plan with a URL track validates, converts and burns (or dry-runs) like a file track, and tests cover validation and failure cases.
+
+### 12b. Choosing between several audio streams in one file
+**What it means:** Some files (video files, certain recordings, some containers) hold more than one audio stream, such as different languages, a commentary, or a stereo and surround mix. ffmpeg normally picks the default one, which may not be the one you want.
+
+**Plan:**
+- Read each input's streams with ffprobe and list them (index, codec, channels, language, title).
+- Add an optional stream choice per track in the disc graph, defaulting to ffmpeg's current pick so nothing changes silently.
+- Show the choice in the web UI when a file has more than one audio stream, and in `validate` and `plan` output.
+- Pass the choice to ffmpeg when converting, and key the converted-files cache on it so different choices don't collide.
+
+**Done when:** a test file with two audio streams converts the chosen one, and the choice appears in the plan.
 
 ## 13. Forensic examination
 **Status:** ⬜
