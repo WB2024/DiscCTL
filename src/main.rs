@@ -5,6 +5,7 @@ mod error;
 mod library;
 mod model;
 mod parser;
+mod perms;
 mod planner;
 mod rip;
 mod stick;
@@ -47,9 +48,12 @@ enum Cmd {
     Import(commands::import::ImportArgs),
     /// Hand ripped albums to Lidarr to import (adds the artist and album if needed)
     ImportLidarr(commands::import_lidarr::ImportLidarrArgs),
+    /// Give existing files the configured owner and permissions (RUSTYDISC_PUID, RUSTYDISC_PGID, RUSTYDISC_UMASK)
+    FixPermissions(commands::fix_permissions::FixPermissionsArgs),
 }
 
 fn main() {
+    perms::init();
     let cli = Cli::parse();
     let result = match cli.command {
         Cmd::Burn(args)     => commands::burn::run(args),
@@ -63,6 +67,7 @@ fn main() {
         Cmd::Stick(args)    => commands::stick::run(args),
         Cmd::Import(args)   => commands::import::run(args),
         Cmd::ImportLidarr(args) => commands::import_lidarr::run(args),
+        Cmd::FixPermissions(args) => commands::fix_permissions::run(args),
     };
     if let Err(e) = result {
         let disc_err = e.to_disc_error();

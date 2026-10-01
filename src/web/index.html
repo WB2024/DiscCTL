@@ -568,6 +568,19 @@ pre.json { background: var(--bg); border: 1px solid var(--line); border-radius: 
         </div>
       </div>
 
+      <div class="card" id="perms-card">
+        <h2>File ownership</h2>
+        <p class="muted" style="margin-top:0">RustyDisc runs as root so it can use the drive and mount sticks, which would make every rip, log and imported file root-only. Set an owner and permissions on the container and everything RustyDisc creates (rips, covers, logs, imported files) is given to that user and group instead.</p>
+        <div id="perms-status" class="muted">Checking…</div>
+        <details style="margin-top:10px"><summary>How to set it</summary>
+          <div class="muted" style="margin-top:6px">Add these to the container's environment (Dockge: the stack's <span class="mono">environment</span>), then redeploy. Use the numeric ids of the user that should own your music; run <span class="mono">id &lt;user&gt;</span> on the host to find them.</div>
+          <pre class="mono" style="margin-top:8px;font-size:12px">RUSTYDISC_PUID: 1000
+RUSTYDISC_PGID: 100
+RUSTYDISC_UMASK: "002"   # 002 = owner and group can write, everyone can read</pre>
+        </details>
+        <div class="row" style="margin-top:12px;gap:8px"><button class="btn" id="perms-fix" disabled>Fix existing files</button><span class="muted" id="perms-note">Applies the owner and permissions to everything already in the rips and library folders. Never removes access.</span></div>
+      </div>
+
       <div class="card" id="userscript-card">
         <h2>Dynamic Range DB userscript</h2>
         <p class="muted" style="margin-top:0">A userscript for Tampermonkey, Violentmonkey or Greasemonkey. On MusicBrainz release pages it shows what the <a href="https://dr.loudness-war.info/" target="_blank" rel="noopener">Dynamic Range DB</a> holds for that release, matched by barcode and catalogue number where it can, with a link to submit it if it's missing. On the database it adds MusicBrainz links, and it fills in the upload form for you, log attached, when you use "Submit to Dynamic Range DB" in the Library.</p>
@@ -2429,7 +2442,26 @@ async function loadSettings(quiet) {
   renderSettings();
 }
 
+async function loadPerms() {
+  const el = $("#perms-status"), btn = $("#perms-fix");
+  try {
+    const p = await api("/api/permissions");
+    el.innerHTML = p.configured
+      ? `<span class="ar-ok">✔</span> New files are owned by <b>${p.puid ?? "(unchanged)"}</b>:<b>${p.pgid ?? "(unchanged)"}</b> with umask <b>${esc(p.umask ?? "default")}</b>.`
+      : `<span class="ar-bad">Not set.</span> Files are currently created as root:root (umask 022), so other users can read them but not change or delete them.`;
+    btn.disabled = !p.configured;
+    btn.onclick = async () => {
+      if (!confirmBox("Change the owner and permissions of everything in the rips and library folders?\n\nIt can take a while on a big library. Access is only ever added, never removed.")) return;
+      btn.disabled = true; btn.textContent = "Working…";
+      try { const r = await api("/api/permissions/fix", { body: {} }); $("#perms-note").textContent = `Done: ${r.changed} item${r.changed === 1 ? "" : "s"} changed.`; }
+      catch (e) { toast(e.message, "err", 8000); }
+      btn.disabled = false; btn.textContent = "Fix existing files";
+    };
+  } catch (e) { el.textContent = e.message; }
+}
+
 function renderSettings() {
+  loadPerms();
   $("#cfg-file").textContent = SETINFO.config_file;
   $("#set-format").innerHTML = formatOptions();
   $("#set-format").value = SET.rip_format;

@@ -17,7 +17,7 @@ use crate::{
 };
 
 /// Where the library is: the setting, else `--library-dir`.
-fn library(st: &AppState) -> Option<PathBuf> {
+pub(super) fn library(st: &AppState) -> Option<PathBuf> {
     let s = st.settings.get().library_path;
     if !s.is_empty() {
         return Some(PathBuf::from(s));

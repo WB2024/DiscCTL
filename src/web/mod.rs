@@ -225,6 +225,8 @@ pub async fn serve(cfg: Config, bind: SocketAddr) -> Result<(), Error> {
         .route("/api/auth/status", get(auth::status))
         .route("/api/auth/config", post(auth::configure))
         .route("/userscripts/dynamic-range-db.user.js", get(|| async { ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8")], DR_USERSCRIPT) }))
+        .route("/api/permissions", get(permissions_status))
+        .route("/api/permissions/fix", post(permissions_fix))
         .route("/api/info", get(info))
         .route("/api/musicbrainz", get(musicbrainz_lookup))
         .route("/api/musicbrainz/search", get(musicbrainz_search))
@@ -1421,4 +1423,34 @@ mod tests {
         v.sort_by(|a, b| natural_cmp(a, b));
         assert_eq!(v, ["01 - z.flac", "2 - a.flac", "10 - b.flac", "Album/1.flac", "album/02.flac", "Album/10.flac"]);
     }
+}
+
+/// How file ownership is configured, so Settings can show it.
+async fn permissions_status(State(st): S) -> Json<Value> {
+    let c = crate::perms::config();
+    Json(json!({
+        "configured": c.is_set(),
+        "puid": c.uid, "pgid": c.gid,
+        "umask": c.umask.map(|m| format!("{m:03o}")),
+        "rips_dir": path_str(&st.cfg.rips_dir),
+        "library": import::library(&st).map(|p| path_str(&p)),
+    }))
+}
+
+/// Give everything already in the rips and library folders the configured owner and permissions.
+async fn permissions_fix(State(st): S) -> ApiResult<Json<Value>> {
+    if !crate::perms::config().is_set() {
+        return Err(ApiError::bad("Set RUSTYDISC_PUID, RUSTYDISC_PGID and/or RUSTYDISC_UMASK on the container first (see Settings → File ownership)."));
+    }
+    require_drive_free(&st)?;
+    let mut roots = vec![st.cfg.rips_dir.clone()];
+    if let Some(l) = import::library(&st) {
+        if !roots.contains(&l) {
+            roots.push(l);
+        }
+    }
+    let changed = tokio::task::spawn_blocking(move || roots.iter().map(|r| crate::perms::fix_tree(r)).sum::<usize>())
+        .await
+        .map_err(|e| Error::backend(e.to_string()))?;
+    Ok(Json(json!({ "changed": changed })))
 }

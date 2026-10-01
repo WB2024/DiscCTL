@@ -364,6 +364,7 @@ pub struct Summary {
 fn put(src: &Path, dest: &Path, mode: Mode, replace: bool) -> Result<(), Error> {
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent).map_err(|e| Error::device(format!("Can't create {}: {e}", parent.display())))?;
+        crate::perms::own_parents(&parent.join("x"));
     }
     // Written under a temporary name and renamed, so a half-copied file never looks finished.
     let part = PathBuf::from(format!("{}.rustydisc-part", dest.display()));
@@ -387,7 +388,9 @@ fn put(src: &Path, dest: &Path, mode: Mode, replace: bool) -> Result<(), Error> 
         }
     }
     let _ = replace; // rename over an existing file replaces it
-    std::fs::rename(&part, dest).map_err(err)
+    std::fs::rename(&part, dest).map_err(err)?;
+    crate::perms::own(dest);
+    Ok(())
 }
 
 fn prune_empty(dir: &Path, stop: &Path) {

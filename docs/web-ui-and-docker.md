@@ -25,8 +25,31 @@ The **Tools** page covers disc recovery and CD-RW blanking, and checks that the 
 | `--media-dir` | `RUSTYDISC_MEDIA_DIR` | `./media` | burn sources |
 | `--config-dir` | `RUSTYDISC_CONFIG_DIR` | `./config` | where settings are stored |
 | `--mock` | `RUSTYDISC_MOCK` | off | simulate a drive (no hardware needed) |
+| | `RUSTYDISC_PUID` / `RUSTYDISC_PGID` | unset | owner and group given to everything RustyDisc creates (see [File ownership](#file-ownership)) |
+| | `RUSTYDISC_UMASK` | `002` once an owner is set | permission bits to withhold from new files |
 
 Only one job may use the drive at a time; long jobs stream live progress to every open browser. The login is optional; see [Security](#security-optional-login) below.
+
+## File ownership
+
+The container runs as root, because it has to reach the drive and mount USB sticks. Left alone, every rip, cover, log and imported file would be `root:root` with mode 644 (folders 755): readable by everyone, but not changeable by Samba, NFS, Lidarr or you.
+
+Set the owner on the container and RustyDisc gives it to everything it creates:
+
+```yaml
+environment:
+  RUSTYDISC_PUID: 1000      # the user that should own your music
+  RUSTYDISC_PGID: 1000
+  RUSTYDISC_UMASK: "002"    # owner and group can write, everyone can read
+```
+
+(`PUID`, `PGID` and `UMASK` work too.) The umask applies to every file RustyDisc and its tools (ffmpeg, cdparanoia, xorriso) create. The owner is applied to finished rips, imported library files and their folders, covers, and refreshed checksums. Files already there are fixed with **Settings → File ownership → Fix existing files**, or on the command line:
+
+```bash
+rustydisc fix-permissions "/rips" "/data/Media/Audio/Music"
+```
+
+Fixing only ever adds access; it never removes any. Settings and caches under `/config` stay owned by root.
 
 ## Docker
 

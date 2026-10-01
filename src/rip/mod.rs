@@ -146,14 +146,18 @@ pub fn rip(opts: &RipOptions) -> Result<(), Error> {
     // Step 4: fetch cover art (before ripping so it's ready for embedding)
     let (cover_art_path, _temp_cover) = prepare_cover(opts, &mb, &output_dir);
 
-    match info.format {
+    let result = match info.format {
         DiscFormat::RedBook  => rip_redbook(&info, &mb, opts, &output_dir, cover_art_path.as_deref(), started),
         DiscFormat::DataCD   => rip_datacd(&info, opts, &output_dir),
         DiscFormat::BlueBook => rip_bluebook(&info, &mb, opts, &output_dir, cover_art_path.as_deref(), started),
         DiscFormat::Unknown  => Err(Error::validation(
             "Could not determine disc format. Insert a disc and try again.",
         )),
-    }
+    };
+    // Whatever was written, even by a rip that stopped part-way, belongs to the configured owner.
+    crate::perms::own_tree(Path::new(&output_dir));
+    crate::perms::own_parents(Path::new(&output_dir));
+    result
 }
 
 

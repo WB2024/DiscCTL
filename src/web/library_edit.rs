@@ -32,6 +32,7 @@ pub fn refresh_manifest(dir: &Path) {
     if let (Ok(m), Some(parent)) = (metadata::generate_checksums(&dir.to_string_lossy()), path.parent()) {
         let _ = metadata::write_checksums(&m, &parent.to_string_lossy());
     }
+    crate::perms::own_tree(dir);
 }
 
 /// Create (or refresh) the SHA-256 checksums of a rip that was made without archive mode, so it can be verified later.
@@ -232,6 +233,7 @@ pub async fn set_cover(State(st): S, UrlPath(name): UrlPath<String>, Query(q): Q
             }
             let target = dir.join(format!("cover.{ext}"));
             if std::fs::write(&target, &body).is_ok() {
+                crate::perms::own(&target);
                 saved = Some(format!("cover.{ext}"));
             }
         }

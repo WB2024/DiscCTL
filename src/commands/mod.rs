@@ -9,3 +9,4 @@ pub mod validate;
 pub mod verify;
 pub mod serve;
 pub mod stick;
+pub mod fix_permissions;
