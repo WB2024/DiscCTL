@@ -580,7 +580,11 @@ fn write_rip_report(
             read_mode: "full paranoia (rereads and verifies every sector)".into(),
             offset_applied_samples: 0,
             format: opts.format.extension().to_uppercase(),
-            quality: opts.quality.clone(),
+            quality: encoder::quality_choices(&opts.format)
+                .into_iter()
+                .find(|c| match opts.quality.as_deref() { Some(q) => c.id == q, None => true })
+                .map(|c| c.label.to_string())
+                .filter(|l| !matches!(l.as_str(), "Lossless" | "Uncompressed")),
             archive: opts.archive,
         },
         started,

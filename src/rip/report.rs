@@ -127,7 +127,7 @@ pub fn build(i: Inputs) -> RipReport {
             number: t.number,
             kind: if t.kind == TrackKind::Audio { "audio" } else { "data" }.into(),
             start_sector: t.lba_start,
-            end_sector: t.lba_end,
+            end_sector: t.lba_end.saturating_sub(1),
             seconds: t.duration_secs,
         })
         .collect();
@@ -156,6 +156,9 @@ pub fn build(i: Inputs) -> RipReport {
         None if i.no_accuraterip => warnings.push("The AccurateRip check was turned off.".into()),
         None => warnings.push("The AccurateRip check could not be completed.".into()),
         _ => {}
+    }
+    if let Some(shift) = i.accuraterip.and_then(|r| r.detected_shift_samples).filter(|s| *s != 0 && i.settings.offset_applied_samples == 0) {
+        warnings.push(format!("Your drive appears to read {shift:+} samples off. The audio was saved as the drive returned it, so it matches AccurateRip only at that shift."));
     }
     if i.mb.is_none() {
         warnings.push("No MusicBrainz release was used, so tags come from CD-TEXT or are missing.".into());
