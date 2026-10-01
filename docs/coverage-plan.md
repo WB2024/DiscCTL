@@ -210,4 +210,5 @@ Both meanings of "streams" are in scope.
 | Date | Item | Result |
 |---|---|---|
 | | | |
+| 2026-10-01 | Side fix: file ownership | v1.4.0: RUSTYDISC_PUID/PGID/UMASK, fix-permissions command and Settings card; server set to 1000:1000, existing files fixed |
 | 2026-10-01 | 1 Rip log and disc report | Built, unit tested, UI checked with a sample report; real rip pending your check |
