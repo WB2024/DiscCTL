@@ -743,6 +743,24 @@ function drGauge(dr) {
     <div style="display:flex;font-size:11px;color:var(--muted);margin-top:4px">${seg.map(x => `<div style="flex:${x[3] - x[2]};text-align:center">${x[0]}</div>`).join("")}</div></div>`;
 }
 function drSummary(dr) { const b = drBand(dr); return `<div class="row" style="gap:10px;align-items:center">${drBadge(dr, true)}<b style="color:${b.color}">${b.label}</b></div>${drGauge(dr)}<div style="margin-top:6px">${esc(b.text)}</div><div class="muted" style="font-size:12.5px;margin-top:4px">DR is the gap between a track's peaks and its typical loudness, in dB. Higher is more dynamic. It is a property of the mastering, so different pressings of one album can score very differently.</div>`; }
+// The rip log saved with a rip: how it was read, what each track checked out as, and any notes.
+async function wireReport(name) {
+  const box = $("#lib-report");
+  try {
+    const r = await api("/api/library/" + encodeURIComponent(name) + "/report");
+    if (!r.found) return;
+    const rep = r.report, ar = rep.accuraterip;
+    const drive = [rep.drive.vendor, rep.drive.model].filter(Boolean).join(" ") || rep.drive.device;
+    const arLine = !ar ? "AccurateRip: not checked" : !ar.found ? "AccurateRip: this disc isn't in the database" : `AccurateRip: ${ar.verified} of ${ar.total} tracks verified`;
+    box.innerHTML = `<div class="card"><div class="row"><h2 class="grow" style="margin:0">Rip log</h2>
+        <button class="btn small" id="rl-toggle">Show full log</button><button class="btn small" id="rl-dl">Download</button></div>
+      <div class="muted" style="margin-top:8px">Ripped ${esc(rep.started)} · ${esc(drive)} · ${esc(rep.settings.reader)} · ${esc(arLine)}</div>
+      ${rep.warnings.length ? `<div class="notice" style="margin-top:10px">${rep.warnings.map(w => `<div>• ${esc(w)}</div>`).join("")}</div>` : `<div class="notice" style="margin-top:10px"><span class="ar-ok">✔</span> No problems noted.</div>`}
+      <pre id="rl-pre" class="hidden mono" style="margin-top:10px;overflow:auto;max-height:420px;font-size:12px;white-space:pre">${esc(r.log)}</pre></div>`;
+    $("#rl-toggle").onclick = () => { const p = $("#rl-pre"); p.classList.toggle("hidden"); $("#rl-toggle").textContent = p.classList.contains("hidden") ? "Show full log" : "Hide log"; };
+    $("#rl-dl").onclick = () => { const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([r.log], { type: "text/plain" })); a.download = "rip.log"; a.click(); };
+  } catch { /* an album with no log simply shows no card */ }
+}
 function qualityNote(s) {
   const rate = s.avg_bitrate_kbps ? ` · average ${Math.round(s.avg_bitrate_kbps)} kbps${s.min_bitrate_kbps && s.max_bitrate_kbps && Math.round(s.min_bitrate_kbps) !== Math.round(s.max_bitrate_kbps) ? ` (${Math.round(s.min_bitrate_kbps)}–${Math.round(s.max_bitrate_kbps)})` : ""}` : "";
   const badge = s.cd_quality ? `<span class="badge ok">lossless · CD quality</span>` : s.lossless ? `<span class="badge ok">lossless</span>` : `<span class="badge">lossy</span>`;
@@ -1586,6 +1604,7 @@ async function openRip(name) {
       ${audio.length ? `<div class="card" id="lib-quality"><div class="row"><h2 class="grow" style="margin:0">Audio quality</h2>
           <button class="btn small" id="q-integrity">Test the audio</button><button class="btn small" id="q-loud">Measure loudness</button><button class="btn small" id="q-dr">Dynamic range</button></div>
         <div id="q-body" class="muted" style="margin-top:10px">Reading the files…</div><div id="q-extra"></div><div id="q-loudness"></div><div id="q-drout"></div></div>` : ""}
+      <div id="lib-report"></div>
       ${audio.length ? `<div class="card"><h2>Audio</h2><table><tbody>${audio.map((f, i) => `
         <tr><td style="width:28px" class="muted">${i + 1}</td><td>${esc(titleFor(f, i) || f.path.split("/").pop())}<div class="muted mono">${esc(f.path)}</div></td>
         <td class="num muted" style="width:80px">${fmtBytes(f.size)}</td>
@@ -1597,6 +1616,7 @@ async function openRip(name) {
     $("#back").onclick = loadLibrary;
     wireRipEditing(name, d);
     if (audio.length) wireQuality(name);
+    wireReport(name);
     $("#verify").onclick = async () => {
       if (!d.archive) {
         if (!confirmBox("Record a SHA-256 checksum of every file in this rip now?\n\nVerifying later will then flag any file that has changed.")) return;

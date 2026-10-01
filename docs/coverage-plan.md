@@ -6,7 +6,7 @@ A working checklist of the ripping and burning topics RustyDisc should cover, wh
 
 | # | Topic | Status | Today |
 |---|---|---|---|
-| 1 | [Rip log and disc report](#1-rip-log-and-disc-report) | ⬜ | Metadata files only, no log |
+| 1 | [Rip log and disc report](#1-rip-log-and-disc-report) | ✅ | `rip.log` + `rip-report.json` on every rip (v1.3.0) |
 | 2 | [Read offset correction](#2-read-offset-correction) | ⬜ | Detected, not applied |
 | 3 | [Burn and write speeds](#3-burn-and-write-speeds) | ⬜ | No control |
 | 4 | [Jitter and read-error reporting](#4-jitter-and-read-error-reporting) | ⬜ | Done by cdparanoia, not shown |
@@ -28,7 +28,9 @@ Open questions that need a real disc or drive to settle are marked **(verify on 
 ---
 
 ## 1. Rip log and disc report
-**Status:** ⬜
+**Status:** ✅ complete in v1.3.0 (awaiting your check on a real rip)
+
+**What was built:** every Red Book and Blue Book rip, from the CLI and the web UI, writes `rip-report.json` (structured) and `rip.log` (readable). They sit next to the audio, or in `metadata/` in archive mode (so the checksum manifest covers them). The log has the drive (model, firmware), reader and read mode, read-offset status, the table of contents, each track's file, AccurateRip result and a SHA-256 of the raw track as the drive delivered it, an AccurateRip summary, and notes (AccurateRip missing or partial, no MusicBrainz release). The Library album page has a **Rip log** card with the summary, notes, the full log and a download button (`GET /api/library/{name}/report`). Code: `src/rip/report.rs`. Later items add their findings to the same report.
 
 **Today:** a rip writes `disc.json`, `cdtext.json`, `musicbrainz.json` and `checksums.json`. There is no human-readable log of how the rip went.
 
@@ -208,3 +210,4 @@ Both meanings of "streams" are in scope.
 | Date | Item | Result |
 |---|---|---|
 | | | |
+| 2026-10-01 | 1 Rip log and disc report | Built, unit tested, UI checked with a sample report; real rip pending your check |

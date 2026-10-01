@@ -7,7 +7,7 @@
 **Rip, burn and archive CDs and DVDs — and fill USB sticks — from your browser.**<br>
 Built in Rust for Linux. Runs headless in Docker, so the drive can live in a server and you drive it from anywhere.
 
-[![Version](https://img.shields.io/badge/version-1.2-e8743b?style=flat-square)](https://github.com/WB2024/DiscCTL)
+[![Version](https://img.shields.io/badge/version-1.3-e8743b?style=flat-square)](https://github.com/WB2024/DiscCTL)
 [![Docker pulls](https://img.shields.io/docker/pulls/wb20244/rustydisc?style=flat-square&logo=docker&logoColor=white&color=2496ED)](https://hub.docker.com/r/wb20244/rustydisc)
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange?style=flat-square&logo=rust)](docs/install.md)
 [![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](#license)
@@ -42,6 +42,7 @@ Built in Rust for Linux. Runs headless in Docker, so the drive can live in a ser
 ### 💿 Rip
 - Secure extraction with error correction
 - **FLAC, ALAC, WAV, AIFF, MP3, AAC, Opus, OGG**, each with quality choices (best by default)
+- **Rip log:** every rip saves a readable `rip.log` and a JSON report: drive, read settings, table of contents, per-track AccurateRip results and checksums, and notes
 - **Quality report:** bit depth, sample rate and bitrate after ripping, plus an integrity test, **loudness / ReplayGain**, **dynamic range (DR)** and **spectrograms** that expose fake lossless
 - **Every MusicBrainz tag** on every file: IDs, sort names, disc, label, ISRCs, credits
 - MusicBrainz **search** when the match is wrong

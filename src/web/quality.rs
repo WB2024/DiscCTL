@@ -239,3 +239,15 @@ pub async fn dynamic_range(State(st): S, UrlPath(name): UrlPath<String>, Json(re
     .map_err(ApiError::bad)?;
     Ok(Json(out))
 }
+
+/// The saved rip report (and its readable log) for an album, if the rip made one.
+pub async fn rip_report(State(st): S, UrlPath(name): UrlPath<String>) -> ApiResult<Json<Value>> {
+    use crate::rip::report;
+    let dir = rip_dir(&st, &name)?;
+    let Some(json_path) = report::find(&dir) else {
+        return Ok(Json(json!({ "found": false })));
+    };
+    let parsed: report::RipReport = serde_json::from_slice(&tokio::fs::read(&json_path).await.map_err(Error::from)?)
+        .map_err(|e| ApiError::bad(format!("The rip report is unreadable: {e}")))?;
+    Ok(Json(json!({ "found": true, "report": parsed, "log": report::render(&parsed) })))
+}

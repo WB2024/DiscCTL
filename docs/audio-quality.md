@@ -60,3 +60,9 @@ The database has no public API or export, so RustyDisc links to it instead of re
 - **On MusicBrainz release pages** a panel lists what the Dynamic Range DB holds for that release, with DR, min/max, codec and source. Entries with the same barcode or catalogue number are marked, since pressings differ a lot. If there's no entry it links to the upload form, pre-filled from MusicBrainz.
 - **On the Dynamic Range DB** every album gets a MusicBrainz search link, and album pages link to a search by barcode or catalogue number.
 - **Submitting:** in the Library, **Dynamic range → Submit to Dynamic Range DB** opens the upload form with artist, album, year, codec, source, label, catalogue number, barcode and MusicBrainz link filled in and the DR log attached as `dr.txt`. You check it and press submit yourself; nothing is sent automatically. RustyDisc's DR can differ by a point from the original meter, so only submit values you trust.
+
+## The rip log
+
+Every rip writes two files describing how it went: `rip.log` to read, and `rip-report.json` for scripts. They sit next to the audio, or in `metadata/` in archive mode.
+
+The log records the drive (model and firmware), the reader and its mode, whether a read offset was corrected, the disc's table of contents, and for each track the file written, its AccurateRip result and a SHA-256 of the raw track exactly as the drive delivered it. A Notes section lists anything worth knowing, such as a disc missing from AccurateRip or only some tracks matching. In the web UI the Library album page shows it in a **Rip log** card, with a download button.

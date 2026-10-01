@@ -249,6 +249,7 @@ pub async fn serve(cfg: Config, bind: SocketAddr) -> Result<(), Error> {
         .route("/api/library/{name}/quality/integrity", post(quality::integrity))
         .route("/api/library/{name}/quality/loudness", post(quality::loudness))
         .route("/api/library/{name}/quality/dynamic-range", post(quality::dynamic_range))
+        .route("/api/library/{name}/report", get(quality::rip_report))
         .route("/api/library/{name}/spectrogram", get(quality::spectrogram))
         .route("/api/library/{name}/tags", get(library_edit::tags).put(library_edit::save_tags))
         .route("/api/library/{name}/cover", post(library_edit::set_cover).layer(axum::extract::DefaultBodyLimit::max(library_edit::MAX_IMAGE)))

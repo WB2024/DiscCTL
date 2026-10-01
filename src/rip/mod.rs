@@ -6,6 +6,7 @@ pub mod engine;
 pub mod mb_enrich;
 pub mod metadata;
 pub mod musicbrainz;
+pub mod report;
 pub mod tagging;
 
 use std::path::Path;
@@ -48,6 +49,8 @@ pub fn rip(opts: &RipOptions) -> Result<(), Error> {
     if opts.output_dir.is_none() && opts.base_dir.is_none() {
         return Err(Error::validation("Specify --output <path> or --dir <base-dir>"));
     }
+
+    let started = std::time::SystemTime::now();
 
     // Step 1: analyse disc
     if opts.progress_json { emit_step("Analysing disc..."); emit_progress(0.0); }
@@ -144,9 +147,9 @@ pub fn rip(opts: &RipOptions) -> Result<(), Error> {
     let (cover_art_path, _temp_cover) = prepare_cover(opts, &mb, &output_dir);
 
     match info.format {
-        DiscFormat::RedBook  => rip_redbook(&info, &mb, opts, &output_dir, cover_art_path.as_deref()),
+        DiscFormat::RedBook  => rip_redbook(&info, &mb, opts, &output_dir, cover_art_path.as_deref(), started),
         DiscFormat::DataCD   => rip_datacd(&info, opts, &output_dir),
-        DiscFormat::BlueBook => rip_bluebook(&info, &mb, opts, &output_dir, cover_art_path.as_deref()),
+        DiscFormat::BlueBook => rip_bluebook(&info, &mb, opts, &output_dir, cover_art_path.as_deref(), started),
         DiscFormat::Unknown  => Err(Error::validation(
             "Could not determine disc format. Insert a disc and try again.",
         )),
@@ -296,6 +299,7 @@ fn rip_redbook(
     opts: &RipOptions,
     output_dir: &str,
     cover_art: Option<&str>,
+    started: std::time::SystemTime,
 ) -> Result<(), Error> {
     let Some(session) = info.sessions.first() else {
         return Err(Error::validation("No sessions found on disc"));
@@ -335,6 +339,7 @@ fn rip_redbook(
     let total = wav_tracks.len();
 
     let mut outputs: Vec<String> = Vec::new();
+    let mut ripped: Vec<RippedEntry> = Vec::new();
     for (i, (track_num, wav_path)) in wav_tracks.iter().enumerate() {
         let track_info = session.tracks.iter().find(|t| t.number == *track_num);
         let mb_track   = mb.as_ref().and_then(|r| r.tracks.iter().find(|t| t.number == *track_num));
@@ -375,8 +380,11 @@ fn rip_redbook(
 
         tagging::apply(&out_path, &tags, mb.as_ref(), mb_track, opts.debug);
         outputs.push(out_path.clone());
+        ripped.push(RippedEntry { number: *track_num, title: title.map(str::to_string), file: filename.clone(), raw_path: wav_path.clone() });
     }
 
+    let report_dir = if opts.archive { format!("{}/metadata", output_dir) } else { output_dir.to_string() };
+    write_rip_report(info, mb, opts, ar.as_ref(), started, &ripped, &report_dir);
     let _ = std::fs::remove_dir_all(&wav_dir);
     post_rip(opts, &outputs);
 
@@ -438,6 +446,7 @@ fn rip_bluebook(
     opts: &RipOptions,
     output_dir: &str,
     cover_art: Option<&str>,
+    started: std::time::SystemTime,
 ) -> Result<(), Error> {
     let audio_dir = format!("{}/audio", output_dir);
     let data_dir  = format!("{}/data",  output_dir);
@@ -472,6 +481,7 @@ fn rip_bluebook(
         let total = wav_tracks.len();
 
         let mut outputs: Vec<String> = Vec::new();
+        let mut ripped: Vec<RippedEntry> = Vec::new();
         for (i, (track_num, wav_path)) in wav_tracks.iter().enumerate() {
             let track_info = session.tracks.iter().find(|t| t.number == *track_num);
             let mb_track   = mb.as_ref().and_then(|r| r.tracks.iter().find(|t| t.number == *track_num));
@@ -510,9 +520,11 @@ fn rip_bluebook(
             encoder::encode(wav_path, &out_path, &opts.format, &tags, cover_art, opts.quality.as_deref(), opts.debug)?;
 
             tagging::apply(&out_path, &tags, mb.as_ref(), mb_track, opts.debug);
-        outputs.push(out_path.clone());
+            outputs.push(out_path.clone());
+            ripped.push(RippedEntry { number: *track_num, title: title.map(str::to_string), file: filename.clone(), raw_path: wav_path.clone() });
         }
 
+        write_rip_report(info, mb, opts, ar.as_ref(), started, &ripped, &meta_dir);
         let _ = std::fs::remove_dir_all(&wav_dir);
         post_rip(opts, &outputs);
     }
@@ -539,6 +551,46 @@ fn rip_bluebook(
 
     if opts.progress_json { emit_progress(100.0); }
     Ok(())
+}
+
+/// One track as it was ripped, kept until the rip report is written.
+struct RippedEntry {
+    number: usize,
+    title: Option<String>,
+    file: String,
+    raw_path: String,
+}
+
+/// Save `rip-report.json` and `rip.log`. A report that can't be written never fails the rip.
+fn write_rip_report(
+    info: &analyzer::DiscInfo,
+    mb: &Option<ReleaseInfo>,
+    opts: &RipOptions,
+    ar: Option<&accuraterip::Report>,
+    started: std::time::SystemTime,
+    ripped: &[RippedEntry],
+    dir: &str,
+) {
+    if opts.progress_json { emit_step("Writing the rip log..."); }
+    let report = report::build(report::Inputs {
+        info,
+        mb: mb.as_ref(),
+        settings: report::Settings {
+            reader: "cdparanoia".into(),
+            read_mode: "full paranoia (rereads and verifies every sector)".into(),
+            offset_applied_samples: 0,
+            format: opts.format.extension().to_uppercase(),
+            quality: opts.quality.clone(),
+            archive: opts.archive,
+        },
+        started,
+        tracks: ripped.iter().map(|t| report::RippedTrack { number: t.number, title: t.title.as_deref(), file: &t.file, raw_path: &t.raw_path }).collect(),
+        accuraterip: ar,
+        no_accuraterip: opts.no_accuraterip,
+    });
+    if let Err(e) = report::write(&report, dir) {
+        eprintln!("Could not write the rip log: {e}");
+    }
 }
 
 // ── Metadata writers ──────────────────────────────────────────────────────────
