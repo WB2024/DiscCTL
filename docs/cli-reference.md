@@ -136,6 +136,8 @@ rustydisc rip [OPTIONS]
 | `--quality <q>` | Encoder quality, best by default: FLAC `0`–`12` (level), MP3 `v0`/`v2`/`cbr320`/`cbr192`/`cbr128`, AAC and Opus a bitrate in kbps, OGG `4`–`10`. See [Audio quality](audio-quality.md) |
 | `--replaygain` | Measure loudness after ripping and write ReplayGain 2.0 tags |
 | `--dynamic-range` | Measure dynamic range (DR) after ripping and write DR tags |
+| `--hidden-track <auto\|skip>` | Audio hidden before track 1: auto (rip it as track 00 when the disc has some and it isn't silence, the default) or skip |
+| `--gaps <off\|report\|own-track>` | Gaps between tracks: off (default), report (scan and note them; about 5 minutes) or own-track (scan, and move each gap to the start of the track it leads into). See [Hidden tracks and gaps](audio-quality.md#hidden-tracks-and-gaps-between-tracks) |
 | `--paranoia <full\|fast\|off>` | How hard to check what the drive reads: full (default), fast (overlap checking only) or off. See [How cleanly the disc was read](audio-quality.md#how-cleanly-the-disc-was-read) |
 | `--offset <off\|auto\|N>` | Drive read offset: leave the audio as read (default), correct by the shift AccurateRip proves, or by N samples. See [Read offset correction](audio-quality.md#read-offset-correction) |
 | `--cover-file <file>` | Use this JPEG or PNG as the cover instead of looking one up |

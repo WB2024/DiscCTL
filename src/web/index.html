@@ -229,6 +229,8 @@ pre.json { background: var(--bg); border: 1px solid var(--line); border-radius: 
             </label>
             <label class="check"><input type="checkbox" id="rip-replaygain"><span>Add ReplayGain tags<small>measures loudness so players can level tracks and albums without changing the audio</small></span></label>
             <label class="check"><input type="checkbox" id="rip-dr"><span>Measure dynamic range (DR)<small>the loudness-war number listed on dr.loudness-war.info; also saved as a tag</small></span></label>
+            <label class="field" style="max-width:420px">Gaps between tracks<select id="rip-gaps"><option value="off">Leave as they are (fastest)</option><option value="report">Scan and note them in the log (about 5 min extra)</option><option value="own-track">Scan, and keep each gap with the track it leads into (about 5 min extra)</option></select></label>
+            <label class="field" style="max-width:420px">Hidden track before track 1<select id="rip-hidden"><option value="auto">Rip it if the disc has one (saved as track 00)</option><option value="skip">Skip it</option></select></label>
             <label class="field" style="max-width:420px">Read checking<select id="rip-paranoia"><option value="full">Full: reread and verify every sector (slowest, safest)</option><option value="fast">Fast: overlap checking only</option><option value="off">Off: no checking (fastest, no protection)</option></select></label>
             <label class="field" style="max-width:420px">Drive read offset<select id="rip-offset"><option value="off">Off: audio exactly as the drive returned it</option><option value="auto">Auto: correct what AccurateRip proves</option></select></label>
             <label class="check"><input type="checkbox" id="rip-archive"><span>Archive mode<small>audio/ + metadata/ folders with disc.json, cdtext.json, musicbrainz.json and SHA-256 checksums</small></span></label>
@@ -569,6 +571,10 @@ pre.json { background: var(--bg); border: 1px solid var(--line); border-radius: 
           <div style="display:flex;flex-direction:column;gap:12px">
             <label class="check"><input type="checkbox" id="set-replaygain"><span>Add ReplayGain tags</span></label>
             <label class="check"><input type="checkbox" id="set-dr"><span>Measure dynamic range (DR)</span></label>
+            <label class="field">Gaps between tracks <small>A track can begin with a gap, such as applause leading into the next song on a live album. Normally that audio ends up at the end of the previous track. Scanning finds out which tracks have one and can move it to the start of the track it belongs to. The scan takes about five minutes.</small>
+              <select id="set-gaps"><option value="off">Leave as they are (fastest)</option><option value="report">Scan and note them in the log</option><option value="own-track">Scan, and keep each gap with its own track</option></select></label>
+            <label class="field">Hidden track before track 1 <small>Some discs hide music in front of track 1, reached only by rewinding from the start. Auto rips it as track 00 when there is one and it isn't silence.</small>
+              <select id="set-hidden"><option value="auto">Auto: rip it if the disc has one</option><option value="skip">Skip it</option></select></label>
             <label class="field">Read checking <small>How hard cdparanoia checks what the drive reads. Full catches and repairs scratches and glitches; the lower levels are faster but protect less.</small>
               <select id="set-paranoia"><option value="full">Full: reread and verify every sector (default)</option><option value="fast">Fast: overlap checking only</option><option value="off">Off: no checking at all</option></select></label>
             <label class="field">Drive read offset <small>Drives read a few samples early or late. Auto fixes it using AccurateRip, which proves the amount.</small>
@@ -1242,7 +1248,7 @@ async function startRip() {
   const folder = $('input[name=dest]:checked').value === "custom" ? $("#rip-folder").value.trim() : "";
   if ($('input[name=dest]:checked').value === "custom" && !folder) return toast("Enter a folder name or choose auto-naming", "err");
   const body = {
-    device: selectedDevice(), format: $("#rip-format").value, quality: $("#rip-quality").value || null, replaygain: $("#rip-replaygain").checked, dynamic_range: $("#rip-dr").checked, offset: $("#rip-offset").value, paranoia: $("#rip-paranoia").value, archive: $("#rip-archive").checked,
+    device: selectedDevice(), format: $("#rip-format").value, quality: $("#rip-quality").value || null, replaygain: $("#rip-replaygain").checked, dynamic_range: $("#rip-dr").checked, offset: $("#rip-offset").value, paranoia: $("#rip-paranoia").value, hidden_track: $("#rip-hidden").value, gaps: $("#rip-gaps").value, archive: $("#rip-archive").checked,
     no_musicbrainz: $("#rip-nomb").checked, mb_release: MB.over ? MB.over.input : null, no_accuraterip: $("#rip-noar").checked, debug: $("#rip-debug").checked, folder: folder || null,
     cover_upload: RIPCOVER.token,
   };
@@ -2542,6 +2548,8 @@ function applyRipDefaults() {
   $("#rip-replaygain").checked = !!SET.rip_replaygain;
   $("#rip-dr").checked = !!SET.rip_dynamic_range;
   $("#rip-paranoia").value = SET.rip_paranoia || "full";
+  $("#rip-hidden").value = SET.rip_hidden_track || "auto";
+  $("#rip-gaps").value = SET.rip_gaps || "off";
   { // the rip page offers the saved choice; a fixed number shows as its own option
     const sel = $("#rip-offset"), o = SET.rip_offset || "off";
     [...sel.querySelectorAll("option.fixed")].forEach(x => x.remove());
@@ -2591,6 +2599,8 @@ function renderSettings() {
   $("#set-replaygain").checked = !!SET.rip_replaygain;
   $("#set-dr").checked = !!SET.rip_dynamic_range;
   $("#set-paranoia").value = SET.rip_paranoia || "full";
+  $("#set-hidden").value = SET.rip_hidden_track || "auto";
+  $("#set-gaps").value = SET.rip_gaps || "off";
   { const o = SET.rip_offset || "off", sel = $("#set-offset"), n = $("#set-offset-n");
     sel.value = o === "off" || o === "auto" ? o : "custom"; n.value = sel.value === "custom" ? o : "";
     const sync = () => $("#set-offset-n-wrap").classList.toggle("hidden", sel.value !== "custom");
@@ -2826,7 +2836,7 @@ async function loadCacheUsage() {
 
 async function saveSettings(extra = {}) {
   const body = {
-    rip_format: $("#set-format").value, rip_quality: $("#set-quality").value, rip_replaygain: $("#set-replaygain").checked, rip_dynamic_range: $("#set-dr").checked, rip_paranoia: $("#set-paranoia").value, rip_offset: $("#set-offset").value === "custom" ? ($("#set-offset-n").value.trim() || "off") : $("#set-offset").value, rip_archive: $("#set-archive").checked,
+    rip_format: $("#set-format").value, rip_quality: $("#set-quality").value, rip_replaygain: $("#set-replaygain").checked, rip_dynamic_range: $("#set-dr").checked, rip_paranoia: $("#set-paranoia").value, rip_hidden_track: $("#set-hidden").value, rip_gaps: $("#set-gaps").value, rip_offset: $("#set-offset").value === "custom" ? ($("#set-offset-n").value.trim() || "off") : $("#set-offset").value, rip_archive: $("#set-archive").checked,
     rip_skip_musicbrainz: $("#set-nomb").checked, rip_skip_accuraterip: $("#set-noar").checked,
     cover_sources: enabledSources(), cover_save_file: $("#cover-save").checked, cover_embed: $("#cover-embed").checked,
     stick_extra_folders: $("#set-stick-folders").value.split("\n").map(l => l.trim()).filter(Boolean),

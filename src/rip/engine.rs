@@ -50,9 +50,11 @@ fn program() -> String {
 
 /// What a rip read, and how cleanly.
 pub struct RipRead {
-    /// (track number, WAV path) in track order.
+    /// (track number, WAV path) in track order. A kept hidden track is first, numbered 0.
     pub tracks: Vec<(usize, String)>,
     pub events: super::readhealth::Collector,
+    /// What became of the audio before track 1 (`None` when it wasn't asked for).
+    pub hidden: super::gaps::HiddenOutcome,
 }
 
 /// Verify cdparanoia is available on this system.
@@ -77,6 +79,7 @@ pub fn rip_all_tracks(
     output_dir: &str,
     track_count: usize,
     paranoia: Paranoia,
+    hidden_sectors: Option<u32>,
     debug: bool,
     progress_json: bool,
 ) -> Result<RipRead, Error> {
@@ -88,6 +91,38 @@ pub fn rip_all_tracks(
         emit_progress(0.0);
     } else {
         eprintln!("Ripping {} tracks from disc (this takes a while)...", track_count);
+    }
+
+    let mut events = super::readhealth::Collector::default();
+
+    // Audio in front of track 1 (a hidden track) is "track 0" to cdparanoia, read on its own first.
+    let mut hidden = super::gaps::HiddenOutcome::None;
+    let mut hidden_path: Option<String> = None;
+    if let Some(sectors) = hidden_sectors {
+        let secs = super::gaps::seconds(sectors);
+        if progress_json {
+            emit_step(&format!("Reading the hidden audio before track 1 ({})...", super::gaps::mmss(sectors)));
+        } else {
+            eprintln!("Reading the hidden audio before track 1 ({})...", super::gaps::mmss(sectors));
+        }
+        let path = format!("{}/track00.cdda.wav", output_dir);
+        match rip_track_zero(device, &path, paranoia, &mut events, debug) {
+            Ok(()) => match super::gaps::is_silent(&path) {
+                Ok(true) => {
+                    let _ = std::fs::remove_file(&path);
+                    hidden = super::gaps::HiddenOutcome::Silent { seconds: secs };
+                }
+                Ok(false) => {
+                    hidden = super::gaps::HiddenOutcome::Kept { seconds: secs };
+                    hidden_path = Some(path);
+                }
+                Err(e) => hidden = super::gaps::HiddenOutcome::Failed { seconds: secs, message: e.to_string() },
+            },
+            Err(message) => {
+                let _ = std::fs::remove_file(&path);
+                hidden = super::gaps::HiddenOutcome::Failed { seconds: secs, message };
+            }
+        }
     }
 
     let mut cmd = Command::new(program());
@@ -105,7 +140,6 @@ pub fn rip_all_tracks(
     if debug { eprintln!("Running: {:?}", cmd); }
 
     let mut child = cmd.spawn()?;
-    let mut events = super::readhealth::Collector::default();
 
     // Parse cdparanoia's stderr so we can report per-track progress.
     // Key line patterns:
@@ -169,8 +203,45 @@ pub fn rip_all_tracks(
             "cdparanoia produced no output files — check disc and device",
         ));
     }
+    if let Some(p) = hidden_path {
+        tracks.insert(0, (0, p));
+    }
 
-    Ok(RipRead { tracks, events })
+    Ok(RipRead { tracks, events, hidden })
+}
+
+/// Read the audio before track 1 (cdparanoia's "track 0") into `path`.
+fn rip_track_zero(device: &str, path: &str, paranoia: Paranoia, events: &mut super::readhealth::Collector, debug: bool) -> Result<(), String> {
+    let mut cmd = Command::new(program());
+    cmd.arg("-d").arg(device).arg("-w").arg("-e");
+    if let Some(f) = paranoia.flag() {
+        cmd.arg(f);
+    }
+    cmd.arg("0").arg(path).stdout(Stdio::null()).stderr(Stdio::piped());
+    if debug {
+        eprintln!("Running: {:?}", cmd);
+    }
+    let mut child = cmd.spawn().map_err(|e| e.to_string())?;
+    let mut last_error = String::new();
+    if let Some(stderr) = child.stderr.take() {
+        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            if events.feed(&line) {
+                continue;
+            }
+            if debug {
+                eprintln!("[cdparanoia] {}", line);
+            }
+            let t = line.trim();
+            if !t.is_empty() && (t.to_lowercase().contains("error") || t.to_lowercase().contains("not exist") || t.to_lowercase().contains("pregap") || t.to_lowercase().contains("not found")) {
+                last_error = t.to_string();
+            }
+        }
+    }
+    let status = child.wait().map_err(|e| e.to_string())?;
+    if !status.success() || !std::path::Path::new(path).is_file() {
+        return Err(if last_error.is_empty() { format!("cdparanoia exited with {:?}", status.code()) } else { last_error });
+    }
+    Ok(())
 }
 
 /// Parse "outputting to track01.cdda.wav" → Some(1)
@@ -197,6 +268,10 @@ mod tests {
     use crate::rip::readhealth::Status;
     use std::os::unix::fs::PermissionsExt;
 
+    /// The tests point the ripper at stand-in programs through one environment variable, so they
+    /// must not run at the same time.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     /// A stand-in for cdparanoia that writes two tracks and reports what the real one does:
     /// a harmless first-read reset, plain jitter on track 1, and a scratch plus a skip on track 2.
     const FAKE: &str = r###"#!/bin/sh
@@ -220,6 +295,7 @@ echo "##: -1 [finished] @ 1999000" >&2
 
     #[test]
     fn the_rip_collects_what_cdparanoia_reports() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = std::env::temp_dir().join(format!("rustydisc_fakeparanoia_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -230,7 +306,7 @@ echo "##: -1 [finished] @ 1999000" >&2
         unsafe { std::env::set_var("RUSTYDISC_CDPARANOIA", &script) };
 
         let out = dir.join("wav");
-        let read = rip_all_tracks("/dev/null", out.to_str().unwrap(), 2, Paranoia::Full, false, false).unwrap();
+        let read = rip_all_tracks("/dev/null", out.to_str().unwrap(), 2, Paranoia::Full, None, false, false).unwrap();
         unsafe { std::env::remove_var("RUSTYDISC_CDPARANOIA") };
 
         assert_eq!(read.tracks.iter().map(|t| t.0).collect::<Vec<_>>(), vec![1, 2]);
@@ -241,6 +317,70 @@ echo "##: -1 [finished] @ 1999000" >&2
         assert_eq!(h.harmless_resets, 1);
         assert_eq!(h.tracks[1].status, Status::Suspect);
         assert_eq!((h.tracks[1].scratches, h.tracks[1].corrections, h.tracks[1].skips), (1, 1, 1));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A stand-in cdparanoia that serves "track 0" from a prepared file, and the rest like FAKE.
+    fn fake_with_hidden(dir: &std::path::Path, hidden_wav: &std::path::Path) -> std::path::PathBuf {
+        let script = dir.join("cdparanoia");
+        let body = format!(
+            "#!/bin/sh\nfor a in \"$@\"; do prev2=\"$prev\"; prev=\"$a\"; done\nif [ \"$prev2\" = \"0\" ]; then cp '{}' \"$prev\"; exit 0; fi\n{}",
+            hidden_wav.display(),
+            FAKE.trim_start_matches("#!/bin/sh\n")
+        );
+        std::fs::write(&script, body).unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        script
+    }
+
+    fn write_wav(path: &std::path::Path, words: &[u32]) {
+        let data = (words.len() * 4) as u32;
+        let mut b: Vec<u8> = Vec::new();
+        b.extend(b"RIFF");
+        b.extend((36 + data).to_le_bytes());
+        b.extend(b"WAVEfmt ");
+        b.extend(16u32.to_le_bytes());
+        b.extend([1, 0, 2, 0]);
+        b.extend(44_100u32.to_le_bytes());
+        b.extend((44_100u32 * 4).to_le_bytes());
+        b.extend([4, 0, 16, 0]);
+        b.extend(b"data");
+        b.extend(data.to_le_bytes());
+        for w in words {
+            b.extend(w.to_le_bytes());
+        }
+        std::fs::write(path, b).unwrap();
+    }
+
+    #[test]
+    fn hidden_audio_before_track_one_is_ripped_as_track_zero_unless_silent() {
+        use crate::rip::gaps::HiddenOutcome;
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("rustydisc_hidden_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let music = dir.join("music.wav");
+        let silence = dir.join("silence.wav");
+        write_wav(&music, &(0..4000u32).map(|i| i.wrapping_mul(2654435761) & 0x3FFF_3FFF).collect::<Vec<_>>());
+        write_wav(&silence, &vec![0u32; 4000]);
+
+        // SAFETY: only these tests spawn the ripper, and they run one after another here.
+        let script = fake_with_hidden(&dir, &music);
+        unsafe { std::env::set_var("RUSTYDISC_CDPARANOIA", &script) };
+        let out = dir.join("a");
+        let read = rip_all_tracks("/dev/null", out.to_str().unwrap(), 2, Paranoia::Full, Some(7500), false, false).unwrap();
+        assert_eq!(read.tracks.iter().map(|t| t.0).collect::<Vec<_>>(), vec![0, 1, 2], "the hidden track comes first, numbered 0");
+        assert_eq!(read.hidden, HiddenOutcome::Kept { seconds: 100.0 });
+        assert!(std::path::Path::new(&read.tracks[0].1).is_file());
+
+        let script = fake_with_hidden(&dir, &silence);
+        unsafe { std::env::set_var("RUSTYDISC_CDPARANOIA", &script) };
+        let out = dir.join("b");
+        let read = rip_all_tracks("/dev/null", out.to_str().unwrap(), 2, Paranoia::Full, Some(7500), false, false).unwrap();
+        unsafe { std::env::remove_var("RUSTYDISC_CDPARANOIA") };
+        assert_eq!(read.tracks.iter().map(|t| t.0).collect::<Vec<_>>(), vec![1, 2], "silence is not kept");
+        assert_eq!(read.hidden, HiddenOutcome::Silent { seconds: 100.0 });
+        assert!(!out.join("track00.cdda.wav").exists(), "and its file is removed");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -10,7 +10,7 @@ A working checklist of the ripping and burning topics RustyDisc should cover, wh
 | 2 | [Read offset correction](#2-read-offset-correction) | ✅ | Off / Auto / fixed number (v1.5.0) |
 | 3 | [Burn and write speeds](#3-burn-and-write-speeds) | ✅ | Auto or chosen speed (v1.6.0) |
 | 4 | [Jitter and read-error reporting](#4-jitter-and-read-error-reporting) | ✅ | Per-track clean / repaired / suspect (v1.7.0) |
-| 5 | [Pregaps, hidden tracks, track boundaries](#5-pregaps-hidden-tracks-and-track-boundaries) | ⬜ | TOC read only |
+| 5 | [Pregaps, hidden tracks, track boundaries](#5-pregaps-hidden-tracks-and-track-boundaries) | ✅ | Hidden track as 00; optional gap scan (v1.9.0) |
 | 6 | [TOC anomaly checks](#6-toc-anomaly-checks) | ⬜ | TOC read, not validated |
 | 7 | [Disc-at-once vs track-at-once](#7-disc-at-once-vs-track-at-once) | ⬜ | DAO only, undocumented |
 | 8 | [Normalization](#8-normalization) | ⬜ | ReplayGain tags only |
@@ -90,7 +90,15 @@ Open questions that need a real disc or drive to settle are marked **(verify on 
 **Done when:** a scratched or marked disc produces a visibly different report from a clean one. **(verify on hardware)**
 
 ## 5. Pregaps, hidden tracks and track boundaries
-**Status:** ⬜
+**Status:** ✅ complete in v1.9.0 (hidden-track path awaiting a disc that has one)
+
+**What was built:**
+- **Hidden track one audio.** The TOC reveals it (track 1 starts after sector 0). Auto mode reads it with cdparanoia's "track 0", drops it if it is only silence, and otherwise saves it as `00. … Hidden track`. Skip leaves it out. It takes part in read offset correction (so track 1's start is right) and in the read-quality report, but not in loudness/DR. The rip log's table of contents and notes describe it, including when the drive can't read it.
+- **Gaps between tracks.** An opt-in scan (`--gaps report|own-track`, Settings, Rip page) runs `cdrdao read-toc` (about five minutes, measured on your drive at 4 min 43 s) after AccurateRip, parses each track's gap, lists them in the rip log, and with `own-track` moves each gap from the end of the previous track to the start of the track it leads into. The audio stays continuous; only the cut points move.
+- Code: `src/rip/gaps.rs`, `src/rip/engine.rs`, wired in `src/rip/mod.rs`. Tests: hidden-track detection and silence, a stand-in cdparanoia that serves track 0 (kept and silent cases), gap parsing, the gap scan against a stand-in cdrdao, and moving gaps (including never across a break in the disc).
+- **Not done, on purpose:** a CUE sheet. With one file per track a CUE adds nothing about gaps; it becomes useful with whole-disc images (item 9).
+
+**Left for you to check (hardware):** (1) a disc that really has a hidden track one, to prove the drive serves "track 0" the way the code expects; (2) a disc with real gaps (a live album) to see the scan's list and the `own-track` result. On your Morrissey disc the scan should report "No gaps between tracks were found".
 
 **Plan:**
 - Detect a pregap on track 1 longer than the standard 2 seconds from the TOC.
@@ -228,3 +236,4 @@ Both meanings of "streams" are in scope.
 | 2026-10-01 | 3 Burn and write speeds | Built (v1.6.0); arguments verified by tests and a dry run; real burn at a chosen speed pending your check |
 | 2026-10-01 | 4 Jitter and read-error reporting | Built (v1.7.0); parser tested on real drive output; verdicts on a flawed disc pending your check |
 | 2026-10-01 | Side fixes (v1.8.0) | Loudness and DR results kept and shown again; cover size, format and quality rating; albums found by folder structure (Archive/Artist/Album) in Library and Import |
+| 2026-10-01 | 5 Pregaps, hidden tracks, track boundaries | Built (v1.9.0); hidden track and gap handling tested with stand-in tools; real hidden-track and gap discs pending |

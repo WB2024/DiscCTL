@@ -3,6 +3,7 @@ pub mod cover;
 pub mod data;
 pub mod encoder;
 pub mod engine;
+pub mod gaps;
 pub mod mb_enrich;
 pub mod metadata;
 pub mod musicbrainz;
@@ -47,6 +48,10 @@ pub struct RipOptions {
     pub offset: offset::OffsetMode,
     /// How hard cdparanoia checks what it reads.
     pub paranoia: engine::Paranoia,
+    /// What to do about hidden audio before track 1.
+    pub hidden: gaps::HiddenTrack,
+    /// What to do about gaps between tracks.
+    pub gaps: gaps::GapMode,
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
@@ -335,16 +340,22 @@ fn rip_redbook(
     let mb_artist_id_alb = mb.as_ref().and_then(|r| r.mb_artist_id.clone());
 
     let wav_dir = format!("/tmp/rustydisc_rip_{}", std::process::id());
+    let hidden_len = gaps::hidden_sectors(info);
     let read = engine::rip_all_tracks(
-        &opts.device, &wav_dir, track_count, opts.paranoia, opts.debug, opts.progress_json,
+        &opts.device, &wav_dir, track_count, opts.paranoia,
+        hidden_len.filter(|_| opts.hidden == gaps::HiddenTrack::Auto), opts.debug, opts.progress_json,
     )?;
+    let hidden_outcome = hidden_outcome(hidden_len, opts, &read);
     let health = read_health(info, opts, &read);
     let wav_tracks = read.tracks;
 
-    let (ar, offset_applied, offset_notes) = verify_with_offset(info, opts, &wav_tracks);
+    let (ar, offset_applied, mut offset_notes) = verify_with_offset(info, opts, &wav_tracks);
+    // Gaps are handled after AccurateRip has checked the tracks cut at their official starts.
+    let found_gaps = handle_gaps(info, opts, &wav_tracks, &mut offset_notes);
 
     let ext   = opts.format.extension();
-    let total = wav_tracks.len();
+    // A hidden track (number 0) is an extra file, not one of the disc's numbered tracks.
+    let total = wav_tracks.iter().filter(|(n, _)| *n > 0).count();
 
     let mut outputs: Vec<String> = Vec::new();
     let mut ripped: Vec<RippedEntry> = Vec::new();
@@ -354,6 +365,7 @@ fn rip_redbook(
 
         let title = mb_track.map(|t| t.title.as_str())
             .or_else(|| track_info.and_then(|t| t.cd_text.as_ref()).and_then(|c| c.title.as_deref()));
+        let title = if *track_num == 0 { Some("Hidden track") } else { title };
 
         let artist = mb_track.and_then(|t| t.artist.as_deref())
             .or_else(|| track_info.and_then(|t| t.cd_text.as_ref()).and_then(|c| c.artist.as_deref()))
@@ -363,8 +375,8 @@ fn rip_redbook(
         let out_path = format!("{}/{}", audio_dir, filename);
 
         if opts.progress_json {
-            emit_step(&format!("Encoding track {} of {} — {}", i + 1, total, filename));
-            emit_progress(85.0 + (i as f32 / total as f32) * 10.0);
+            emit_step(&format!("Encoding track {} of {} — {}", i + 1, wav_tracks.len(), filename));
+            emit_progress(85.0 + (i as f32 / wav_tracks.len() as f32) * 10.0);
         } else {
             eprintln!("  Encoding track {:2} → {}", track_num, filename);
         }
@@ -387,12 +399,14 @@ fn rip_redbook(
         encoder::encode(wav_path, &out_path, &opts.format, &tags, cover_art, opts.quality.as_deref(), opts.debug)?;
 
         tagging::apply(&out_path, &tags, mb.as_ref(), mb_track, opts.debug);
-        outputs.push(out_path.clone());
+        if *track_num > 0 {
+            outputs.push(out_path.clone());
+        }
         ripped.push(RippedEntry { number: *track_num, title: title.map(str::to_string), file: filename.clone(), raw_path: wav_path.clone() });
     }
 
     let report_dir = if opts.archive { format!("{}/metadata", output_dir) } else { output_dir.to_string() };
-    write_rip_report(info, mb, opts, ar.as_ref(), started, &ripped, &report_dir, offset_applied, &offset_notes, Some(&health));
+    write_rip_report(info, mb, opts, ar.as_ref(), started, &ripped, &report_dir, offset_applied, &offset_notes, Some(&health), &hidden_outcome, hidden_len, &found_gaps);
     let _ = std::fs::remove_dir_all(&wav_dir);
     post_rip(opts, &outputs);
 
@@ -467,6 +481,8 @@ fn rip_bluebook(
     let mut offset_applied = 0i32;
     let mut offset_notes: Vec<String> = Vec::new();
     let mut health: Option<readhealth::ReadHealth> = None;
+    let mut hidden_outcome_bb = gaps::HiddenOutcome::None;
+    let mut found_gaps_bb: Vec<gaps::TrackGap> = Vec::new();
 
     if let Some(session) = audio_session {
         let track_count = session.tracks.iter().filter(|t| t.kind == TrackKind::Audio).count();
@@ -480,9 +496,12 @@ fn rip_bluebook(
         let mb_artist_id_alb = mb.as_ref().and_then(|r| r.mb_artist_id.clone());
 
         let wav_dir = format!("/tmp/rustydisc_rip_{}", std::process::id());
+        let hidden_len = gaps::hidden_sectors(info);
         let read = engine::rip_all_tracks(
-            &opts.device, &wav_dir, track_count, opts.paranoia, opts.debug, opts.progress_json,
+            &opts.device, &wav_dir, track_count, opts.paranoia,
+            hidden_len.filter(|_| opts.hidden == gaps::HiddenTrack::Auto), opts.debug, opts.progress_json,
         )?;
+        hidden_outcome_bb = hidden_outcome(hidden_len, opts, &read);
         health = Some(read_health(info, opts, &read));
         let wav_tracks = read.tracks;
 
@@ -490,9 +509,10 @@ fn rip_bluebook(
         ar = checked;
         offset_applied = applied;
         offset_notes = notes;
+        found_gaps_bb = handle_gaps(info, opts, &wav_tracks, &mut offset_notes);
 
         let ext   = opts.format.extension();
-        let total = wav_tracks.len();
+        let total = wav_tracks.iter().filter(|(n, _)| *n > 0).count();
 
         let mut outputs: Vec<String> = Vec::new();
         let mut ripped: Vec<RippedEntry> = Vec::new();
@@ -502,6 +522,7 @@ fn rip_bluebook(
 
             let title = mb_track.map(|t| t.title.as_str())
                 .or_else(|| track_info.and_then(|t| t.cd_text.as_ref()).and_then(|c| c.title.as_deref()));
+            let title = if *track_num == 0 { Some("Hidden track") } else { title };
             let artist = mb_track.and_then(|t| t.artist.as_deref())
                 .or_else(|| track_info.and_then(|t| t.cd_text.as_ref()).and_then(|c| c.artist.as_deref()))
                 .or(album_artist);
@@ -510,8 +531,8 @@ fn rip_bluebook(
             let out_path = format!("{}/{}", audio_dir, filename);
 
             if opts.progress_json {
-                emit_step(&format!("Encoding track {} of {} — {}", i + 1, total, filename));
-                emit_progress(85.0 + (i as f32 / total as f32) * 5.0);
+                emit_step(&format!("Encoding track {} of {} — {}", i + 1, wav_tracks.len(), filename));
+                emit_progress(85.0 + (i as f32 / wav_tracks.len() as f32) * 5.0);
             } else {
                 eprintln!("  Encoding track {:2} → {}", track_num, filename);
             }
@@ -534,11 +555,13 @@ fn rip_bluebook(
             encoder::encode(wav_path, &out_path, &opts.format, &tags, cover_art, opts.quality.as_deref(), opts.debug)?;
 
             tagging::apply(&out_path, &tags, mb.as_ref(), mb_track, opts.debug);
-            outputs.push(out_path.clone());
+            if *track_num > 0 {
+                outputs.push(out_path.clone());
+            }
             ripped.push(RippedEntry { number: *track_num, title: title.map(str::to_string), file: filename.clone(), raw_path: wav_path.clone() });
         }
 
-        write_rip_report(info, mb, opts, ar.as_ref(), started, &ripped, &meta_dir, offset_applied, &offset_notes, health.as_ref());
+        write_rip_report(info, mb, opts, ar.as_ref(), started, &ripped, &meta_dir, offset_applied, &offset_notes, health.as_ref(), &hidden_outcome_bb, gaps::hidden_sectors(info), &found_gaps_bb);
         let _ = std::fs::remove_dir_all(&wav_dir);
         post_rip(opts, &outputs);
     }
@@ -567,13 +590,61 @@ fn rip_bluebook(
     Ok(())
 }
 
+/// Look for gaps between tracks (if asked), say so, and move them if asked.
+fn handle_gaps(info: &analyzer::DiscInfo, opts: &RipOptions, wavs: &[(usize, String)], notes: &mut Vec<String>) -> Vec<gaps::TrackGap> {
+    use gaps::GapMode;
+    if opts.gaps == GapMode::Off {
+        return Vec::new();
+    }
+    let say = |m: &str| if opts.progress_json { emit_step(m) } else { eprintln!("{m}") };
+    say("Scanning the disc for gaps between tracks (this takes about five minutes)...");
+    let found: Vec<gaps::TrackGap> = match gaps::scan(&opts.device, opts.debug) {
+        Ok(g) => g.into_iter().filter(|g| g.track > 1).collect(),
+        Err(e) => {
+            notes.push(format!("The gap scan failed ({e}), so gaps between tracks were left as they are."));
+            return Vec::new();
+        }
+    };
+    if found.is_empty() {
+        notes.push("No gaps between tracks were found.".into());
+        say("No gaps between tracks");
+        return found;
+    }
+    let list = |g: &gaps::TrackGap| format!("track {:02} ({:.1} s)", g.track, gaps::seconds(g.sectors));
+    let names: Vec<String> = found.iter().map(list).collect();
+    say(&format!("Gaps found before {}", names.join(", ")));
+    match opts.gaps {
+        GapMode::OwnTrack => match gaps::move_gaps_to_own_track(wavs, &contiguity(info, wavs), &found) {
+            Ok(n) => notes.push(format!("Gaps before {} were moved to the start of the track they lead into ({n} moved).", names.join(", "))),
+            Err(e) => notes.push(format!("Gaps before {} were found but could not be moved ({e}); they stay at the end of the previous track.", names.join(", "))),
+        },
+        _ => notes.push(format!("Gaps before {} were found. Their audio is at the end of the previous track.", names.join(", "))),
+    }
+    found
+}
+
+/// What became of the audio before track 1, taking the user's choice into account.
+fn hidden_outcome(len: Option<u32>, opts: &RipOptions, read: &engine::RipRead) -> gaps::HiddenOutcome {
+    match len {
+        None => gaps::HiddenOutcome::None,
+        Some(l) if opts.hidden == gaps::HiddenTrack::Skip => gaps::HiddenOutcome::Skipped { seconds: gaps::seconds(l) },
+        Some(_) => read.hidden.clone(),
+    }
+}
+
 /// Judge how cleanly each track was read, and tell the user.
 fn read_health(info: &analyzer::DiscInfo, opts: &RipOptions, read: &engine::RipRead) -> readhealth::ReadHealth {
     let tracks: Vec<&analyzer::TrackInfo> = info.sessions.iter().flat_map(|s| s.tracks.iter()).collect();
     let ranges: Vec<(usize, u32, u32)> = read
         .tracks
         .iter()
-        .filter_map(|(n, _)| tracks.iter().find(|t| t.number == *n).map(|t| (*n, t.lba_start, t.lba_end)))
+        .filter_map(|(n, _)| {
+            if *n == 0 {
+                // The hidden track fills the space in front of track 1.
+                return gaps::hidden_sectors(info).map(|l| (0, 0, l));
+            }
+            tracks.iter().find(|t| t.number == *n).map(|t| (*n, t.lba_start, t.lba_end))
+        })
         .collect();
     let health = read.events.summarize(&ranges);
     let (clean, repaired, suspect) = (health.count(readhealth::Status::Clean), health.count(readhealth::Status::Repaired), health.count(readhealth::Status::Suspect));
@@ -595,6 +666,10 @@ fn contiguity(info: &analyzer::DiscInfo, wavs: &[(usize, String)]) -> Vec<bool> 
     let tracks: Vec<&analyzer::TrackInfo> = info.sessions.iter().flat_map(|s| s.tracks.iter()).collect();
     wavs.windows(2)
         .map(|w| {
+            // The hidden track ends exactly where track 1 begins.
+            if w[0].0 == 0 {
+                return w[1].0 == 1;
+            }
             let a = tracks.iter().find(|t| t.number == w[0].0);
             let b = tracks.iter().find(|t| t.number == w[1].0);
             matches!((a, b), (Some(a), Some(b)) if b.number == a.number + 1 && a.lba_end == b.lba_start)
@@ -692,6 +767,9 @@ fn write_rip_report(
     offset_applied: i32,
     offset_notes: &[String],
     health: Option<&readhealth::ReadHealth>,
+    hidden: &gaps::HiddenOutcome,
+    hidden_len: Option<u32>,
+    found_gaps: &[gaps::TrackGap],
 ) {
     if opts.progress_json { emit_step("Writing the rip log..."); }
     let report = report::build(report::Inputs {
@@ -716,6 +794,9 @@ fn write_rip_report(
         notes: offset_notes.to_vec(),
         health,
         paranoia_reduced: opts.paranoia != engine::Paranoia::Full,
+        hidden: hidden.clone(),
+        hidden_sectors: hidden_len,
+        gaps: found_gaps.to_vec(),
     });
     if let Err(e) = report::write(&report, dir) {
         eprintln!("Could not write the rip log: {e}");

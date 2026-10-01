@@ -109,3 +109,17 @@ Loudness and dynamic range take a while to measure, so the results are saved (in
 ## The cover
 
 The album page shows the cover file's pixel size, format and weight with a plain rating (Excellent from 1400 px, High resolution from 1000 px, Good from 600 px, Fair from 400 px, otherwise Low resolution), and what is embedded in the audio files: how many files carry a picture and its size. It points out when the embedded picture is smaller than the cover file, when files carry different pictures, or when none has one embedded, which tells you whether to look for a better cover or keep the one you have.
+
+## Hidden tracks and gaps between tracks
+
+**Hidden track before track 1.** Some discs put music in front of track 1 (a "hidden track one audio"), which a player only reaches by rewinding from the start of track 1. The disc's table of contents gives it away: track 1 starts after the beginning of the audio area. By default (**Hidden track before track 1: Auto**, or `--hidden-track auto`) RustyDisc reads that audio on its own and saves it as **track 00**, titled "Hidden track", unless it is only silence, in which case nothing is saved. Choose **Skip** to leave it out. The rip log says what was found and what became of it. If the drive won't read that part of the disc, the log says so and the rest of the rip carries on.
+
+**Gaps between tracks.** A track can begin with a gap: audio that plays before the track's official start, such as the applause that leads into the next song on a live album. Ripping by the table of contents cuts at the official starts, so a gap's audio ends up at the end of the previous track. The table of contents doesn't say whether gaps exist; only a scan of the disc's subchannel data does, and that takes about five minutes, so it is off by default. **Gaps between tracks** (Settings → Rip defaults, the Rip page, or `--gaps off|report|own-track`) chooses:
+
+| Choice | What happens |
+|---|---|
+| **Leave as they are** (default) | No scan. Gap audio stays at the end of the previous track. |
+| **Scan and note them** (`report`) | The disc is scanned and the rip log lists the tracks that have gaps, with their lengths. The audio is left as it is. |
+| **Keep each gap with its own track** (`own-track`) | As above, and each gap is moved to the start of the track it leads into, so every track begins where its gap does. Together the tracks still make exactly the same continuous audio. |
+
+The scan runs after AccurateRip has checked the tracks, because AccurateRip is defined on the official track starts. Gaps are never moved across a break in the disc.

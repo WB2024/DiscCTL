@@ -100,7 +100,17 @@ pub struct RipReport {
     /// How cleanly the drive read the disc as a whole.
     #[serde(default)]
     pub read_quality: Option<ReadSummary>,
+    /// What became of any audio before track 1 (a hidden track).
+    #[serde(default = "no_hidden")]
+    pub hidden_audio: super::gaps::HiddenOutcome,
+    /// Gaps before tracks that a gap scan found (empty when no scan was done, or none exist).
+    #[serde(default)]
+    pub gaps: Vec<super::gaps::TrackGap>,
     pub warnings: Vec<String>,
+}
+
+fn no_hidden() -> super::gaps::HiddenOutcome {
+    super::gaps::HiddenOutcome::None
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -139,6 +149,12 @@ pub struct Inputs<'a> {
     pub health: Option<&'a super::readhealth::ReadHealth>,
     /// cdparanoia was run with less than full checking.
     pub paranoia_reduced: bool,
+    /// What became of any audio before track 1.
+    pub hidden: super::gaps::HiddenOutcome,
+    /// Length of that gap in sectors, when the disc has one.
+    pub hidden_sectors: Option<u32>,
+    /// Gaps between tracks that a scan found.
+    pub gaps: Vec<super::gaps::TrackGap>,
 }
 
 pub fn build(i: Inputs) -> RipReport {
@@ -156,6 +172,10 @@ pub fn build(i: Inputs) -> RipReport {
         })
         .collect();
 
+    let mut toc = toc;
+    if let Some(l) = i.hidden_sectors {
+        toc.insert(0, TocTrack { number: 0, kind: "hidden".into(), start_sector: 0, end_sector: l.saturating_sub(1), seconds: Some(super::gaps::seconds(l)) });
+    }
     let tracks: Vec<TrackEntry> = i
         .tracks
         .iter()
@@ -175,6 +195,7 @@ pub fn build(i: Inputs) -> RipReport {
         .collect();
 
     let mut warnings = i.notes.clone();
+    warnings.extend(i.hidden.note());
     match i.accuraterip {
         Some(r) if !r.found => warnings.push("This disc is not in the AccurateRip database, so the rip could not be checked against other people's.".into()),
         Some(r) if r.verified < r.total => warnings.push(format!("Only {} of {} tracks matched AccurateRip.", r.verified, r.total)),
@@ -233,6 +254,8 @@ pub fn build(i: Inputs) -> RipReport {
         }),
         settings: i.settings,
         tracks,
+        hidden_audio: i.hidden.clone(),
+        gaps: i.gaps.clone(),
         read_quality: i.health.map(|h| {
             use super::readhealth::Status;
             ReadSummary {
@@ -446,6 +469,8 @@ mod tests {
             }],
             read_quality: None,
             accuraterip: Some(AccurateRipSummary { found: true, pressings: 3, verified: 1, total: 1, detected_shift_samples: Some(6) }),
+            hidden_audio: crate::rip::gaps::HiddenOutcome::None,
+            gaps: vec![],
             warnings: vec![],
         }
     }

@@ -68,6 +68,17 @@ pub struct RipArgs {
     #[arg(long, default_value = "full", value_name = "full|fast|off")]
     pub paranoia: String,
 
+    /// Audio hidden before track 1: auto (rip it if the disc has some and it isn't silence, saved
+    /// as track 00; the default) or skip
+    #[arg(long, default_value = "auto", value_name = "auto|skip")]
+    pub hidden_track: String,
+
+    /// Gaps between tracks: off (don't look, the default), report (scan and note them in the log;
+    /// takes about five minutes) or own-track (scan, and move each gap to the start of the track
+    /// it leads into)
+    #[arg(long, default_value = "off", value_name = "off|report|own-track")]
+    pub gaps: String,
+
     /// Use this picture (JPEG or PNG) as the cover instead of looking one up
     #[arg(long, value_name = "FILE")]
     pub cover_file: Option<String>,
@@ -135,6 +146,8 @@ pub fn run(args: RipArgs) -> Result<(), Error> {
         dynamic_range:  args.dynamic_range,
         offset:         rip::offset::OffsetMode::parse(&args.offset).map_err(Error::validation)?,
         paranoia:       rip::engine::Paranoia::parse(&args.paranoia).map_err(Error::validation)?,
+        hidden:         rip::gaps::HiddenTrack::parse(&args.hidden_track).map_err(Error::validation)?,
+        gaps:           rip::gaps::GapMode::parse(&args.gaps).map_err(Error::validation)?,
     };
 
     rip::rip(&opts)?;

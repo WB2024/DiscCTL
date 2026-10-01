@@ -30,6 +30,10 @@ pub struct Settings {
     pub rip_offset: String,
     /// How hard cdparanoia checks what it reads: "full", "fast" or "off".
     pub rip_paranoia: String,
+    /// Hidden audio before track 1: "auto" (rip it) or "skip".
+    pub rip_hidden_track: String,
+    /// Gaps between tracks: "off", "report" or "own-track".
+    pub rip_gaps: String,
 
     // Cover art
     /// Enabled sources, best first: "fanart" and/or "caa".
@@ -106,6 +110,8 @@ impl Default for Settings {
             rip_dynamic_range: false,
             rip_offset: "off".into(),
             rip_paranoia: "full".into(),
+            rip_hidden_track: "auto".into(),
+            rip_gaps: "off".into(),
             cover_sources: vec!["caa".into()],
             cover_save_file: true,
             cover_embed: true,

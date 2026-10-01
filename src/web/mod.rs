@@ -549,6 +549,8 @@ struct SettingsUpdate {
     rip_dynamic_range: Option<bool>,
     rip_offset: Option<String>,
     rip_paranoia: Option<String>,
+    rip_hidden_track: Option<String>,
+    rip_gaps: Option<String>,
     cover_sources: Vec<String>,
     cover_save_file: bool,
     cover_embed: bool,
@@ -591,6 +593,20 @@ async fn put_settings(State(st): S, Json(u): Json<SettingsUpdate>) -> ApiResult<
         rip_quality: u.rip_quality.unwrap_or(current.rip_quality.clone()),
         rip_replaygain: u.rip_replaygain.unwrap_or(current.rip_replaygain),
         rip_dynamic_range: u.rip_dynamic_range.unwrap_or(current.rip_dynamic_range),
+        rip_gaps: match u.rip_gaps {
+            Some(g) => {
+                crate::rip::gaps::GapMode::parse(&g).map_err(ApiError::bad)?;
+                g.trim().to_lowercase()
+            }
+            None => current.rip_gaps.clone(),
+        },
+        rip_hidden_track: match u.rip_hidden_track {
+            Some(h) => {
+                crate::rip::gaps::HiddenTrack::parse(&h).map_err(ApiError::bad)?;
+                h.trim().to_lowercase()
+            }
+            None => current.rip_hidden_track.clone(),
+        },
         rip_paranoia: match u.rip_paranoia {
             Some(p) => {
                 crate::rip::engine::Paranoia::parse(&p).map_err(ApiError::bad)?;
@@ -1264,11 +1280,15 @@ struct RipReq {
     offset: Option<String>,
     /// How hard cdparanoia checks what it reads: "full", "fast" or "off" (empty = full).
     paranoia: Option<String>,
+    /// Hidden audio before track 1: "auto" or "skip" (empty = auto).
+    hidden_track: Option<String>,
+    /// Gaps between tracks: "off", "report" or "own-track" (empty = off).
+    gaps: Option<String>,
 }
 
 impl Default for RipReq {
     fn default() -> Self {
-        RipReq { device: None, format: None, archive: false, no_musicbrainz: false, no_accuraterip: false, debug: false, mb_release: None, folder: None, cover_upload: None, quality: None, replaygain: false, dynamic_range: false, offset: None, paranoia: None }
+        RipReq { device: None, format: None, archive: false, no_musicbrainz: false, no_accuraterip: false, debug: false, mb_release: None, folder: None, cover_upload: None, quality: None, replaygain: false, dynamic_range: false, offset: None, paranoia: None, hidden_track: None, gaps: None }
     }
 }
 
@@ -1327,6 +1347,14 @@ async fn start_rip(State(st): S, Json(req): Json<RipReq>) -> ApiResult<Json<Valu
     }
     if req.replaygain { args.push("--replaygain".into()); }
     if req.dynamic_range { args.push("--dynamic-range".into()); }
+    if let Some(g) = req.gaps.as_deref().map(str::trim).filter(|g| !g.is_empty()) {
+        crate::rip::gaps::GapMode::parse(g).map_err(ApiError::bad)?;
+        args.extend(["--gaps".into(), g.to_string()]);
+    }
+    if let Some(h) = req.hidden_track.as_deref().map(str::trim).filter(|h| !h.is_empty()) {
+        crate::rip::gaps::HiddenTrack::parse(h).map_err(ApiError::bad)?;
+        args.extend(["--hidden-track".into(), h.to_string()]);
+    }
     if let Some(p) = req.paranoia.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
         crate::rip::engine::Paranoia::parse(p).map_err(ApiError::bad)?;
         args.extend(["--paranoia".into(), p.to_string()]);

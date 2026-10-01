@@ -7,7 +7,7 @@
 **Rip, burn and archive CDs and DVDs — and fill USB sticks — from your browser.**<br>
 Built in Rust for Linux. Runs headless in Docker, so the drive can live in a server and you drive it from anywhere.
 
-[![Version](https://img.shields.io/badge/version-1.8-e8743b?style=flat-square)](https://github.com/WB2024/DiscCTL)
+[![Version](https://img.shields.io/badge/version-1.9-e8743b?style=flat-square)](https://github.com/WB2024/DiscCTL)
 [![Docker pulls](https://img.shields.io/docker/pulls/wb20244/rustydisc?style=flat-square&logo=docker&logoColor=white&color=2496ED)](https://hub.docker.com/r/wb20244/rustydisc)
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange?style=flat-square&logo=rust)](docs/install.md)
 [![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](#license)
@@ -46,6 +46,7 @@ Built in Rust for Linux. Runs headless in Docker, so the drive can live in a ser
 - **Read offset correction:** fixes your drive's read offset in the files (automatically, using AccurateRip, or by a number you set) so rips match any other drive's exactly ([details](docs/audio-quality.md#read-offset-correction))
 - **Write speed:** pick the burn speed (Auto, or any speed the drive offers for your blank disc), in the web UI or with `--speed` ([details](docs/hardware-notes.md#write-speed))
 - **Read quality per track:** every track is judged clean, repaired or suspect from cdparanoia's own report, with a choice of how hard it checks ([details](docs/audio-quality.md#how-cleanly-the-disc-was-read))
+- **Hidden tracks and gaps:** hidden audio before track 1 is ripped as track 00, and gaps between tracks can be found and kept with the track they lead into ([details](docs/audio-quality.md#hidden-tracks-and-gaps-between-tracks))
 - **Rip log:** every rip saves a readable `rip.log` and a JSON report: drive, read settings, table of contents, per-track AccurateRip results and checksums, and notes
 - **Quality report:** bit depth, sample rate and bitrate after ripping, plus an integrity test, **loudness / ReplayGain**, **dynamic range (DR)** and **spectrograms** that expose fake lossless
 - **Every MusicBrainz tag** on every file: IDs, sort names, disc, label, ISRCs, credits
