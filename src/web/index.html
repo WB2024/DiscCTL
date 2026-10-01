@@ -324,6 +324,11 @@ pre.json { background: var(--bg); border: 1px solid var(--line); border-radius: 
               <small id="speed-status" class="muted">The speeds the drive offers are filled in here when you open this page.</small>
               <small class="muted">The drive treats the speed you pick as an upper limit and may settle on a nearby one.</small>
             </div>
+            <div class="field" id="normalize-wrap">
+              <label for="burn-normalize" style="display:block">Level the audio</label>
+              <select id="burn-normalize"><option value="off">Off: burn the audio as it is</option><option value="album">Album: one gain for the disc (keeps differences between tracks)</option><option value="track">Track: bring every track to the target loudness</option></select>
+              <small class="muted">Changes the audio, so it is off by default. Useful when tracks from different sources are very different in loudness. Aims for -14 LUFS; a track is never boosted so far that it would clip.</small>
+            </div>
             <label class="field" id="discsize-wrap">Blank disc
               <select id="burn-discsize"></select>
             </label>
@@ -795,6 +800,11 @@ async function wireReport(name) {
   } catch { /* an album with no log simply shows no card */ }
 }
 // How cleanly the drive read the tracks (cdparanoia's report), in plain words.
+function normalizeNote(d) {
+  const rows = d.tracks.map(t => `<div style="margin-top:2px"><span class="mono">${(t.gain_db >= 0 ? "+" : "") + (+t.gain_db).toFixed(1)} dB</span>${t.limited ? ' <span class="muted">(held back so it doesn\'t clip)</span>' : ""} · ${esc(t.path.split("/").pop())}</div>`).join("");
+  return `<div class="notice" style="margin-top:8px"><b>Levelled before burning</b> (${esc(d.mode)}, target ${d.target_lufs} LUFS)${rows}</div>`;
+}
+
 function readHealthNote(d) {
   const bad = d.tracks.filter(t => t.status !== "clean");
   const head = `<span class="${d.suspect ? "ar-bad" : "ar-ok"}">${d.suspect ? "⚠" : "✔"}</span> <b>Read quality:</b> ${d.clean} clean, ${d.repaired} repaired, ${d.suspect} suspect`;
@@ -883,6 +893,7 @@ function jobPanel(container, jobId, { onEnd } = {}) {
         if (ev.name === "accuraterip") q(".jp-result").innerHTML = arTable(ev.data);
         if (ev.name === "cover") q(".jp-cover").innerHTML = coverNote(ev.data);
         if (ev.name === "quality") q(".jp-quality").innerHTML = qualityNote(ev.data);
+        if (ev.name === "normalize") q(".jp-quality").innerHTML += normalizeNote(ev.data);
         if (ev.name === "read_health") q(".jp-quality").innerHTML += readHealthNote(ev.data);
         if (ev.name === "dynamic_range") q(".jp-quality").innerHTML += `<div class="notice" style="margin-top:8px"><b>Dynamic range</b>${drSummary(ev.data.album_dr)}<div class="muted" style="font-size:12.5px;margin-top:6px">Open the album in the <a href="#library">Library</a> and use Dynamic range → Submit to Dynamic Range DB to share it.</div></div>`;
         if (ev.name === "replaygain") q(".jp-quality").innerHTML += `<div class="notice" style="margin-top:8px"><b>ReplayGain</b> written to ${ev.data.files} file${ev.data.files === 1 ? "" : "s"} · album gain ${ev.data.album_gain_db >= 0 ? "+" : ""}${(+ev.data.album_gain_db).toFixed(2)} dB · loudness ${(+ev.data.album_lufs).toFixed(1)} LUFS</div>`;
@@ -1430,6 +1441,7 @@ function renderBurn() {
   if (!isGraph) fillDiscSizes(isDvd ? "dvd" : "cd");
   $("#transcode-wrap").classList.toggle("hidden", !isDataDisc);
   $("#cdtext-wrap").classList.toggle("hidden", isGraph || !(f === "redbook" || isEnh));
+  $("#normalize-wrap").classList.toggle("hidden", isGraph || !(f === "redbook" || isEnh));
   $("#dvd-options").classList.toggle("hidden", !isMusic);
   $("#dvd-still-name").textContent = burn.still ? burn.still : "Cover art from the tracks' folder, or a plain background";
   $("#dvd-still-clear").classList.toggle("hidden", !burn.still);
@@ -1478,9 +1490,9 @@ function burnBody() {
   if (f === "graph") {
     let graph;
     try { graph = JSON.parse($("#graph-text").value); } catch (e) { throw new Error("Disc graph is not valid JSON: " + e.message); }
-    return { graph, speed: +$("#burn-speed").value || null, dry_run: $("#burn-dry").checked, debug: $("#burn-debug").checked, device: selectedDevice() };
+    return { graph, speed: +$("#burn-speed").value || null, normalize: $("#burn-normalize").value, dry_run: $("#burn-dry").checked, debug: $("#burn-debug").checked, device: selectedDevice() };
   }
-  const common = { format: f, speed: +$("#burn-speed").value || null, disc_size_mb: +$("#burn-discsize").value, label: $("#burn-label").value.trim() || null, dry_run: $("#burn-dry").checked, debug: $("#burn-debug").checked, device: selectedDevice() };
+  const common = { format: f, speed: +$("#burn-speed").value || null, normalize: (f === "redbook" || f === "bluebook") ? $("#burn-normalize").value : "off", disc_size_mb: +$("#burn-discsize").value, label: $("#burn-label").value.trim() || null, dry_run: $("#burn-dry").checked, debug: $("#burn-debug").checked, device: selectedDevice() };
   if (f === "datacd" || f === "datadvd") {
     if (!burn.data && !burn.dfiles.length && !burn.dplaylist) throw new Error("Choose what to put on the disc: files, a folder or a playlist");
     return { ...common, data: burn.dplaylist || burn.dfiles.length ? null : burn.data, files: burn.dplaylist ? [] : burn.dfiles,

@@ -31,6 +31,7 @@ pub fn plan(graph: &DiscGraph) -> Result<BurnPlan, Error> {
         format: graph.format.to_string(),
         label: graph.label.clone(),
         speed: graph.speed,
+        normalize: graph.normalize,
         write_mode: write_mode(&graph.format).to_string(),
         steps,
     })
@@ -45,6 +46,14 @@ pub fn validate_structure(graph: &DiscGraph) -> Result<(), Error> {
     if let Some(x) = graph.speed {
         if !(1..=crate::backend::speed::MAX_X).contains(&x) {
             return Err(Error::validation(format!("Write speed must be between 1x and {}x (or left out for Auto), got {x}x", crate::backend::speed::MAX_X)));
+        }
+    }
+    if let Some(n) = graph.normalize {
+        if !matches!(graph.format, DiscFormat::RedBook | DiscFormat::BlueBook) {
+            return Err(Error::validation("Normalizing is only available for audio CDs (redbook and bluebook)"));
+        }
+        if !(-30.0..=-6.0).contains(&n.target_lufs) {
+            return Err(Error::validation(format!("The normalization target must be between -30 and -6 LUFS, got {}", n.target_lufs)));
         }
     }
     match graph.format {
@@ -365,6 +374,7 @@ mod tests {
             sessions,
             dvd: None,
             speed: None,
+            normalize: None,
         }
     }
 

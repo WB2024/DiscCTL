@@ -21,6 +21,12 @@ pub struct PlanArgs {
     /// Write speed to show in the plan: auto (default) or a multiple like 8 for 8x
     #[arg(long, default_value = "auto", value_name = "auto|N")]
     pub speed: String,
+    /// Normalization to show in the plan: off (default), album or track
+    #[arg(long, default_value = "off", value_name = "off|album|track")]
+    pub normalize: String,
+    /// Loudness to aim for when normalizing, in LUFS (default -14)
+    #[arg(long, value_name = "LUFS", allow_hyphen_values = true)]
+    pub normalize_target: Option<f64>,
     /// Disc label
     #[arg(long, default_value = "Untitled")]
     pub label: String,
@@ -49,6 +55,9 @@ pub fn run(args: PlanArgs) -> Result<(), Error> {
     // A hand-written disc graph is a single disc: show its steps as before.
     if let Some(ref path) = args.input {
         let mut graph = parser::from_file(path)?;
+        if let Some(spec) = crate::backend::normalize::parse(&args.normalize, args.normalize_target).map_err(Error::validation)? {
+            graph.normalize = Some(spec);
+        }
         if let Some(x) = crate::backend::speed::parse(&args.speed).map_err(Error::validation)? {
             graph.speed = Some(x);
         }
@@ -74,6 +83,10 @@ pub fn run(args: PlanArgs) -> Result<(), Error> {
 
     if let Some(x) = crate::backend::speed::parse(&args.speed).map_err(Error::validation)? {
         out["speed"] = serde_json::json!(x);
+    }
+
+    if let Some(spec) = crate::backend::normalize::parse(&args.normalize, args.normalize_target).map_err(Error::validation)? {
+        out["normalize"] = serde_json::json!(spec);
     }
 
     // The burn steps for one disc, when they can be worked out from the flags alone.

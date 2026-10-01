@@ -32,6 +32,37 @@ pub fn to_cdda_wav(input: &str, debug: bool) -> Result<String, Error> {
     )))
 }
 
+/// Like `to_cdda_wav`, but with a gain (dB) applied while converting, even to a file that is
+/// already in the right format. The result is dithered back to 16 bits so a cut doesn't leave
+/// quantization noise. A gain of 0 is the plain conversion.
+pub fn to_cdda_wav_with_gain(input: &str, gain_db: f64, debug: bool) -> Result<String, Error> {
+    if gain_db == 0.0 {
+        return to_cdda_wav(input, debug);
+    }
+    if which("ffmpeg").is_none() {
+        return Err(Error::backend("Normalizing needs ffmpeg, which is not installed."));
+    }
+    let output = format!("/tmp/discctl_conv_{}.wav", sanitize_name(input));
+    let mut cmd = Command::new("ffmpeg");
+    cmd.arg("-y")
+        .arg("-i").arg(input)
+        .arg("-af").arg(format!("volume={gain_db}dB,aresample=44100:dither_method=triangular_hp"))
+        .arg("-ar").arg("44100")
+        .arg("-ac").arg("2")
+        .arg("-sample_fmt").arg("s16")
+        .arg(&output);
+    if debug {
+        println!("Running: {:?}", cmd);
+    } else {
+        cmd.arg("-loglevel").arg("error");
+    }
+    let status = cmd.status()?;
+    if !status.success() {
+        return Err(Error::backend(format!("ffmpeg failed applying a {gain_db:+} dB gain to '{input}': exit code {:?}", status.code())));
+    }
+    Ok(output)
+}
+
 fn try_ffmpeg(input: &str, output: &str, debug: bool) -> Result<bool, Error> {
     if which("ffmpeg").is_none() {
         return Ok(false);

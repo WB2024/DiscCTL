@@ -93,3 +93,7 @@ An optional top-level `"speed"` sets the write speed as an "x" multiple (`8` mea
 ```json
 { "format": "redbook", "label": "Mix", "speed": 8, "sessions": [ { "type": "audio", "tracks": ["01.flac", "02.flac"] } ] }
 ```
+
+## Normalization
+
+An optional top-level `"normalize"` levels the audio of an audio CD (`redbook` or `bluebook`) before it is burned: `{"mode": "album" | "track", "target_lufs": -14}`. Leave it out to burn the audio as it is. `--normalize` on `burn` or `plan` overrides it. See [Levelling the audio](hardware-notes.md#levelling-the-audio-before-burning-normalization).

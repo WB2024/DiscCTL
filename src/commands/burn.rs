@@ -63,6 +63,13 @@ pub struct BurnArgs {
     /// kinder to audio discs; the drive's own limits apply
     #[arg(long, default_value = "auto", value_name = "auto|N")]
     pub speed: String,
+    /// Level the audio before burning an audio CD: off (default), album (one gain for the whole
+    /// disc, keeping differences between tracks) or track (every track to the target)
+    #[arg(long, default_value = "off", value_name = "off|album|track")]
+    pub normalize: String,
+    /// Loudness to aim for when normalizing, in LUFS (default -14)
+    #[arg(long, value_name = "LUFS", allow_hyphen_values = true)]
+    pub normalize_target: Option<f64>,
     /// Target optical drive device
     #[arg(long, default_value = "/dev/sr0")]
     pub device: String,
@@ -557,6 +564,9 @@ fn burn_graph(
     if let Some(x) = backend::speed::parse(&args.speed).map_err(Error::validation)? {
         graph.speed = Some(x);
     }
+    if let Some(spec) = backend::normalize::parse(&args.normalize, args.normalize_target).map_err(Error::validation)? {
+        graph.normalize = Some(spec);
+    }
     let graph = &graph;
     let plan = planner::plan(graph)?;
 
@@ -711,7 +721,7 @@ mod tests {
     fn data_sources_are_exclusive() {
         let args = |files: Option<Vec<String>>, data: Option<String>| BurnArgs {
             format: "datacd".into(), audio: None, playlist: None, data, files, playlist_root: None, disc_size: None, dvd_audio_kbps: 448, dvd_standard: "pal".into(), dvd_still: None, iso_out: None,
-            label: "T".into(), speed: "auto".into(), input: None, device: "/dev/null".into(), debug: false, dry_run: true,
+            label: "T".into(), speed: "auto".into(), normalize: "off".into(), normalize_target: None, input: None, device: "/dev/null".into(), debug: false, dry_run: true,
             cd_text: false, transcode: None, stage_dir: None, keep_staged: false, cache: Default::default(), progress_json: false,
         };
         let resolve = |a: BurnArgs| discs::resolve_data(&DataSpec { playlist: a.playlist, files: a.files, data: a.data, playlist_root: None });

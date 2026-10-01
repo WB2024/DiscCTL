@@ -7,7 +7,7 @@
 **Rip, burn and archive CDs and DVDs — and fill USB sticks — from your browser.**<br>
 Built in Rust for Linux. Runs headless in Docker, so the drive can live in a server and you drive it from anywhere.
 
-[![Version](https://img.shields.io/badge/version-1.10-e8743b?style=flat-square)](https://github.com/WB2024/DiscCTL)
+[![Version](https://img.shields.io/badge/version-1.11-e8743b?style=flat-square)](https://github.com/WB2024/DiscCTL)
 [![Docker pulls](https://img.shields.io/docker/pulls/wb20244/rustydisc?style=flat-square&logo=docker&logoColor=white&color=2496ED)](https://hub.docker.com/r/wb20244/rustydisc)
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange?style=flat-square&logo=rust)](docs/install.md)
 [![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](#license)
@@ -44,6 +44,7 @@ Built in Rust for Linux. Runs headless in Docker, so the drive can live in a ser
 - **FLAC, ALAC, WAV, AIFF, MP3, AAC, Opus, OGG**, each with quality choices (best by default)
 - **Proper file ownership:** set a user, group and umask and everything RustyDisc creates belongs to them instead of root, with a one-click fix for existing files ([details](docs/web-ui-and-docker.md#file-ownership))
 - **Read offset correction:** fixes your drive's read offset in the files (automatically, using AccurateRip, or by a number you set) so rips match any other drive's exactly ([details](docs/audio-quality.md#read-offset-correction))
+- **Level the audio before burning:** optional album or per-track normalization to a target loudness, with clip protection, for audio CDs ([details](docs/hardware-notes.md#levelling-the-audio-before-burning-normalization))
 - **Write speed:** pick the burn speed (Auto, or any speed the drive offers for your blank disc), in the web UI or with `--speed` ([details](docs/hardware-notes.md#write-speed))
 - **Read quality per track:** every track is judged clean, repaired or suspect from cdparanoia's own report, with a choice of how hard it checks ([details](docs/audio-quality.md#how-cleanly-the-disc-was-read))
 - **Hidden tracks and gaps:** hidden audio before track 1 is ripped as track 00, and gaps between tracks can be found and kept with the track they lead into ([details](docs/audio-quality.md#hidden-tracks-and-gaps-between-tracks))

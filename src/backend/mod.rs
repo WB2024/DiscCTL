@@ -4,6 +4,8 @@ pub mod convert;
 pub mod data;
 pub mod device;
 pub mod dvd;
+pub mod loudness;
+pub mod normalize;
 pub mod speed;
 pub mod transcode;
 
@@ -44,6 +46,29 @@ fn execute_dvd(graph: &DiscGraph, plan: &BurnPlan, dev: &str, debug: bool, progr
         }
     }
     Ok(())
+}
+
+/// Measure the session's tracks and choose a gain for each, telling the user what will change.
+fn normalize_gains(a: &crate::model::disc::AudioSession, spec: normalize::Spec, progress_json: bool) -> Result<Vec<f64>, Error> {
+    let say = |m: &str| {
+        if progress_json {
+            println!("{}", serde_json::json!({"type": "step", "msg": m}));
+        } else {
+            eprintln!("{m}");
+        }
+    };
+    say("Measuring loudness so the tracks can be levelled...");
+    let (measured, album) = normalize::measure(&a.tracks)?;
+    let gains = normalize::compute(spec, &measured, album);
+    say(&normalize::describe(&gains, spec));
+    if progress_json {
+        println!("{}", serde_json::json!({"type": "normalize", "mode": spec.mode, "target_lufs": spec.target_lufs, "tracks": gains}));
+    } else {
+        for g in &gains {
+            eprintln!("  {:+.1} dB{}  {}", g.gain_db, if g.limited { " (held back)" } else { "" }, g.path);
+        }
+    }
+    Ok(gains.iter().map(|g| g.gain_db).collect())
 }
 
 pub fn execute(graph: &DiscGraph, plan: &BurnPlan, dev: &str, debug: bool, progress_json: bool) -> Result<(), Error> {
@@ -117,8 +142,12 @@ pub fn execute(graph: &DiscGraph, plan: &BurnPlan, dev: &str, debug: bool, progr
                 })?;
                 match session {
                     Session::Audio(a) => {
-                        // Convert any non-CDDA tracks before burning
-                        let prepared = audio::prepare_tracks(a, debug)?;
+                        // Work out any levelling, then convert the tracks for the disc.
+                        let gains = match graph.normalize {
+                            Some(spec) => normalize_gains(a, spec, progress_json)?,
+                            None => Vec::new(),
+                        };
+                        let prepared = audio::prepare_tracks(a, &gains, debug)?;
                         audio::write_audio_session(&prepared, dev, !finalize, debug, progress_json)?;
                     }
                     _ => return Err(Error::backend("Expected audio session")),

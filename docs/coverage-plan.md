@@ -13,7 +13,7 @@ A working checklist of the ripping and burning topics RustyDisc should cover, wh
 | 5 | [Pregaps, hidden tracks, track boundaries](#5-pregaps-hidden-tracks-and-track-boundaries) | ✅ | Hidden track as 00; optional gap scan (v1.9.0) |
 | 6 | [TOC anomaly checks](#6-toc-anomaly-checks) | ✅ | Disc checks before and after ripping (v1.10.0) |
 | 7 | [Disc-at-once vs track-at-once](#7-disc-at-once-vs-track-at-once) | ✅ | Stated in the plan; explained (v1.10.1) |
-| 8 | [Normalization](#8-normalization) | ⬜ | ReplayGain tags only |
+| 8 | [Normalization](#8-normalization) | ✅ | Optional album/track levelling when burning (v1.11.0) |
 | 9 | [Exact disc images](#9-exact-disc-images) | ⬜ | ISO build for data only |
 | 10 | [Subchannels and subcode data](#10-subchannels-and-subcode-data) | ⬜ | CD-TEXT read; ISRC from MusicBrainz |
 | 11 | [Batch ripping](#11-batch-ripping) | ⬜ | One disc at a time |
@@ -137,7 +137,11 @@ Open questions that need a real disc or drive to settle are marked **(verify on 
 **Done when:** the plan output names the write mode and the docs explain it.
 
 ## 8. Normalization
-**Status:** ⬜
+**Status:** ✅ complete in v1.11.0 (awaiting your check with a real burn)
+
+**What was built:** an opt-in *Level the audio* choice for audio CDs (Off / Album / Track, target -14 LUFS by default, `--normalize`, `--normalize-target`, a Burn page menu, and a `"normalize"` field in disc graphs). At burn time each track's EBU R128 loudness is measured, a gain is chosen (album: one gain for the disc so differences survive; track: each to the target), boosts are held back so a true peak never passes -1 dBFS (cuts are never limited), and the gain is applied during conversion with dithering back to 16 bits, even for files that are already CD-format WAVs. The job lists every track's gain before writing starts. Validation refuses it for non-audio-CD formats. Code: `src/backend/normalize.rs`, `src/backend/convert.rs`, `src/backend/loudness.rs` (the EBU R128 meter moved here so burning can use it; the Library still uses it through `audioinfo`). Tests: the gain rules (including clip protection and silent tracks), parsing, and a real ffmpeg round trip showing quiet and loud tones both measure at the target after levelling.
+
+**Left for you to check:** a burn of a few mixed-loudness tracks with Level the audio on, and a listen. Dry-run plans and conversion are verified here; no disc was written.
 
 **Today:** loudness measurement and ReplayGain tags, which leave the audio untouched.
 
@@ -245,3 +249,4 @@ Both meanings of "streams" are in scope.
 | 2026-10-01 | 5 Pregaps, hidden tracks, track boundaries | Built (v1.9.0); hidden track and gap handling tested with stand-in tools; real hidden-track and gap discs pending |
 | 2026-10-01 | 6 TOC anomaly checks | Built (v1.10.0), unit tested on synthetic tables and the real disc (clean); an odd real disc pending |
 | 2026-10-01 | 7 Disc-at-once vs track-at-once | Done (v1.10.1): write mode shown in the plan and explained |
+| 2026-10-01 | 8 Normalization | Built (v1.11.0); gain rules and a real ffmpeg round trip tested; a real burn pending your check |

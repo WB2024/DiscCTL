@@ -59,6 +59,7 @@ pub fn from_cli(
         sessions,
         dvd: None,
         speed: None,
+        normalize: None,
     })
 }
 

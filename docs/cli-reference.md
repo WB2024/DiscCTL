@@ -100,6 +100,8 @@ rustydisc burn [OPTIONS]
 | Flag | Description |
 |------|-------------|
 | `--transcode <spec>` | Data CD: convert audio before burning: `mp3:256`, `aac:320`, `opus:192`, `flac`, `wav` (only files that would shrink are converted) |
+| `--normalize <off\|album\|track>` | Level the audio before burning an audio CD (default off; it changes the audio). See [Levelling the audio](hardware-notes.md#levelling-the-audio-before-burning-normalization) |
+| `--normalize-target <LUFS>` | Loudness to aim for when normalizing (default -14) |
 | `--speed <auto\|N>` | Write speed: `auto` (the drive chooses, the default) or a multiple such as `8` for 8x. See [Write speed](hardware-notes.md#write-speed) |
 | `--disc-size <size>` | Blank disc: a size in MB or a name — `cd650`, `cd700` (default for CDs), `cd800`, `dvd` (default for DVDs), `dvd-dl`, `bd`, `bd-dl` |
 | `--dvd-audio-kbps <n>` | Music DVD: Dolby Digital bitrate: 192, 256, 384 or 448 (default) |

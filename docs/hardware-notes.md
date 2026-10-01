@@ -59,3 +59,15 @@ There are two ways to write a CD. **Track-at-once** writes one track, pauses, th
 A **Blue Book** (Enhanced CD) disc is two sessions: the audio session is written disc-at-once but kept open, then the data session is appended as a second pass and the disc is closed. Data CDs and DVDs are written as one image and closed.
 
 `rustydisc plan` (and the plan in the web UI) now states how the disc will be written. There is no track-at-once option for audio: it would only add gaps and blocks that audio discs shouldn't have.
+
+## Levelling the audio before burning (normalization)
+
+Tracks from different sources can differ a lot in loudness, and a CD of them is annoying to play. **Level the audio** (on the Burn page for audio and Enhanced CDs, or `burn --normalize album|track`) works out a gain for each track from its EBU R128 loudness and applies it while the tracks are converted for the disc. It is **off by default because it changes the audio**.
+
+| Choice | What happens |
+|---|---|
+| **Off** (default) | The audio is burned as it is. |
+| **Album** | One gain for the whole disc, chosen so the disc as a whole reaches the target. Differences between tracks are kept, like an album's ReplayGain. |
+| **Track** | Each track gets its own gain so every track reaches the target. Differences between tracks are evened out. |
+
+The target is **-14 LUFS** unless you give another (`--normalize-target -16`, between -30 and -6). A gain is never allowed to boost a track so far that its true peak passes **-1 dBFS**, so nothing clips; a track held back this way ends up quieter than the target, and the job says which. A cut can't clip, so cuts are never limited. A boost or cut is applied in floating point and dithered back to 16 bits, so quiet passages don't pick up quantization noise. The job shows each track's gain before burning starts. `plan --normalize` shows the choice in the plan. Normalization needs ffmpeg and is for CD audio only (redbook and bluebook); a disc graph file can carry `"normalize": {"mode": "track", "target_lufs": -14}`.

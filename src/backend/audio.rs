@@ -3,12 +3,14 @@ use std::process::{Command, Stdio};
 use crate::{error::Error, model::disc::{AudioSession, CdText, TrackTitle}};
 use super::convert;
 
-pub fn prepare_tracks(session: &AudioSession, debug: bool) -> Result<PreparedSession, Error> {
+/// Convert the session's tracks to disc audio. `gains` (dB, one per track, or empty for none)
+/// are applied while converting.
+pub fn prepare_tracks(session: &AudioSession, gains: &[f64], debug: bool) -> Result<PreparedSession, Error> {
     let mut prepared_tracks = Vec::new();
     let mut temp_files = Vec::new();
 
-    for track in &session.tracks {
-        let converted = convert::to_cdda_wav(track, debug)?;
+    for (i, track) in session.tracks.iter().enumerate() {
+        let converted = convert::to_cdda_wav_with_gain(track, gains.get(i).copied().unwrap_or(0.0), debug)?;
         if converted != *track {
             temp_files.push(converted.clone());
         }

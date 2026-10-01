@@ -354,6 +354,9 @@ fn handle_stdout_line(job: &Job, line: &str) {
                 job.push(Event::Result { name: "quality".into(), data: v.get("summary").cloned().unwrap_or(serde_json::Value::Null) });
                 return;
             }
+            Some("normalize") => {
+                job.push(Event::Result { name: "normalize".into(), data: v.clone() });
+            }
             Some("read_health") => {
                 job.push(Event::Result { name: "read_health".into(), data: v.clone() });
             }

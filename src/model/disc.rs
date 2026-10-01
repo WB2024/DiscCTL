@@ -104,6 +104,9 @@ pub struct DiscGraph {
     /// Write speed as an "x" multiple (8 = 8x). Absent: the drive chooses.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speed: Option<u32>,
+    /// Level the audio before burning (audio CDs only). Absent: the audio is burned as it is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub normalize: Option<crate::backend::normalize::Spec>,
 }
 
 /// How the audio on a Music DVD is encoded and presented.

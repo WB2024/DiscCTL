@@ -950,6 +950,10 @@ struct BurnReq {
     disc_size_mb: Option<u64>,
     /// Write speed as an "x" multiple (8 = 8x). Absent: the drive chooses.
     speed: Option<u32>,
+    /// Level the audio before burning an audio CD: "off", "album" or "track".
+    normalize: Option<String>,
+    /// Loudness to aim for when normalizing, in LUFS.
+    normalize_target: Option<f64>,
     /// Music DVD: Dolby Digital bitrate in kbps.
     dvd_audio_kbps: Option<u32>,
     /// Music DVD: "pal" or "ntsc".
@@ -1033,6 +1037,13 @@ fn burn_args(cmd: &str, req: &BurnReq, cfg: &Config) -> ApiResult<(Vec<String>, 
         }
     }
 
+    if let Some(n) = req.normalize.as_deref().map(str::trim).filter(|n| !n.is_empty() && *n != "off") {
+        crate::backend::normalize::parse(n, req.normalize_target).map_err(ApiError::bad)?;
+        a.extend(["--normalize".into(), n.to_string()]);
+        if let Some(t) = req.normalize_target {
+            a.extend(["--normalize-target".into(), t.to_string()]);
+        }
+    }
     if let Some(x) = req.speed {
         if !(1..=crate::backend::speed::MAX_X).contains(&x) {
             return Err(ApiError::bad(format!("Write speed must be between 1x and {}x (or Auto)", crate::backend::speed::MAX_X)));
