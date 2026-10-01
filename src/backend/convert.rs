@@ -32,25 +32,33 @@ pub fn to_cdda_wav(input: &str, debug: bool) -> Result<String, Error> {
     )))
 }
 
-/// Like `to_cdda_wav`, but with a gain (dB) applied while converting, even to a file that is
-/// already in the right format. The result is dithered back to 16 bits so a cut doesn't leave
-/// quantization noise. A gain of 0 is the plain conversion.
+/// Like `to_cdda_wav`, with a gain (dB) applied while converting, even to a file that is already
+/// in the right format. A gain of 0 is the plain conversion.
 pub fn to_cdda_wav_with_gain(input: &str, gain_db: f64, debug: bool) -> Result<String, Error> {
-    if gain_db == 0.0 {
+    convert_track(input, None, gain_db, debug)
+}
+
+/// Convert one track to disc audio, optionally choosing one of its audio streams (counting audio
+/// streams from 0) and applying a gain in dB. The gain is applied in floating point and dithered
+/// back to 16 bits so a cut doesn't leave quantization noise. With no stream choice and no gain
+/// this is `to_cdda_wav`.
+pub fn convert_track(input: &str, stream: Option<usize>, gain_db: f64, debug: bool) -> Result<String, Error> {
+    if stream.is_none() && gain_db == 0.0 {
         return to_cdda_wav(input, debug);
     }
     if which("ffmpeg").is_none() {
-        return Err(Error::backend("Normalizing needs ffmpeg, which is not installed."));
+        return Err(Error::backend("Choosing an audio stream or levelling the audio needs ffmpeg, which is not installed."));
     }
-    let output = format!("/tmp/discctl_conv_{}.wav", sanitize_name(input));
+    let output = format!("/tmp/discctl_conv_{}{}.wav", sanitize_name(input), stream.map(|n| format!("_s{n}")).unwrap_or_default());
     let mut cmd = Command::new("ffmpeg");
-    cmd.arg("-y")
-        .arg("-i").arg(input)
-        .arg("-af").arg(format!("volume={gain_db}dB,aresample=44100:dither_method=triangular_hp"))
-        .arg("-ar").arg("44100")
-        .arg("-ac").arg("2")
-        .arg("-sample_fmt").arg("s16")
-        .arg(&output);
+    cmd.arg("-y").arg("-i").arg(input);
+    if let Some(n) = stream {
+        cmd.arg("-map").arg(format!("0:a:{n}")).arg("-vn");
+    }
+    if gain_db != 0.0 {
+        cmd.arg("-af").arg(format!("volume={gain_db}dB,aresample=44100:dither_method=triangular_hp"));
+    }
+    cmd.arg("-ar").arg("44100").arg("-ac").arg("2").arg("-sample_fmt").arg("s16").arg(&output);
     if debug {
         println!("Running: {:?}", cmd);
     } else {
@@ -58,7 +66,7 @@ pub fn to_cdda_wav_with_gain(input: &str, gain_db: f64, debug: bool) -> Result<S
     }
     let status = cmd.status()?;
     if !status.success() {
-        return Err(Error::backend(format!("ffmpeg failed applying a {gain_db:+} dB gain to '{input}': exit code {:?}", status.code())));
+        return Err(Error::backend(format!("ffmpeg failed converting '{input}'{}: exit code {:?}", stream.map(|n| format!(" (audio stream {n})")).unwrap_or_default(), status.code())));
     }
     Ok(output)
 }

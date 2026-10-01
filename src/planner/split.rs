@@ -118,8 +118,10 @@ fn walk(root: &std::path::Path, dir: &std::path::Path, out: &mut Vec<DataItem>) 
 /// Estimate duration of an audio file in seconds.
 /// Uses WAV header arithmetic for WAV files; falls back to ffprobe for others.
 /// Returns 0 if duration cannot be determined.
-pub fn duration_secs(path: &str) -> u64 {
-    if path.to_lowercase().ends_with(".wav") {
+pub fn duration_secs(track: &str) -> u64 {
+    // A stream choice is not part of the path (a link is probed over the network by ffprobe).
+    let path = crate::backend::source::parse(track).location;
+    if path.to_lowercase().ends_with(".wav") && !crate::backend::source::is_url(path) {
         // CDDA WAV: 44100 Hz × 2 ch × 2 bytes = 176400 bytes/sec
         if let Ok(meta) = std::fs::metadata(path) {
             return meta.len().saturating_sub(44) / 176_400;

@@ -156,10 +156,28 @@ fn validate_files(graph: &DiscGraph) -> Result<(), Error> {
     for session in &graph.sessions {
         match session {
             Session::Audio(audio) => {
-                for track in &audio.tracks {
+                for track_spec in &audio.tracks {
+                    use crate::backend::source;
+                    let src = source::parse(track_spec);
+                    // A link or a chosen stream: audio CDs only, and links are checked here and
+                    // fetched when the disc is burned.
+                    if (source::is_url(src.location) || src.stream.is_some()) && graph.format.is_dvd() {
+                        return Err(Error::validation(format!("'{track_spec}': links and audio stream choices are only available for audio CDs, not DVDs")));
+                    }
+                    if source::is_url(src.location) {
+                        source::validate_url(src.location).map_err(Error::validation)?;
+                        if let Some(n) = src.stream {
+                            source::check_stream(src.location, n).map_err(Error::validation)?;
+                        }
+                        continue;
+                    }
+                    let track = src.location;
                     let path = std::path::Path::new(track);
                     if !path.exists() {
                         return Err(Error::validation(format!("Track file not found: {}", track)));
+                    }
+                    if let Some(n) = src.stream {
+                        source::check_stream(track, n).map_err(Error::validation)?;
                     }
                     let dvd = graph.format.is_dvd();
                     match path.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase()).as_deref() {
@@ -167,6 +185,10 @@ fn validate_files(graph: &DiscGraph) -> Result<(), Error> {
                         Some("wav") if dvd => {}
                         Some("aiff") | Some("aif") | Some("ape") | Some("wv") if dvd => {}
                         Some("wav") => validate_wav_format(track)?,
+                        // Video and other containers are fine when the user picked an audio stream from them
+                        Some("mkv") | Some("mka") | Some("mp4") | Some("m4v") | Some("webm") | Some("mov") | Some("avi")
+                        | Some("ts") | Some("m2ts") | Some("ogv") | Some("mpg") | Some("mpeg")
+                            if src.stream.is_some() => {}
                         // All formats below are converted to CDDA WAV by the backend via ffmpeg
                         Some("flac") | Some("mp3") | Some("m4a") | Some("aac")
                         | Some("ogg") | Some("opus") | Some("wma") => {}

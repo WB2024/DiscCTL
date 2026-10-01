@@ -180,7 +180,7 @@ pub fn probe_duration(path: &str) -> Option<f64> {
         return *hit;
     }
     let out = Command::new("ffprobe")
-        .args(["-v", "quiet", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", path])
+        .args(["-v", "quiet", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", crate::backend::source::parse(path).location])
         .output()
         .ok()
         .filter(|o| o.status.success());

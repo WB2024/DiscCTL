@@ -135,6 +135,68 @@ fn safe_join(root: &Path, rel: &str) -> ApiResult<PathBuf> {
     Ok(root.join(p))
 }
 
+/// A track entry from the browser, made safe: a link is checked and kept as it is; a file path
+/// must be inside the media folder. A `#stream=N` choice is kept either way.
+fn track_arg(media: &Path, entry: &str) -> ApiResult<String> {
+    use crate::backend::source;
+    let src = source::parse(entry);
+    if source::is_url(src.location) {
+        source::validate_url(src.location).map_err(ApiError::bad)?;
+        if let Some(n) = src.stream {
+            source::check_stream(src.location, n).map_err(ApiError::bad)?;
+        }
+        return Ok(entry.to_string());
+    }
+    let full = path_str(&safe_join(media, src.location)?);
+    if let Some(n) = src.stream {
+        source::check_stream(&full, n).map_err(ApiError::bad)?;
+    }
+    Ok(source::compose(&full, src.stream))
+}
+
+#[derive(Deserialize)]
+struct StreamsQuery {
+    /// A file in the media folder...
+    path: Option<String>,
+    /// ...or a link.
+    url: Option<String>,
+}
+
+/// The audio streams in a file or link, so the Burn page can offer a choice when there are several.
+async fn media_streams(State(st): S, Query(q): Query<StreamsQuery>) -> ApiResult<Json<Value>> {
+    use crate::backend::source;
+    let location = match (&q.path, &q.url) {
+        (Some(p), _) => {
+            let full = safe_join(&st.cfg.media_dir, p)?;
+            if !full.is_file() {
+                return Err(ApiError::not_found(format!("No such file: {p}")));
+            }
+            path_str(&full)
+        }
+        (None, Some(u)) => {
+            source::validate_url(u).map_err(ApiError::bad)?;
+            u.clone()
+        }
+        _ => return Err(ApiError::bad("Give a path or a url")),
+    };
+    if st.cfg.mock {
+        return Ok(Json(json!({"streams": []})));
+    }
+    let streams = tokio::task::spawn_blocking(move || source::probe_streams(&location))
+        .await
+        .map_err(|e| Error::backend(e.to_string()))?
+        .map_err(ApiError::bad)?;
+    let out: Vec<Value> = streams
+        .iter()
+        .map(|s| {
+            let mut v = serde_json::to_value(s).unwrap_or(Value::Null);
+            v["label"] = json!(s.label());
+            v
+        })
+        .collect();
+    Ok(Json(json!({"streams": out})))
+}
+
 fn check_device(dev: &str) -> ApiResult<()> {
     if dev.starts_with("/dev/") && !dev.contains("..") && !dev.chars().any(char::is_whitespace) {
         Ok(())
@@ -220,6 +282,7 @@ pub async fn serve(cfg: Config, bind: SocketAddr) -> Result<(), Error> {
         .route("/api/cache", get(cache::info))
         .route("/api/cache/clear", post(cache::clear))
         .route("/api/status", get(status))
+        .route("/api/media/streams", get(media_streams))
         .route("/api/drive/speeds", get(drive_speeds))
         .route("/api/login", post(auth::login))
         .route("/api/logout", post(auth::logout))
@@ -987,7 +1050,7 @@ fn burn_args(cmd: &str, req: &BurnReq, cfg: &Config) -> ApiResult<(Vec<String>, 
             if !is_data_cd && !req.audio.is_empty() {
                 a.push("--audio".into());
                 for f in &req.audio {
-                    a.push(path_str(&safe_join(&cfg.media_dir, f)?));
+                    a.push(track_arg(&cfg.media_dir, f)?);
                 }
             }
             if let Some(pl) = &req.playlist {
@@ -1099,7 +1162,7 @@ async fn plan(State(st): S, Json(req): Json<BurnReq>) -> ApiResult<Json<Value>> 
     }
 
     let media = &st.cfg.media_dir;
-    let join_all = |v: &[String]| -> ApiResult<Vec<String>> { v.iter().map(|f| safe_join(media, f).map(|p| path_str(&p))).collect() };
+    let join_all = |v: &[String]| -> ApiResult<Vec<String>> { v.iter().map(|f| track_arg(media, f)).collect() };
     let format = req.format.clone().unwrap_or_else(|| "redbook".into());
     let plan_req = rip_plan_request(&format, &req, media, &join_all)?;
 
@@ -1135,7 +1198,7 @@ fn rip_plan_request(
         format: format.to_string(),
         audio: if is_data_cd { Vec::new() } else { join_all(&req.audio)? },
         playlist: opt_path(&req.playlist)?,
-        files: if is_data_cd && !req.files.is_empty() { Some(join_all(&req.files)?) } else { None },
+        files: if is_data_cd && !req.files.is_empty() { Some(req.files.iter().map(|f| safe_join(media, f).map(|p| path_str(&p))).collect::<ApiResult<Vec<_>>>()?) } else { None },
         data: if format == "redbook" { None } else { opt_path(&req.data)? },
         playlist_root: Some(media.to_path_buf()),
         transcode: if is_data_cd { req.transcode.clone() } else { None },

@@ -53,7 +53,12 @@ struct TagEntry {
     album_artist: Option<String>,
 }
 
-fn read_tags(path: &str) -> TagEntry {
+fn read_tags(track: &str) -> TagEntry {
+    // A link has no file to read tags from yet, and a stream choice is not part of the path.
+    let path = crate::backend::source::parse(track).location;
+    if crate::backend::source::is_url(path) {
+        return empty_entry();
+    }
     let Ok(tagged) = Probe::open(path).and_then(|p| p.read()) else {
         return empty_entry();
     };

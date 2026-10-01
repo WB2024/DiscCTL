@@ -3,15 +3,25 @@ use std::process::{Command, Stdio};
 use crate::{error::Error, model::disc::{AudioSession, CdText, TrackTitle}};
 use super::convert;
 
-/// Convert the session's tracks to disc audio. `gains` (dB, one per track, or empty for none)
-/// are applied while converting.
-pub fn prepare_tracks(session: &AudioSession, gains: &[f64], debug: bool) -> Result<PreparedSession, Error> {
+/// Convert the session's tracks to disc audio: links are fetched first, and a track can name the
+/// audio stream to use (see `source`).
+pub fn prepare_tracks(session: &AudioSession, debug: bool) -> Result<PreparedSession, Error> {
     let mut prepared_tracks = Vec::new();
     let mut temp_files = Vec::new();
 
-    for (i, track) in session.tracks.iter().enumerate() {
-        let converted = convert::to_cdda_wav_with_gain(track, gains.get(i).copied().unwrap_or(0.0), debug)?;
-        if converted != *track {
+    for track in &session.tracks {
+        let src = super::source::parse(track);
+        let mut local = src.location.to_string();
+        if super::source::is_url(&local) {
+            let downloaded = super::source::fetch(&local, debug)?;
+            temp_files.push(downloaded.to_string_lossy().to_string());
+            if !super::source::has_audio(&downloaded) {
+                return Err(Error::validation(format!("{local} doesn't contain audio ffmpeg can read")));
+            }
+            local = downloaded.to_string_lossy().to_string();
+        }
+        let converted = convert::convert_track(&local, src.stream, 0.0, debug)?;
+        if converted != local {
             temp_files.push(converted.clone());
         }
         prepared_tracks.push(converted);
@@ -23,6 +33,31 @@ pub fn prepare_tracks(session: &AudioSession, gains: &[f64], debug: bool) -> Res
         track_titles: session.track_titles.clone(),
         _temp_files: temp_files,
     })
+}
+
+impl PreparedSession {
+    /// Apply a gain (dB) to each track, one per track; 0 leaves a track as it is.
+    pub fn apply_gains(&mut self, gains: &[f64], debug: bool) -> Result<(), Error> {
+        for (i, gain) in gains.iter().enumerate() {
+            if *gain == 0.0 || i >= self.tracks.len() {
+                continue;
+            }
+            let old = self.tracks[i].clone();
+            let new = convert::convert_track(&old, None, *gain, debug)?;
+            // The audio before the gain was a temporary file of ours, unless it was the user's own WAV.
+            if let Some(pos) = self._temp_files.iter().position(|t| *t == old) {
+                if new != old {
+                    let _ = std::fs::remove_file(&old);
+                    self._temp_files.remove(pos);
+                }
+            }
+            if new != old {
+                self._temp_files.push(new.clone());
+            }
+            self.tracks[i] = new;
+        }
+        Ok(())
+    }
 }
 
 pub struct PreparedSession {
@@ -232,6 +267,72 @@ fn generate_toc(session: &PreparedSession) -> String {
     }
 
     toc
+}
+
+#[cfg(test)]
+mod source_tests {
+    use super::*;
+    use std::{io::{Read, Write}, net::TcpListener, process::Command};
+
+    fn have_ffmpeg() -> bool {
+        Command::new("ffmpeg").arg("-version").output().is_ok()
+    }
+
+    /// Sign changes in the PCM of a CD WAV, which count the tone's frequency (2 per cycle).
+    fn crossings(path: &str) -> usize {
+        let b = std::fs::read(path).unwrap();
+        let pcm = &b[44..];
+        let left: Vec<i16> = pcm.chunks_exact(4).map(|c| i16::from_le_bytes([c[0], c[1]])).collect();
+        left.windows(2).filter(|w| (w[0] < 0) != (w[1] < 0)).count()
+    }
+
+    #[test]
+    fn a_chosen_stream_and_a_fetched_link_become_disc_audio() {
+        if !have_ffmpeg() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("rustydisc_prep_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // A file with two audio streams: 300 Hz first, 900 Hz second, 2 seconds each.
+        let mkv = dir.join("two.mkv");
+        assert!(Command::new("ffmpeg")
+            .args(["-loglevel", "error", "-y", "-f", "lavfi", "-i", "sine=f=300:d=2", "-f", "lavfi", "-i", "sine=f=900:d=2", "-map", "0:a", "-map", "1:a"])
+            .arg(&mkv).status().unwrap().success());
+        // A 600 Hz WAV served over HTTP.
+        let wav = dir.join("link.wav");
+        assert!(Command::new("ffmpeg")
+            .args(["-loglevel", "error", "-y", "-f", "lavfi", "-i", "sine=f=600:d=2", "-ac", "2", "-ar", "44100", "-sample_fmt", "s16"])
+            .arg(&wav).status().unwrap().success());
+        let body = std::fs::read(&wav).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/tone.wav", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            if let Ok((mut s, _)) = listener.accept() {
+                let mut buf = [0u8; 2048];
+                let _ = s.read(&mut buf);
+                let _ = s.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: audio/wav\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).as_bytes());
+                let _ = s.write_all(&body);
+            }
+        });
+
+        let session = AudioSession {
+            tracks: vec![format!("{}#stream=1", mkv.display()), url, mkv.display().to_string()],
+            cd_text: None,
+            track_titles: None,
+        };
+        let prepared = prepare_tracks(&session, false).unwrap();
+        assert_eq!(prepared.tracks.len(), 3);
+        // Stream 1 is the 900 Hz tone: about 3600 sign changes in 2 s; stream 0 (the default) is 300 Hz: about 1200.
+        let (c1, c2, c3) = (crossings(&prepared.tracks[0]), crossings(&prepared.tracks[1]), crossings(&prepared.tracks[2]));
+        assert!((3500..3700).contains(&c1), "chosen stream is 900 Hz: {c1}");
+        assert!((2300..2500).contains(&c2), "the fetched link is 600 Hz: {c2}");
+        assert!((1100..1300).contains(&c3), "no choice means the default stream, 300 Hz: {c3}");
+        let temps = prepared.tracks.clone();
+        drop(prepared);
+        assert!(temps.iter().all(|t| !std::path::Path::new(t).exists()), "temporary files are cleaned up");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
 #[cfg(test)]

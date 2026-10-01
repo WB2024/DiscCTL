@@ -84,11 +84,17 @@ pub fn expand_audio_globs(patterns: &[String]) -> Result<Vec<String>, Error> {
 fn expand_audio_patterns(patterns: &[String]) -> Result<Vec<String>, Error> {
     let mut tracks = Vec::new();
     for pattern in patterns {
-        let path = std::path::Path::new(pattern);
+        // A link is taken as it is; a `#stream=N` choice is kept and given to every file a pattern matches.
+        let src = crate::backend::source::parse(pattern);
+        if crate::backend::source::is_url(src.location) {
+            tracks.push(pattern.clone());
+            continue;
+        }
+        let path = std::path::Path::new(src.location);
         if path.exists() {
             tracks.push(pattern.clone());
         } else {
-            let mut matched: Vec<String> = glob::glob(pattern)
+            let mut matched: Vec<String> = glob::glob(src.location)
                 .map_err(Error::Glob)?
                 .filter_map(|r| r.ok())
                 .map(|p| p.to_string_lossy().to_string())
@@ -97,7 +103,7 @@ fn expand_audio_patterns(patterns: &[String]) -> Result<Vec<String>, Error> {
                 tracks.push(pattern.clone());
             } else {
                 matched.sort();
-                tracks.extend(matched);
+                tracks.extend(matched.into_iter().map(|m| crate::backend::source::compose(&m, src.stream)));
             }
         }
     }

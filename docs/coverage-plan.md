@@ -17,7 +17,7 @@ A working checklist of the ripping and burning topics RustyDisc should cover, wh
 | 9 | [Exact disc images](#9-exact-disc-images) | ⬜ | ISO build for data only |
 | 10 | [Subchannels and subcode data](#10-subchannels-and-subcode-data) | ⬜ | CD-TEXT read; ISRC from MusicBrainz |
 | 11 | [Batch ripping](#11-batch-ripping) | ⬜ | One disc at a time |
-| 12 | [Streams](#12-streams) (URL inputs and stream choice) | ⬜ | File inputs only, default stream |
+| 12 | [Streams](#12-streams) (URL inputs and stream choice) | ✅ | Links and stream menus (v1.12.0) |
 | 13 | [Forensic examination](#13-forensic-examination) | ⬜ | Parts exist, no combined report |
 | 14 | [Non-compliant and difficult discs](#14-non-compliant-and-difficult-discs) | ⬜ | Not handled |
 
@@ -187,7 +187,7 @@ Open questions that need a real disc or drive to settle are marked **(verify on 
 **Done when:** three discs in a row rip unattended. **(verify on hardware)**
 
 ## 12. Streams
-**Status:** ⬜
+**Status:** ✅ complete in v1.12.0 (awaiting your check with a real burn)
 
 Both meanings of "streams" are in scope.
 
@@ -203,6 +203,8 @@ Both meanings of "streams" are in scope.
 
 **Done when:** a burn plan with a URL track validates, converts and burns (or dry-runs) like a file track, and tests cover validation and failure cases.
 
+**What was built (12a):** a track can be an `http`/`https` link. It is validated when the disc is planned (and refused if it is an HLS playlist or not a link), downloaded at burn time to a temporary file with a 700 MB limit and a timeout, refused if it is a web page, empty or not audio, converted like any track, and deleted afterwards. Burn page: **🔗 Add link…**; CLI and graphs: the link as the track. DVD formats refuse it.
+
 ### 12b. Choosing between several audio streams in one file
 **What it means:** Some files (video files, certain recordings, some containers) hold more than one audio stream, such as different languages, a commentary, or a stereo and surround mix. ffmpeg normally picks the default one, which may not be the one you want.
 
@@ -213,6 +215,8 @@ Both meanings of "streams" are in scope.
 - Pass the choice to ffmpeg when converting, and key the converted-files cache on it so different choices don't collide.
 
 **Done when:** a test file with two audio streams converts the chosen one, and the choice appears in the plan.
+
+**What was built (12b):** `track#stream=N` (audio streams counted from 0) chooses a stream, via `ffmpeg -map 0:a:N`. The Burn page asks ffprobe for each link and each container file (mkv, mp4, …) and shows a *Stream N: codec · channels · language* menu when there is more than one; **+ From a video file…** adds such files. An out-of-range choice is refused at plan time. Normalization now measures the converted disc audio, so it sees the chosen stream. Code: `src/backend/source.rs`, `convert_track` in `src/backend/convert.rs`, `prepare_tracks` in `src/backend/audio.rs`, `/api/media/streams`. Tests: parsing, link validation, a local web server for downloads and every refusal, ffprobe stream listing, and an end-to-end test where stream 1 (900 Hz) and the default stream (300 Hz) of one MKV and a link (600 Hz) all come out right and temp files are removed. Caveat: links are fetched by the RustyDisc machine, so they should be trusted links to audio you may use.
 
 ## 13. Forensic examination
 **Status:** ⬜
@@ -250,3 +254,4 @@ Both meanings of "streams" are in scope.
 | 2026-10-01 | 6 TOC anomaly checks | Built (v1.10.0), unit tested on synthetic tables and the real disc (clean); an odd real disc pending |
 | 2026-10-01 | 7 Disc-at-once vs track-at-once | Done (v1.10.1): write mode shown in the plan and explained |
 | 2026-10-01 | 8 Normalization | Built (v1.11.0); gain rules and a real ffmpeg round trip tested; a real burn pending your check |
+| 2026-10-01 | 12 Streams | Built (v1.12.0): links and stream choice, tested end to end with a local web server and a two-stream MKV; a real burn pending your check |

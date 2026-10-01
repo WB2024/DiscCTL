@@ -70,3 +70,11 @@ An enhanced CD with **two sessions**: Session 1 is a Red Book audio session (lef
 
 Session ordering (Audio → Data) is enforced at plan time. Blue Book requires a CD-R; CD-RW does not support the required multisession append.
 
+## Tracks from links, and choosing an audio stream
+
+For audio CDs a track does not have to be a file in the media folder.
+
+- **A link.** Use **🔗 Add link…** on the Burn page, or give `--audio https://example.org/track.mp3` on the command line (or put the link in a disc graph's `tracks`). The RustyDisc machine downloads it to a temporary file when the disc is burned, converts it like any other track and deletes it afterwards. Only `http` and `https` links to a single audio file are accepted. A web page, a streaming playlist (HLS, `.m3u8`), anything over 700 MB, and anything that isn't audio are refused with a reason, so a live or endless stream can't be burned. The link is fetched by the machine running RustyDisc, so use links you trust, and only for audio you have the right to use.
+- **A choice of audio stream.** A file can carry several audio streams (languages, commentary, stereo and surround mixes). By default ffmpeg picks one, as before. When a file or link has more than one, the Burn page shows a menu beside the track (*Stream 0: AC3 · 5.1 · eng · default*, …). To use the audio of a video file, use **+ From a video file…**. In a disc graph or on the command line the choice is written after the track, counting audio streams from 0: `film.mkv#stream=1`, `https://example.org/mix.mkv#stream=2`. An impossible choice (stream 5 of a file with two) is refused when the disc is planned.
+
+Both are for audio CDs (Red Book and Blue Book). DVD formats don't accept them. Normalization measures the converted audio, so it sees the chosen stream.
