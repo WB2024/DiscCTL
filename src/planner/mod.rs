@@ -9,6 +9,21 @@ use crate::{
     },
 };
 
+/// How a disc of this format is written, in plain words.
+///
+/// Audio CDs are written with `cdrdao`, which always writes disc-at-once: the whole session in a
+/// single uninterrupted pass from a table of contents, with no gaps added between tracks and
+/// none of the run-in/run-out blocks that track-at-once writing leaves. A Blue Book disc keeps
+/// that session open so a data session can follow in a second pass; the disc is closed after it.
+pub fn write_mode(format: &DiscFormat) -> &'static str {
+    match format {
+        DiscFormat::RedBook => "Disc-at-once: the whole audio session is written in one pass, with no gaps added between tracks, and the disc is closed when it is done.",
+        DiscFormat::BlueBook => "Audio session disc-at-once (kept open), then the data session is added as a second session and the disc is closed.",
+        DiscFormat::DataCD => "The data session is written as one image and the disc is closed when it is done.",
+        DiscFormat::DataDvd | DiscFormat::MusicDvd => "The disc image is written in one pass and the disc is closed when it is done.",
+    }
+}
+
 pub fn plan(graph: &DiscGraph) -> Result<BurnPlan, Error> {
     validate(graph)?;
     let steps = build_steps(graph)?;
@@ -16,6 +31,7 @@ pub fn plan(graph: &DiscGraph) -> Result<BurnPlan, Error> {
         format: graph.format.to_string(),
         label: graph.label.clone(),
         speed: graph.speed,
+        write_mode: write_mode(&graph.format).to_string(),
         steps,
     })
 }

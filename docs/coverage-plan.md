@@ -12,7 +12,7 @@ A working checklist of the ripping and burning topics RustyDisc should cover, wh
 | 4 | [Jitter and read-error reporting](#4-jitter-and-read-error-reporting) | ✅ | Per-track clean / repaired / suspect (v1.7.0) |
 | 5 | [Pregaps, hidden tracks, track boundaries](#5-pregaps-hidden-tracks-and-track-boundaries) | ✅ | Hidden track as 00; optional gap scan (v1.9.0) |
 | 6 | [TOC anomaly checks](#6-toc-anomaly-checks) | ✅ | Disc checks before and after ripping (v1.10.0) |
-| 7 | [Disc-at-once vs track-at-once](#7-disc-at-once-vs-track-at-once) | ⬜ | DAO only, undocumented |
+| 7 | [Disc-at-once vs track-at-once](#7-disc-at-once-vs-track-at-once) | ✅ | Stated in the plan; explained (v1.10.1) |
 | 8 | [Normalization](#8-normalization) | ⬜ | ReplayGain tags only |
 | 9 | [Exact disc images](#9-exact-disc-images) | ⬜ | ISO build for data only |
 | 10 | [Subchannels and subcode data](#10-subchannels-and-subcode-data) | ⬜ | CD-TEXT read; ISRC from MusicBrainz |
@@ -123,7 +123,9 @@ Open questions that need a real disc or drive to settle are marked **(verify on 
 **Done when:** each rule has a test and the Rip page shows warnings.
 
 ## 7. Disc-at-once vs track-at-once
-**Status:** ⬜
+**Status:** ✅ complete in v1.10.1
+
+**What was built:** the write mode is now stated: `plan` and the Burn page's plan say how the disc will be written (audio CDs disc-at-once with no gaps added; Blue Book audio session disc-at-once kept open, then the data session, then closed; data CDs and DVDs written as one image and closed). `docs/hardware-notes.md` explains disc-at-once against track-at-once and why audio uses the former. No track-at-once option was added, as planned.
 
 **Today:** audio burns use disc-at-once through cdrdao, with multisession for Blue Book.
 
@@ -242,3 +244,4 @@ Both meanings of "streams" are in scope.
 | 2026-10-01 | Side fixes (v1.8.0) | Loudness and DR results kept and shown again; cover size, format and quality rating; albums found by folder structure (Archive/Artist/Album) in Library and Import |
 | 2026-10-01 | 5 Pregaps, hidden tracks, track boundaries | Built (v1.9.0); hidden track and gap handling tested with stand-in tools; real hidden-track and gap discs pending |
 | 2026-10-01 | 6 TOC anomaly checks | Built (v1.10.0), unit tested on synthetic tables and the real disc (clean); an odd real disc pending |
+| 2026-10-01 | 7 Disc-at-once vs track-at-once | Done (v1.10.1): write mode shown in the plan and explained |

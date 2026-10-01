@@ -82,6 +82,7 @@ pub fn run(args: PlanArgs) -> Result<(), Error> {
         if let Ok(graph) = parser::from_cli(&format, args.audio.as_deref(), args.playlist.as_deref(), args.data.as_deref(), &args.label, args.cd_text) {
             if let Ok(steps) = planner::build_steps(&graph) {
                 out["format"] = serde_json::json!(graph.format.to_string());
+                out["write_mode"] = serde_json::json!(planner::write_mode(&graph.format));
                 out["label"] = serde_json::json!(graph.label);
                 out["steps"] = serde_json::to_value(steps)?;
             }

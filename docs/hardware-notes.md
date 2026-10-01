@@ -51,3 +51,11 @@ Burns use the speed the drive picks unless you choose one. Slower writing is oft
 - **Command line:** `rustydisc burn --speed 8 ...` (a multiple of the media's base speed; CD 1x = 176.4 kB/s, DVD 1x = 1385 kB/s). `rustydisc plan --speed 8` shows it in the plan. A disc graph file can carry `"speed": 8`; a `--speed` on the command line wins.
 
 RustyDisc refuses a speed above what the drive reports for the disc in it, before writing anything. A speed between two the drive offers is accepted: drives treat the number as an upper limit and may settle on a nearby speed, and some quietly ignore it. Audio CDs pass it to `cdrdao --speed`; data CDs and DVDs pass it to `xorriso` as `speed=8c` (CD) or `speed=4d` (DVD), so the number can't be read as the wrong media's speed.
+
+## Disc-at-once, and why audio CDs use it
+
+There are two ways to write a CD. **Track-at-once** writes one track, pauses, then writes the next, leaving a short run-out and run-in between them (and a gap of at least two seconds). **Disc-at-once** writes the whole disc in a single uninterrupted pass from a table of contents, so tracks join exactly where they should, with no gap unless the disc is meant to have one, and without the unwanted blocks. Audio CDs should be written disc-at-once, and RustyDisc does that: audio sessions are written with `cdrdao` from a table of contents.
+
+A **Blue Book** (Enhanced CD) disc is two sessions: the audio session is written disc-at-once but kept open, then the data session is appended as a second pass and the disc is closed. Data CDs and DVDs are written as one image and closed.
+
+`rustydisc plan` (and the plan in the web UI) now states how the disc will be written. There is no track-at-once option for audio: it would only add gaps and blocks that audio discs shouldn't have.

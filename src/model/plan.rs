@@ -27,5 +27,8 @@ pub struct BurnPlan {
     /// Write speed as an "x" multiple; absent means the drive chooses.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speed: Option<u32>,
+    /// How the disc is written, in plain words (disc-at-once, sessions, when it is closed).
+    #[serde(default)]
+    pub write_mode: String,
     pub steps: Vec<BurnStep>,
 }

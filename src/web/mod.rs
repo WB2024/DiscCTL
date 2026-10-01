@@ -1095,6 +1095,18 @@ async fn plan(State(st): S, Json(req): Json<BurnReq>) -> ApiResult<Json<Value>> 
     let planned = tokio::task::spawn_blocking(move || crate::planner::discs::plan_request(&plan_req))
         .await
         .map_err(|e| Error::backend(e.to_string()))??;
+    let mut planned = planned;
+    let disc_format = match format.as_str() {
+        "datacd" => Some(crate::model::disc::DiscFormat::DataCD),
+        "bluebook" => Some(crate::model::disc::DiscFormat::BlueBook),
+        "datadvd" => Some(crate::model::disc::DiscFormat::DataDvd),
+        "musicdvd" => Some(crate::model::disc::DiscFormat::MusicDvd),
+        "redbook" => Some(crate::model::disc::DiscFormat::RedBook),
+        _ => None,
+    };
+    if let (Some(f), Some(o)) = (disc_format, planned.as_object_mut()) {
+        o.insert("write_mode".into(), json!(crate::planner::write_mode(&f)));
+    }
     Ok(Json(planned))
 }
 

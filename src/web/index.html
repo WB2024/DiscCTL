@@ -1599,7 +1599,7 @@ async function burnPlan() {
   out.innerHTML = `<div class="muted" style="margin-top:16px">Reading the files and working out how many discs are needed — this can take a little while for large jobs…</div>`;
   try {
     const plan = await api("/api/plan", { body });
-    out.innerHTML = renderPlan(plan) + (body.speed ? `<div class="muted" style="margin-top:8px">Write speed: ${body.speed}x (the drive treats this as an upper limit)</div>` : `<div class="muted" style="margin-top:8px">Write speed: Auto</div>`);
+    out.innerHTML = renderPlan(plan) + (plan.write_mode ? `<div class="muted" style="margin-top:8px">How it is written: ${esc(plan.write_mode)}</div>` : "") + (body.speed ? `<div class="muted" style="margin-top:8px">Write speed: ${body.speed}x (the drive treats this as an upper limit)</div>` : `<div class="muted" style="margin-top:8px">Write speed: Auto</div>`);
   } catch (e) { out.innerHTML = `<div class="notice err" style="margin-top:16px"><b>${esc(e.code || "Error")}</b> — ${esc(e.message)}</div>`; }
   finally { btn.disabled = false; btn.textContent = label; out.scrollIntoView({ behavior: "smooth", block: "nearest" }); }
 }
